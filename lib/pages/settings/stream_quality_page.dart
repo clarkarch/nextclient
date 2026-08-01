@@ -8,6 +8,7 @@ import '../../widgets/neon_dropdown.dart';
 import '../../widgets/neon_option_chip.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
+import '../../widgets/neon_switch.dart';
 
 /// Stream quality options sent to the NVIDIA server on launch.
 class StreamQualityPage extends StatelessWidget {
@@ -194,7 +195,7 @@ class StreamQualityPage extends StatelessWidget {
             value: s.maxBitrateMbps.toDouble(),
             min: _bitrateMin.toDouble(),
             max: _bitrateMax.toDouble(),
-            divisions: (_bitrateMax - _bitrateMin) ~/ 5,
+            divisions: _bitrateMax - _bitrateMin,
             label: '${s.maxBitrateMbps} Mbps',
             onChanged: (v) => s.maxBitrateMbps = v.round(),
           ),
@@ -255,7 +256,7 @@ class StreamQualityPage extends StatelessWidget {
       icon: icon,
       title: title,
       subtitle: subtitle,
-      trailing: Switch(value: value, onChanged: onChanged),
+      trailing: NeonSwitch(value: value, onChanged: onChanged),
     );
   }
 
