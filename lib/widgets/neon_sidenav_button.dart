@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../theme/neon.dart';
-import 'neon_card.dart';
 import 'neon_rail.dart';
 
 /// Native-style sidenav hamburger. Sits at the bottom of the rail and opens a
@@ -48,10 +47,12 @@ class NeonSidenavButton extends StatelessWidget {
         alignment: Alignment.bottomLeft,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(96, 0, 12, 12),
-          child: NeonCard(
-            glow: true,
-            radius: 18,
-            padding: EdgeInsets.zero,
+          child: Material(
+            color: Neon.bgC,
+            elevation: 14,
+            shadowColor: Colors.black,
+            borderRadius: BorderRadius.circular(18),
+            clipBehavior: Clip.antiAlias,
             child: ConstrainedBox(
               constraints: const BoxConstraints(minWidth: 220),
               child: Column(
