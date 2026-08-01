@@ -139,7 +139,11 @@ class _ShellState extends State<Shell> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      HomePage(services: widget.services, onSignOut: widget.onSignOut),
+      HomePage(
+        services: widget.services,
+        onSignOut: widget.onSignOut,
+        showBrand: !_sidebarExpanded,
+      ),
       LibraryPage(services: widget.services),
       SettingsPage(
         services: widget.services,

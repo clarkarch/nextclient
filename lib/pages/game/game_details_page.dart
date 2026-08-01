@@ -211,17 +211,8 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
           const SizedBox(height: 16),
         ],
         if (chips.isNotEmpty) Wrap(spacing: 8, runSpacing: 8, children: chips),
-        const SizedBox(height: 20),
-        Text(
-          description,
-          style: const TextStyle(
-            color: Neon.inkSoft,
-            fontSize: 14,
-            height: 1.6,
-          ),
-        ),
         if (details != null && details.screenshots.isNotEmpty) ...[
-          const SizedBox(height: 28),
+          const SizedBox(height: 24),
           const Text(
             'SCREENSHOTS',
             style: TextStyle(
@@ -248,6 +239,15 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
             ),
           ),
         ],
+        const SizedBox(height: 24),
+        Text(
+          description,
+          style: const TextStyle(
+            color: Neon.inkSoft,
+            fontSize: 14,
+            height: 1.6,
+          ),
+        ),
       ],
     );
   }

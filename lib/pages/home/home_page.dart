@@ -20,11 +20,13 @@ import 'search_page.dart';
 class HomePage extends StatefulWidget {
   final AppServices services;
   final VoidCallback onSignOut;
+  final bool showBrand;
 
   const HomePage({
     super.key,
     required this.services,
     required this.onSignOut,
+    this.showBrand = true,
   });
 
   @override
@@ -101,6 +103,7 @@ class _HomePageState extends State<HomePage> {
       header: _HomeTopBar(
         services: widget.services,
         onSignOut: widget.onSignOut,
+        showBrand: widget.showBrand,
       ),
       slivers: _buildSlivers(all),
     );
@@ -263,8 +266,13 @@ class _HomePageState extends State<HomePage> {
 class _HomeTopBar extends StatelessWidget {
   final AppServices services;
   final VoidCallback onSignOut;
+  final bool showBrand;
 
-  const _HomeTopBar({required this.services, required this.onSignOut});
+  const _HomeTopBar({
+    required this.services,
+    required this.onSignOut,
+    required this.showBrand,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -277,18 +285,20 @@ class _HomeTopBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          ShaderMask(
-            shaderCallback: (bounds) => Neon.accentGradient.createShader(bounds),
-            child: const Text(
-              'NEXTCLIENT',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 2,
+          if (showBrand)
+            ShaderMask(
+              shaderCallback: (bounds) =>
+                  Neon.accentGradient.createShader(bounds),
+              child: const Text(
+                'NEXTCLIENT',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                ),
               ),
             ),
-          ),
           const Spacer(),
           _TopIconButton(
             icon: Icons.search,
