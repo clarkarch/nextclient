@@ -44,7 +44,7 @@ class FeaturedSlide {
 
 class _FeaturedCarouselState extends State<FeaturedCarousel> {
   final PageController _controller =
-      PageController(viewportFraction: 0.86);
+      PageController(viewportFraction: 0.92);
   int _index = 0;
   Timer? _timer;
 
@@ -98,7 +98,7 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
                   _startTimer();
                 },
                 itemBuilder: (context, i) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: _Slide(
                     slide: slides[i],
                     onPlay: widget.onPlay == null
