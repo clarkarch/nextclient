@@ -1,16 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
 import '../../theme/neon.dart';
 import '../../widgets/catalog_game_card.dart';
+import '../../widgets/filter_sort_bar.dart';
 import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../game/game_details_page.dart';
 
-/// Search over the full catalog. Fetches all games once, then filters
-/// client-side as the user types.
+/// Server-side catalog search with sort + filters.
 class SearchPage extends StatefulWidget {
   final AppServices services;
 
@@ -21,50 +23,93 @@ class SearchPage extends StatefulWidget {
 }
 
 class _SearchPageState extends State<SearchPage> {
-  List<CatalogGame>? _all;
-  String? _error;
   final TextEditingController _query = TextEditingController();
-  String _filter = '';
+  CatalogDefinitions? _definitions;
+  String? _sortId;
+  final Set<String> _filterIds = {};
+  List<CatalogGame> _games = const [];
+  int _totalCount = 0;
+  String? _error;
+  bool _loading = true;
+  Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _init();
   }
 
   @override
   void dispose() {
     _query.dispose();
+    _debounce?.cancel();
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _init() async {
+    try {
+      final token = await widget.services.auth.resolveJwtToken();
+      final definitions =
+          await widget.services.catalog.fetchFilterSortDefinitions(token: token);
+      if (!mounted) return;
+      setState(() {
+        _definitions = definitions;
+        _sortId = definitions.sortOptions.firstOrNull?.id;
+      });
+    } catch (e) {
+      debugPrint('[search] definitions failed: $e');
+    }
+    await _browse();
+  }
+
+  Future<void> _browse() async {
     setState(() {
+      _loading = true;
       _error = null;
     });
     try {
       final token = await widget.services.auth.resolveJwtToken();
-      final games = await widget.services.catalog.fetchMainGamesUncached(
+      final result = await widget.services.catalog.browseCatalog(
         token: token,
+        searchQuery: _query.text,
+        sortId: _sortId,
+        filterIds: _filterIds.toList(),
       );
       if (!mounted) return;
-      setState(() => _all = games);
+      setState(() {
+        _games = result.games;
+        _totalCount = result.totalCount;
+        _loading = false;
+      });
     } catch (e) {
-      debugPrint('[search] load failed: $e');
+      debugPrint('[search] browse failed: $e');
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
     }
   }
 
-  List<CatalogGame> get _results {
-    final all = _all ?? const <CatalogGame>[];
-    final q = _filter.trim().toLowerCase();
-    if (q.isEmpty) return all;
-    return all
-        .where((g) =>
-            g.title.toLowerCase().contains(q) ||
-            (g.publisherName?.toLowerCase().contains(q) ?? false))
-        .toList();
+  void _onQueryChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _browse();
+    });
+  }
+
+  void _onSortChanged(String? sortId) {
+    setState(() => _sortId = sortId);
+    _browse();
+  }
+
+  void _onFiltersChanged(Set<String> ids) {
+    setState(() {
+      _filterIds
+        ..clear()
+        ..addAll(ids);
+    });
+    _browse();
   }
 
   @override
@@ -77,15 +122,15 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   List<Widget> _slivers() {
-    final all = _all;
+    final definitions = _definitions;
     return [
       SliverToBoxAdapter(
         child: Padding(
-          padding: const EdgeInsets.only(top: 4, bottom: 20),
+          padding: const EdgeInsets.only(top: 4, bottom: 14),
           child: TextField(
             controller: _query,
             autofocus: true,
-            onChanged: (v) => setState(() => _filter = v),
+            onChanged: _onQueryChanged,
             style: const TextStyle(color: Neon.ink, fontSize: 14),
             decoration: InputDecoration(
               hintText: 'Search games…',
@@ -105,21 +150,35 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
       ),
-      if (_error != null && all == null)
+      if (definitions != null && definitions.groups.isNotEmpty)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: FilterSortBar(
+              groups: definitions.groups,
+              sortOptions: definitions.sortOptions,
+              sortId: _sortId,
+              filterIds: _filterIds,
+              onSortChanged: _onSortChanged,
+              onFiltersChanged: _onFiltersChanged,
+            ),
+          ),
+        ),
+      if (_error != null && _games.isEmpty)
         SliverToBoxAdapter(
           child: SizedBox(
             height: 280,
-            child: NeonErrorView(message: _error!, onRetry: _load),
+            child: NeonErrorView(message: _error!, onRetry: _browse),
           ),
         )
-      else if (all == null)
+      else if (_loading && _games.isEmpty)
         const SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.only(top: 40),
-            child: Center(child: NeonSpinner(label: 'Loading catalog')),
+            child: Center(child: NeonSpinner(label: 'Searching catalog')),
           ),
         )
-      else if (_results.isEmpty)
+      else if (_games.isEmpty)
         const SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.all(40),
@@ -131,7 +190,17 @@ class _SearchPageState extends State<SearchPage> {
             ),
           ),
         )
-      else
+      else ...[
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Text(
+              '${_games.length} results'
+              '${_totalCount > _games.length ? ' of $_totalCount' : ''}',
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
+            ),
+          ),
+        ),
         SliverPadding(
           padding: const EdgeInsets.only(bottom: 32),
           sliver: GuardedSliverGrid(
@@ -143,7 +212,7 @@ class _SearchPageState extends State<SearchPage> {
             ),
             delegate: SliverChildBuilderDelegate(
               (context, i) {
-                final game = _results[i];
+                final game = _games[i];
                 return CatalogGameCard(
                   game: game,
                   onTap: () {
@@ -158,10 +227,11 @@ class _SearchPageState extends State<SearchPage> {
                   },
                 );
               },
-              childCount: _results.length,
+              childCount: _games.length,
             ),
           ),
         ),
+      ],
     ];
   }
 }

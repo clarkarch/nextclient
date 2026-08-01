@@ -235,7 +235,223 @@ class CatalogService {
     }
     return GameDetails.fromJson(items.first as Map<String, dynamic>);
   }
+
+  /// Filter groups + sort orders from `filterGroupAndSortOrderDefinitions`.
+  Future<CatalogDefinitions> fetchFilterSortDefinitions({
+    required String token,
+  }) async {
+    final payload = await fetchLcarsGraphQl(
+      client: client,
+      queryName: LcarsQueryName.filterGroupAndSortOrderDefinitions,
+      variables: {'locale': defaultLocale},
+      token: token,
+      isMac: isMac,
+      context: 'GFN filter definitions failed',
+    );
+
+    final errors = payload['errors'];
+    if (errors is List && errors.isNotEmpty) {
+      throwGraphQlErrors(errors, 'GFN filter definitions failed');
+    }
+
+    final data = payload['data'] as Map<String, dynamic>? ?? const {};
+    final groups = (data['filterGroupDefinitions'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(CatalogFilterGroup.fromJson)
+        .where((g) => g.id.isNotEmpty && g.options.isNotEmpty)
+        .toList();
+    final sortOptions = (data['sortOrderDefinitions'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(CatalogSortOption.fromJson)
+        .where((s) => s.id.isNotEmpty && s.orderBy.isNotEmpty)
+        .toList();
+
+    final filterPayloadById = <String, Map<String, dynamic>>{};
+    for (final group in groups) {
+      for (final option in group.options) {
+        filterPayloadById[option.id] = option.payload;
+      }
+    }
+
+    return CatalogDefinitions(
+      groups: groups,
+      sortOptions: sortOptions,
+      filterPayloadById: filterPayloadById,
+    );
+  }
+
+  /// Server-side catalog browse with search, sort and filters. Port of
+  /// catalogBrowse.ts browseCatalogUncached using the `apps` persisted
+  /// queries (`appsWithSearch` / `appsWithoutSearch`), paginated.
+  Future<CatalogBrowseResult> browseCatalog({
+    required String token,
+    String? searchQuery,
+    String? sortId,
+    List<String> filterIds = const [],
+    int fetchCount = 60,
+    String? providerStreamingBaseUrl,
+  }) async {
+    final vpcId = await getVpcId(
+      token: token,
+      providerStreamingBaseUrl: providerStreamingBaseUrl,
+    );
+    final definitions = await fetchFilterSortDefinitions(token: token);
+
+    final query = searchQuery?.trim() ?? '';
+    final normalized = filterIds
+        .where(definitions.filterPayloadById.containsKey)
+        .toList();
+    final selectedSort = definitions.sortOptions
+            .where((o) => o.id == sortId)
+            .firstOrNull ??
+        definitions.sortOptions.firstOrNull ??
+        const CatalogSortOption(
+          id: 'relevance',
+          label: 'Relevance',
+          orderBy: 'itemMetadata.relevance:DESC,sortName:ASC',
+        );
+    final filters = definitions.mergeFilterPayloads(normalized);
+
+    final games = <CatalogGame>[];
+    var cursor = '';
+    var hasNextPage = true;
+    var endCursor = '';
+    var numberReturned = 0;
+    var numberSupported = 0;
+    var totalCount = 0;
+
+    for (var page = 0; page < maxCatalogPages && hasNextPage; page++) {
+      final variables = <String, Object>{
+        'vpcId': vpcId,
+        'locale': defaultLocale,
+        'sortString': selectedSort.orderBy,
+        'fetchCount': fetchCount,
+        'cursor': cursor,
+        if (query.isNotEmpty) 'searchString': query,
+        'filters': filters,
+      };
+      final payload = await fetchLcarsGraphQl(
+        client: client,
+        queryName: query.isNotEmpty
+            ? LcarsQueryName.appsWithSearch
+            : LcarsQueryName.appsWithoutSearch,
+        variables: variables,
+        token: token,
+        isMac: isMac,
+        context: 'GFN catalog query failed',
+        fallbackQuery:
+            query.isNotEmpty ? _searchBrowseQuery : _filterBrowseQuery,
+      );
+
+      final errors = payload['errors'];
+      if (errors is List && errors.isNotEmpty) {
+        throwGraphQlErrors(errors, 'GFN catalog query failed');
+      }
+
+      final apps = (payload['data'] as Map<String, dynamic>?)?['apps'];
+      if (apps is! Map<String, dynamic>) break;
+
+      final items = apps['items'];
+      if (items is List) {
+        for (final item in items) {
+          if (item is Map<String, dynamic>) {
+            games.add(CatalogGame.fromJson(item));
+          }
+        }
+      }
+      numberReturned = (apps['numberReturned'] as num?)?.toInt() ?? numberReturned;
+      numberSupported = (apps['numberSupported'] as num?)?.toInt() ?? numberSupported;
+      totalCount = (apps['totalCount'] as num?)?.toInt() ?? totalCount;
+
+      final pageInfo = apps['pageInfo'];
+      if (pageInfo is Map<String, dynamic>) {
+        hasNextPage = (pageInfo['hasNextPage'] as bool?) ?? false;
+        endCursor = (pageInfo['endCursor'] as String?) ?? '';
+      }
+      cursor = endCursor;
+    }
+
+    return CatalogBrowseResult(
+      games: dedupeGames(games),
+      hasNextPage: hasNextPage,
+      endCursor: endCursor,
+      numberReturned: numberReturned,
+      numberSupported: numberSupported,
+      totalCount: totalCount,
+    );
+  }
 }
+
+/// Fields requested from the `apps` browse query. A trimmed superset of what
+/// [CatalogGame.fromJson] reads.
+const _browseFields = '''
+  numberReturned
+  numberSupported
+  pageInfo { hasNextPage endCursor totalCount }
+  items {
+    id
+    title
+    images { KEY_ART KEY_IMAGE GAME_BOX_ART TV_BANNER HERO_IMAGE MARQUEE_HERO_IMAGE FEATURE_IMAGE GAME_LOGO }
+    variants {
+      id
+      shortName
+      appStore
+      supportedControls
+      gfn {
+        status
+        library { status selected }
+      }
+    }
+    gfn {
+      playabilityState
+      minimumMembershipTierLabel
+    }
+  }
+''';
+
+const _filterBrowseQuery = '''
+query GetFilterBrowseResults(
+  \$vpcId: String!,
+  \$locale: String!,
+  \$sortString: String!,
+  \$fetchCount: Int!,
+  \$cursor: String!,
+  \$filters: AppFilterFields!
+) {
+  apps(
+    vpcId: \$vpcId,
+    language: \$locale,
+    orderBy: \$sortString,
+    first: \$fetchCount,
+    after: \$cursor,
+    filters: \$filters
+  ) {
+$_browseFields
+  }
+}''';
+
+const _searchBrowseQuery = '''
+query GetSearchFilterResults(
+  \$vpcId: String!,
+  \$locale: String!,
+  \$sortString: String!,
+  \$fetchCount: Int!,
+  \$cursor: String!,
+  \$searchString: String!,
+  \$filters: AppFilterFields!
+) {
+  apps(
+    vpcId: \$vpcId,
+    language: \$locale,
+    orderBy: \$sortString,
+    first: \$fetchCount,
+    after: \$cursor,
+    searchQuery: \$searchString,
+    filters: \$filters
+  ) {
+$_browseFields
+  }
+}''';
 
 /// Port of gameAppMapper.ts dedupeGames — dedupe by id.
 List<CatalogGame> dedupeGames(List<CatalogGame> games) {

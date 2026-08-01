@@ -1,3 +1,5 @@
+import 'dart:convert' show jsonDecode;
+
 import '../catalog/game_images.dart'
     show landscapeImageKeys, normalizeImageValues;
 
@@ -258,6 +260,129 @@ class CatalogBrowseResult {
     this.numberSupported = 0,
     this.totalCount = 0,
   });
+}
+
+/// A single filterable option inside a [CatalogFilterGroup].
+class CatalogFilterOption {
+  final String id;
+  final String label;
+  final String groupId;
+  final String groupLabel;
+
+  /// Parsed `AppFilterFields` payload sent to the server when selected.
+  final Map<String, dynamic> payload;
+
+  const CatalogFilterOption({
+    required this.id,
+    required this.label,
+    this.groupId = '',
+    this.groupLabel = '',
+    this.payload = const {},
+  });
+
+  factory CatalogFilterOption.fromJson(
+    Map<String, dynamic> json, {
+    required String groupId,
+    required String groupLabel,
+  }) {
+    return CatalogFilterOption(
+      id: json['id'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      groupId: groupId,
+      groupLabel: groupLabel,
+      payload: _parsePayload(json['filters']),
+    );
+  }
+
+  static Map<String, dynamic> _parsePayload(Object? value) {
+    if (value is! List || value.isEmpty) return const {};
+    final raw = value.first;
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) return decoded;
+      } catch (_) {}
+    } else if (raw is Map<String, dynamic>) {
+      return raw;
+    }
+    return const {};
+  }
+}
+
+class CatalogFilterGroup {
+  final String id;
+  final String label;
+  final List<CatalogFilterOption> options;
+
+  const CatalogFilterGroup({
+    required this.id,
+    required this.label,
+    this.options = const [],
+  });
+
+  factory CatalogFilterGroup.fromJson(Map<String, dynamic> json) {
+    final raw = json['filters'];
+    final options = raw is List
+        ? raw
+            .whereType<Map<String, dynamic>>()
+            .map((f) => CatalogFilterOption.fromJson(
+                  f,
+                  groupId: json['id'] as String? ?? '',
+                  groupLabel: json['label'] as String? ?? '',
+                ))
+            .where((o) => o.id.isNotEmpty && o.label.isNotEmpty)
+            .toList()
+        : const <CatalogFilterOption>[];
+    return CatalogFilterGroup(
+      id: json['id'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      options: options,
+    );
+  }
+}
+
+class CatalogSortOption {
+  final String id;
+  final String label;
+  final String orderBy;
+
+  const CatalogSortOption({
+    required this.id,
+    required this.label,
+    required this.orderBy,
+  });
+
+  factory CatalogSortOption.fromJson(Map<String, dynamic> json) {
+    return CatalogSortOption(
+      id: json['id'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      orderBy: json['orderBy'] as String? ?? '',
+    );
+  }
+}
+
+/// Filter groups + sort orders + per-filter payload lookup from the
+/// `filterGroupAndSortOrderDefinitions` query.
+class CatalogDefinitions {
+  final List<CatalogFilterGroup> groups;
+  final List<CatalogSortOption> sortOptions;
+  final Map<String, Map<String, dynamic>> filterPayloadById;
+
+  const CatalogDefinitions({
+    this.groups = const [],
+    this.sortOptions = const [],
+    this.filterPayloadById = const {},
+  });
+
+  /// Merge the AppFilterFields payloads for the given filter ids.
+  Map<String, dynamic> mergeFilterPayloads(List<String> filterIds) {
+    final merged = <String, dynamic>{};
+    for (final id in filterIds) {
+      final payload = filterPayloadById[id];
+      if (payload != null) merged.addAll(payload);
+    }
+    return merged;
+  }
 }
 
 class StreamRegion {

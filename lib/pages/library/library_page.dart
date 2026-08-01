@@ -3,13 +3,14 @@ import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
 import '../../widgets/catalog_game_card.dart';
+import '../../widgets/filter_sort_bar.dart';
 import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/section_header.dart';
 import '../game/game_details_page.dart';
 
-/// User's owned/connected games, 16:9 grid.
+/// User's owned/connected games, 16:9 grid with client-side filter/sort.
 class LibraryPage extends StatefulWidget {
   final AppServices services;
 
@@ -23,10 +24,18 @@ class _LibraryPageState extends State<LibraryPage> {
   List<CatalogGame>? _games;
   String? _error;
   bool _loading = false;
+  String? _sortId;
+  final Set<String> _filterIds = {};
+
+  static const _sortOptions = [
+    CatalogSortOption(id: 'title', label: 'Title', orderBy: 'title'),
+    CatalogSortOption(id: 'publisher', label: 'Publisher', orderBy: 'publisher'),
+  ];
 
   @override
   void initState() {
     super.initState();
+    _sortId = _sortOptions.first.id;
     _load();
   }
 
@@ -54,6 +63,78 @@ class _LibraryPageState extends State<LibraryPage> {
     }
   }
 
+  /// Synthesized client-side filter groups from the loaded library.
+  List<CatalogFilterGroup> get _filterGroups {
+    final games = _games ?? const <CatalogGame>[];
+    final stores = <String>{};
+    final tiers = <String>{};
+    for (final g in games) {
+      for (final v in g.variants) {
+        if (v.appStore != null && v.appStore!.isNotEmpty) {
+          stores.add(v.appStore!);
+        }
+      }
+      if (g.minimumMembershipTierLabel != null) {
+        tiers.add(g.minimumMembershipTierLabel!);
+      }
+    }
+    final storeOptions = stores.toList()..sort();
+    final tierOptions = tiers.toList()..sort();
+    return [
+      if (storeOptions.isNotEmpty)
+        CatalogFilterGroup(
+          id: 'store',
+          label: 'Store',
+          options: storeOptions
+              .map((s) => CatalogFilterOption(id: 'store:$s', label: s))
+              .toList(),
+        ),
+      if (tierOptions.isNotEmpty)
+        CatalogFilterGroup(
+          id: 'tier',
+          label: 'Membership',
+          options: tierOptions
+              .map((t) => CatalogFilterOption(id: 'tier:$t', label: t))
+              .toList(),
+        ),
+    ];
+  }
+
+  List<CatalogGame> get _visible {
+    final games = _games ?? const <CatalogGame>[];
+    var list = games;
+    if (_filterIds.isNotEmpty) {
+      final storeIds = _filterIds.where((id) => id.startsWith('store:'));
+      final tierIds = _filterIds.where((id) => id.startsWith('tier:'));
+      list = list.where((g) {
+        final stores = g.variants
+            .map((v) => v.appStore)
+            .whereType<String>()
+            .toSet();
+        final tier = g.minimumMembershipTierLabel;
+        final storeMatch =
+            storeIds.isEmpty || storeIds.any((id) => stores.contains(id.substring(6)));
+        final tierMatch =
+            tierIds.isEmpty || tierIds.any((id) => tier == id.substring(5));
+        return storeMatch && tierMatch;
+      }).toList();
+    }
+    switch (_sortId) {
+      case 'title':
+        list = [...list]
+          ..sort((a, b) =>
+              a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+        break;
+      case 'publisher':
+        list = [...list]
+          ..sort((a, b) => (a.publisherName ?? '')
+              .toLowerCase()
+              .compareTo((b.publisherName ?? '').toLowerCase()));
+        break;
+    }
+    return list;
+  }
+
   @override
   Widget build(BuildContext context) {
     final games = _games;
@@ -63,7 +144,8 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   List<Widget> _slivers(List<CatalogGame>? games) {
-    final list = games ?? const <CatalogGame>[];
+    final list = _visible;
+    final groups = _filterGroups;
     return [
       SliverToBoxAdapter(
         child: SectionHeader(
@@ -71,6 +153,26 @@ class _LibraryPageState extends State<LibraryPage> {
           padding: const EdgeInsets.fromLTRB(0, 20, 0, 14),
         ),
       ),
+      if (games != null && groups.isNotEmpty)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: FilterSortBar(
+              groups: groups,
+              sortOptions: _sortOptions,
+              sortId: _sortId,
+              filterIds: _filterIds,
+              onSortChanged: (id) => setState(() => _sortId = id),
+              onFiltersChanged: (ids) {
+                setState(() {
+                  _filterIds
+                    ..clear()
+                    ..addAll(ids);
+                });
+              },
+            ),
+          ),
+        ),
       if (_loading && games == null)
         const SliverToBoxAdapter(child: GameGridSkeleton())
       else if (_error != null && games == null)
@@ -81,13 +183,15 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
         )
       else if (list.isEmpty)
-        const SliverToBoxAdapter(
+        SliverToBoxAdapter(
           child: Padding(
-            padding: EdgeInsets.all(40),
+            padding: const EdgeInsets.all(40),
             child: Center(
               child: Text(
-                'Your library is empty.',
-                style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+                _filterIds.isNotEmpty
+                    ? 'No games match your filters.'
+                    : 'Your library is empty.',
+                style: const TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
               ),
             ),
           ),
