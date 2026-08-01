@@ -6,6 +6,7 @@ import '../../state/session_controller.dart';
 import '../../theme/neon.dart';
 import '../../widgets/game_art.dart';
 import '../../widgets/neon_button.dart';
+import '../../widgets/neon_card.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
 
@@ -107,15 +108,6 @@ class _StreamPageState extends State<StreamPage> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
         children: [
-          Text(
-            'NEXTCLIENT',
-            style: const TextStyle(
-              color: Neon.ink,
-              fontSize: 14,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 3,
-            ),
-          ),
           const Spacer(),
           NeonOutlineButton(
             label: 'Exit',
@@ -151,7 +143,8 @@ class _StreamPageState extends State<StreamPage> {
     return _ProgressSurface(
       game: widget.game,
       state: state,
-      queuePosition: controller.session?.queuePosition,
+      session: controller.session,
+      events: controller.events,
     );
   }
 }
@@ -159,19 +152,19 @@ class _StreamPageState extends State<StreamPage> {
 class _ProgressSurface extends StatelessWidget {
   final CatalogGame game;
   final SessionState state;
-  final int? queuePosition;
+  final SessionInfo? session;
+  final List<SessionPhaseEvent> events;
 
   const _ProgressSurface({
     required this.game,
     required this.state,
-    this.queuePosition,
+    this.session,
+    this.events = const [],
   });
 
   String get _statusText => switch (state) {
         SessionState.requesting => 'REQUESTING SESSION',
-        SessionState.queued => queuePosition != null && queuePosition! > 1
-            ? 'QUEUED · POSITION $queuePosition'
-            : 'QUEUED',
+        SessionState.queued => 'QUEUED',
         SessionState.allocating => 'ALLOCATING SERVER',
         SessionState.idle => 'PREPARING',
         _ => state.name.toUpperCase(),
@@ -179,48 +172,216 @@ class _ProgressSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 240,
-            child: GameArt(
-              imageUrl: game.imageUrl,
-              label: game.title,
-              borderRadius: const BorderRadius.all(Radius.circular(18)),
-              overlay: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: Neon.scrim,
-                  borderRadius: const BorderRadius.all(Radius.circular(18)),
+    final s = session;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 200,
+              child: GameArt(
+                imageUrl: game.imageUrl,
+                label: game.title,
+                borderRadius: const BorderRadius.all(Radius.circular(18)),
+                overlay: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: Neon.scrim,
+                    borderRadius: const BorderRadius.all(Radius.circular(18)),
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(height: 28),
-          const NeonSpinner(size: 40),
-          const SizedBox(height: 20),
-          Text(
-            game.title,
-            style: const TextStyle(
-              color: Neon.ink,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
+            const SizedBox(height: 22),
+            const NeonSpinner(size: 34),
+            const SizedBox(height: 16),
+            Text(
+              game.title,
+              style: const TextStyle(
+                color: Neon.ink,
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            _statusText,
-            style: const TextStyle(
-              color: Neon.accent,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 2,
+            const SizedBox(height: 8),
+            NeonChip(
+              label: _statusText,
+              tone: state == SessionState.queued
+                  ? NeonChipTone.warning
+                  : state == SessionState.allocating
+                      ? NeonChipTone.violet
+                      : NeonChipTone.accent,
             ),
-          ),
-        ],
+            if (state == SessionState.queued && s?.queuePosition != null) ...[
+              const SizedBox(height: 24),
+              const Text(
+                'QUEUE POSITION',
+                style: TextStyle(
+                  color: Neon.inkMuted,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 2,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '#${s!.queuePosition}',
+                style: const TextStyle(
+                  color: Neon.accent,
+                  fontSize: 44,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                  shadows: [Shadow(color: Neon.accent, blurRadius: 24)],
+                ),
+              ),
+              if (s.seatSetupStep != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'seat setup step ${s.seatSetupStep}',
+                  style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
+                ),
+              ],
+            ],
+            const SizedBox(height: 28),
+            NeonCard(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  _InfoRow(label: 'State', value: state.name.toUpperCase()),
+                  if (s != null) ...[
+                    const Divider(height: 12),
+                    _InfoRow(
+                      label: 'Status code',
+                      value: '${s.status}',
+                    ),
+                    if (s.queuePosition != null) ...[
+                      const Divider(height: 12),
+                      _InfoRow(
+                        label: 'Queue position',
+                        value: '#${s.queuePosition}',
+                      ),
+                    ],
+                    if (s.seatSetupStep != null) ...[
+                      const Divider(height: 12),
+                      _InfoRow(
+                        label: 'Seat setup step',
+                        value: '${s.seatSetupStep}',
+                      ),
+                    ],
+                    const Divider(height: 12),
+                    _InfoRow(label: 'Zone', value: s.zone),
+                    if (s.sessionId.isNotEmpty) ...[
+                      const Divider(height: 12),
+                      _InfoRow(
+                        label: 'Session ID',
+                        value: _short(s.sessionId),
+                      ),
+                    ],
+                    if (s.gpuType != null) ...[
+                      const Divider(height: 12),
+                      _InfoRow(label: 'GPU', value: s.gpuType!),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+            if (events.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              NeonCard(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'TRANSITIONS',
+                      style: TextStyle(
+                        color: Neon.inkMuted,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    for (final e in events.reversed.take(6))
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${_stateLabel(e.from)} → ${_stateLabel(e.to)}',
+                                style: const TextStyle(
+                                  color: Neon.inkSoft,
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              _time(e.timestamp),
+                              style: const TextStyle(
+                                color: Neon.inkMuted,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
+    );
+  }
+
+  String _short(String id) =>
+      id.length > 8 ? '${id.substring(0, 8)}…' : id;
+
+  String _stateLabel(SessionState s) => switch (s) {
+        SessionState.idle => 'idle',
+        SessionState.requesting => 'requesting',
+        SessionState.queued => 'queued',
+        SessionState.allocating => 'allocating',
+        SessionState.ready => 'ready',
+        SessionState.error => 'error',
+      };
+
+  String _time(DateTime t) {
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    final s = t.second.toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _InfoRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Neon.ink,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
