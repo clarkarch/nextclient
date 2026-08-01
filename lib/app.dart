@@ -149,22 +149,155 @@ class _ShellState extends State<Shell> {
 
     return Scaffold(
       backgroundColor: Neon.bgA,
+      drawer: _NeonDrawer(
+        destinations: _destinations,
+        selectedIndex: _index,
+        onSelect: (i) => setState(() => _index = i),
+      ),
       body: Row(
         children: [
           NeonRail(
             destinations: _destinations,
             selectedIndex: _index,
             onSelect: (i) => setState(() => _index = i),
-            footer: NeonSidenavButton(
-              destinations: _destinations,
-              selectedIndex: _index,
-              onSelect: (i) => setState(() => _index = i),
+            footer: Builder(
+              builder: (railContext) => NeonSidenavButton(
+                onPressed: () => Scaffold.of(railContext).openDrawer(),
+              ),
             ),
           ),
           Expanded(
             child: IndexedStack(index: _index, children: pages),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Neon side navigation drawer (native Scaffold drawer).
+class _NeonDrawer extends StatelessWidget {
+  final List<RailDestination> destinations;
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
+
+  const _NeonDrawer({
+    required this.destinations,
+    required this.selectedIndex,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      backgroundColor: Neon.bgB,
+      width: 280,
+      child: Container(
+        decoration: const BoxDecoration(
+          border: Border(right: BorderSide(color: Color(0x1FFFFFFF))),
+        ),
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 24, 24, 20),
+                child: ShaderMask(
+                  shaderCallback: _gradientShader,
+                  child: Text(
+                    'NEXTCLIENT',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ),
+              ),
+              const Divider(),
+              for (var i = 0; i < destinations.length; i++)
+                _DrawerTile(
+                  destination: destinations[i],
+                  selected: i == selectedIndex,
+                  onTap: () {
+                    onSelect(i);
+                    Navigator.of(context).pop();
+                  },
+                ),
+              const Spacer(),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 0, 24, 20),
+                child: Text(
+                  'NEXTCLIENT · open-source GFN client',
+                  style: TextStyle(
+                    color: Color(0xFF5C6B85),
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static Shader _gradientShader(Rect bounds) =>
+      Neon.accentGradient.createShader(bounds);
+}
+
+class _DrawerTile extends StatelessWidget {
+  final RailDestination destination;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _DrawerTile({
+    required this.destination,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? Neon.accent : Neon.inkSoft;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        color: selected ? Neon.accent.withValues(alpha: 0.1) : Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+        child: Row(
+          children: [
+            if (selected)
+              Container(
+                width: 3,
+                height: 20,
+                margin: const EdgeInsets.only(right: 14),
+                decoration: BoxDecoration(
+                  gradient: Neon.accentGradient,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              )
+            else
+              const SizedBox(width: 17),
+            Icon(
+              selected
+                  ? destination.selectedIcon ?? destination.icon
+                  : destination.icon,
+              size: 20,
+              color: color,
+            ),
+            const SizedBox(width: 12),
+            Text(
+              destination.label,
+              style: TextStyle(
+                color: selected ? Neon.accent : Neon.ink,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
