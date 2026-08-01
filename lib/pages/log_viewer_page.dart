@@ -78,62 +78,64 @@ class _LogViewerPageState extends State<LogViewerPage> {
           onPressed: () => setState(() => _stickToBottom = !_stickToBottom),
         ),
       ],
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final f in _LogFilter.values)
-                GestureDetector(
-                  onTap: () => setState(() => _filter = f),
-                  child: NeonChip(
-                    label: switch (f) {
-                      _LogFilter.all => 'All',
-                      _LogFilter.info => 'Info+',
-                      _LogFilter.warn => 'Warn+',
-                      _LogFilter.error => 'Error',
-                    },
-                    tone: f == _filter
-                        ? NeonChipTone.accent
-                        : NeonChipTone.neutral,
-                    filled: f == _filter,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Neon.bgC,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              padding: const EdgeInsets.all(12),
-              child: _visible.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'No log entries.',
-                        style: TextStyle(color: Neon.inkMuted, fontSize: 12.5),
-                      ),
-                    )
-                  : Scrollbar(
-                      controller: _scroll,
-                      thumbVisibility: true,
-                      child: ListView.builder(
-                        controller: _scroll,
-                        itemCount: _visible.length,
-                        itemBuilder: (context, i) {
-                          final e = _visible[i];
-                          return _LogLine(entry: e);
-                        },
-                      ),
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 12),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final f in _LogFilter.values)
+                  GestureDetector(
+                    onTap: () => setState(() => _filter = f),
+                    child: NeonChip(
+                      label: switch (f) {
+                        _LogFilter.all => 'All',
+                        _LogFilter.info => 'Info+',
+                        _LogFilter.warn => 'Warn+',
+                        _LogFilter.error => 'Error',
+                      },
+                      tone: f == _filter
+                          ? NeonChipTone.accent
+                          : NeonChipTone.neutral,
+                      filled: f == _filter,
                     ),
+                  ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+        SliverFillRemaining(
+          hasScrollBody: true,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Neon.bgC,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: _visible.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No log entries.',
+                      style: TextStyle(color: Neon.inkMuted, fontSize: 12.5),
+                    ),
+                  )
+                : Scrollbar(
+                    controller: _scroll,
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      controller: _scroll,
+                      itemCount: _visible.length,
+                      itemBuilder: (context, i) {
+                        final e = _visible[i];
+                        return _LogLine(entry: e);
+                      },
+                    ),
+                  ),
+          ),
+        ),
+      ],
     );
   }
 }
