@@ -2,14 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../theme/neon.dart';
 
-/// Native-style sidenav hamburger. Sits at the bottom of the rail and opens
-/// the [Scaffold] drawer (wired via `Scaffold.of(context).openDrawer()`).
+/// Native-style sidenav toggle. Sits at the bottom of the sidebar: shows an
+/// open-panel icon when collapsed, a close-panel icon when expanded.
 class NeonSidenavButton extends StatelessWidget {
   final VoidCallback onPressed;
+  final bool expanded;
 
   const NeonSidenavButton({
     super.key,
     required this.onPressed,
+    this.expanded = false,
   });
 
   @override
@@ -27,7 +29,17 @@ class NeonSidenavButton extends StatelessWidget {
             border: Border.all(color: const Color(0x22FFFFFF)),
             boxShadow: Neon.softShadow(radius: 10),
           ),
-          child: const Icon(Icons.menu, color: Neon.inkSoft, size: 22),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            transitionBuilder: (child, animation) =>
+                ScaleTransition(scale: animation, child: child),
+            child: Icon(
+              expanded ? Icons.menu_open : Icons.menu,
+              key: ValueKey(expanded),
+              color: Neon.inkSoft,
+              size: 22,
+            ),
+          ),
         ),
       ),
     );
