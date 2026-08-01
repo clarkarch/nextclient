@@ -19,7 +19,7 @@ class _CatalogPageState extends State<CatalogPage> {
   List<CatalogGame>? _games;
   String? _error;
   bool _loading = false;
-  bool _libraryOnly = false;
+  bool _libraryView = false;
 
   Future<void> _load() async {
     setState(() {
@@ -28,9 +28,9 @@ class _CatalogPageState extends State<CatalogPage> {
     });
     try {
       final token = await widget.services.auth.resolveJwtToken();
-      final games = await widget.services.catalog.fetchMainGamesUncached(
-        token: token,
-      );
+      final games = _libraryView
+          ? await widget.services.catalog.fetchLibraryGamesUncached(token: token)
+          : await widget.services.catalog.fetchMainGamesUncached(token: token);
       if (!mounted) return;
       setState(() {
         _games = games;
@@ -48,25 +48,33 @@ class _CatalogPageState extends State<CatalogPage> {
   @override
   Widget build(BuildContext context) {
     final games = _games;
-    final shown = _libraryOnly
-        ? (games ?? []).where((g) => g.isInLibrary).toList()
-        : (games ?? []);
+    final shown = games ?? const <CatalogGame>[];
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         Row(
           children: [
-            FilledButton.icon(
-              icon: const Icon(Icons.refresh),
-              label: const Text('Fetch catalog'),
-              onPressed: _loading ? null : _load,
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('All')),
+                ButtonSegment(value: true, label: Text('Library')),
+              ],
+              selected: {_libraryView},
+              onSelectionChanged: (sel) {
+                final changed = sel.first != _libraryView;
+                setState(() => _libraryView = sel.first);
+                if (changed) {
+                  _games = null;
+                  _load();
+                }
+              },
             ),
             const Spacer(),
-            FilterChip(
-              label: const Text('Library only'),
-              selected: _libraryOnly,
-              onSelected: (v) => setState(() => _libraryOnly = v),
+            FilledButton.icon(
+              icon: const Icon(Icons.refresh),
+              label: const Text('Fetch'),
+              onPressed: _loading ? null : _load,
             ),
           ],
         ),
@@ -81,8 +89,7 @@ class _CatalogPageState extends State<CatalogPage> {
           ),
         if (games != null)
           Text(
-            '${shown.length} games${_libraryOnly ? ' in library' : ''} '
-            '(total ${games.length})',
+            '${shown.length} games in this view',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         if (games != null)

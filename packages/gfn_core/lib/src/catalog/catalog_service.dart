@@ -162,6 +162,20 @@ class CatalogService {
     final games = flattenPanels(payload);
     return games.take(6).toList();
   }
+
+  /// Port of catalogBrowse.ts fetchPanels with LIBRARY panels — the user's
+  /// actual library (owned/connected games).
+  Future<List<CatalogGame>> fetchLibraryGamesUncached({
+    required String token,
+    String? providerStreamingBaseUrl,
+  }) async {
+    final payload = await fetchPanels(
+      token: token,
+      panelNames: ['LIBRARY'],
+      providerStreamingBaseUrl: providerStreamingBaseUrl,
+    );
+    return flattenPanels(payload);
+  }
 }
 
 /// Port of gameAppMapper.ts dedupeGames — dedupe by id.
