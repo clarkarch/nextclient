@@ -5,6 +5,7 @@ import 'package:gfn_core/gfn_core.dart';
 import '../../main.dart';
 import '../../state/session_controller.dart';
 import '../../theme/neon.dart';
+import '../../utils/friendly_error.dart';
 import '../../widgets/game_art.dart';
 import '../../widgets/neon_button.dart';
 import '../../widgets/neon_card.dart';
@@ -14,17 +15,20 @@ import '../../widgets/neon_snackbar.dart';
 
 /// Full-screen streaming surface. Drives the [SessionController] lifecycle
 /// (requesting → queued → allocating → ready) then shows the session-ready
-/// state. No video render yet (gfn_core v0.01).
+/// state. No video render yet (gfn_core v0.01). With [resumeClaim], an
+/// existing session is claimed/resumed instead of creating a new one.
 class StreamPage extends StatefulWidget {
   final AppServices services;
   final CatalogGame game;
-  final SessionCreateRequest request;
+  final SessionCreateRequest? request;
+  final SessionClaimRequest? resumeClaim;
 
   const StreamPage({
     super.key,
     required this.services,
     required this.game,
-    required this.request,
+    this.request,
+    this.resumeClaim,
   });
 
   @override
@@ -45,21 +49,39 @@ class _StreamPageState extends State<StreamPage> {
     _launchStarted = true;
     try {
       final token = await widget.services.auth.resolveJwtToken();
-      final request = SessionCreateRequest(
+      final resume = widget.resumeClaim;
+      if (resume != null) {
+        await widget.services.session.resume(SessionClaimRequest(
+          token: token,
+          streamingBaseUrl: resume.streamingBaseUrl,
+          sessionId: resume.sessionId,
+          serverIp: resume.serverIp,
+          appId: resume.appId,
+          appLaunchMode: resume.appLaunchMode,
+          enablePersistingInGameSettings:
+              resume.enablePersistingInGameSettings,
+          settings: resume.settings ??
+              widget.services.settings.buildStreamSettings(),
+        ));
+        return;
+      }
+      final request = widget.request;
+      if (request == null) return;
+      final built = SessionCreateRequest(
         token: token,
-        streamingBaseUrl: widget.request.streamingBaseUrl,
-        appId: widget.request.appId,
-        internalTitle: widget.request.internalTitle,
-        accountLinked: widget.request.accountLinked,
+        streamingBaseUrl: request.streamingBaseUrl,
+        appId: request.appId,
+        internalTitle: request.internalTitle,
+        accountLinked: request.accountLinked,
         enablePersistingInGameSettings:
-            widget.request.enablePersistingInGameSettings,
+            request.enablePersistingInGameSettings,
         supportsInGameSettingsPersistence:
-            widget.request.supportsInGameSettingsPersistence,
-        zone: widget.request.zone,
-        settings: widget.request.settings,
-        proxyUrl: widget.request.proxyUrl,
+            request.supportsInGameSettingsPersistence,
+        zone: request.zone,
+        settings: request.settings,
+        proxyUrl: request.proxyUrl,
       );
-      await widget.services.session.launch(request);
+      await widget.services.session.launch(built);
     } catch (e) {
       debugPrint('Launch failed: $e');
     }
@@ -133,7 +155,7 @@ class _StreamPageState extends State<StreamPage> {
     }
     if (state == SessionState.error) {
       return _ErrorSurface(
-        message: controller.lastError ?? 'Unknown error',
+        message: friendlyError(controller.lastError ?? 'Unknown error'),
         onRetry: () async {
           controller.reset();
           setState(() => _launchStarted = false);
@@ -254,6 +276,11 @@ class _ProgressSurfaceState extends State<_ProgressSurface> {
                 ),
               ],
             ],
+            if (s?.adState != null &&
+                (s!.adState!.isAdsRequired || s.adState!.isQueuePaused == true)) ...[
+              const SizedBox(height: 20),
+              _QueueAdCard(adState: s.adState!),
+            ],
             const SizedBox(height: 24),
             _LogsToggle(
               open: _showLogs,
@@ -267,6 +294,94 @@ class _ProgressSurfaceState extends State<_ProgressSurface> {
         ),
       ),
     );
+  }
+}
+
+class _QueueAdCard extends StatelessWidget {
+  final SessionAdState adState;
+
+  const _QueueAdCard({required this.adState});
+
+  @override
+  Widget build(BuildContext context) {
+    final paused = adState.isQueuePaused == true;
+    return NeonCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(
+                paused ? Icons.pause_circle : Icons.live_tv,
+                color: paused ? Neon.warning : Neon.accent,
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      paused ? 'QUEUE PAUSED' : 'QUEUE AD',
+                      style: TextStyle(
+                        color: paused ? Neon.warning : Neon.accent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.4,
+                      ),
+                    ),
+                    Text(
+                      adState.message ??
+                          (paused
+                              ? 'Resume ads to stay in queue.'
+                              : 'Finish ads to stay in queue.'),
+                      style: const TextStyle(
+                        color: Neon.inkSoft,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (adState.ads.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            for (final ad in adState.ads)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    const Icon(Icons.play_circle_outline,
+                        size: 14, color: Neon.inkMuted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        ad.adId,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Neon.inkMuted, fontSize: 12),
+                      ),
+                    ),
+                    if (ad.durationMs != null)
+                      Text(
+                        _fmtDuration(ad.durationMs!),
+                        style: const TextStyle(
+                            color: Neon.inkMuted, fontSize: 11.5),
+                      ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _fmtDuration(int ms) {
+    final s = (ms / 1000).ceil();
+    if (s < 60) return '${s}s';
+    return '${s ~/ 60}m ${s % 60}s';
   }
 }
 

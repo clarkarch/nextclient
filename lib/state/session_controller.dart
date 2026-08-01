@@ -42,6 +42,12 @@ class SessionController extends ChangeNotifier {
     return lifecycle.launch(request);
   }
 
+  Future<SessionInfo> resume(SessionClaimRequest request) {
+    final lifecycle = _ensure();
+    notifyListeners();
+    return lifecycle.resume(request);
+  }
+
   Future<void> stop() async {
     final lc = _lifecycle;
     if (lc == null) return;

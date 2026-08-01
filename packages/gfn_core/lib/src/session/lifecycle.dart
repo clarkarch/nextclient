@@ -145,6 +145,42 @@ class SessionLifecycle {
     }
   }
 
+  /// Resume/claim an existing session (e.g. after the app restarted).
+  Future<SessionInfo> resume(SessionClaimRequest request) async {
+    if (_state == SessionState.requesting ||
+        _state == SessionState.queued ||
+        _state == SessionState.allocating) {
+      throw StateError('A session launch is already in progress');
+    }
+
+    _lastError = null;
+    _transition(SessionState.requesting, 'Resuming session');
+
+    try {
+      final info = await cloudMatch.claimSession(request);
+      _session = info;
+      if (info.status == 2 || info.status == 3) {
+        _transition(SessionState.ready, 'Session resumed', data: {
+          'sessionId': info.sessionId,
+          'signalingUrl': info.signalingUrl,
+          'serverIp': info.serverIp,
+        });
+      } else {
+        _transition(
+          SessionState.error,
+          'Session resumed with status ${info.status}',
+          data: {'status': info.status},
+        );
+        throw StateError('Session resumed with status ${info.status}');
+      }
+      return info;
+    } catch (error) {
+      _lastError = error.toString();
+      _transition(SessionState.error, _lastError!);
+      rethrow;
+    }
+  }
+
   void reset() {
     _state = SessionState.idle;
     _session = null;

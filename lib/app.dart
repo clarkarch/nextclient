@@ -6,8 +6,10 @@ import 'pages/home/home_page.dart';
 import 'pages/library/library_page.dart';
 import 'pages/login/login_page.dart';
 import 'pages/settings/settings_page.dart';
+import 'pages/stream/stream_page.dart';
 import 'theme/neon.dart';
 import 'widgets/neon_sidebar.dart';
+import 'widgets/neon_snackbar.dart';
 
 class DebugShellApp extends StatefulWidget {
   const DebugShellApp({super.key});
@@ -117,6 +119,62 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   int _index = 0;
   bool _sidebarExpanded = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkActiveSession();
+  }
+
+  /// If a GFN session is already running (e.g. app was restarted), offer to
+  /// resume it via a modern snackbar.
+  Future<void> _checkActiveSession() async {
+    try {
+      final session = await widget.services.auth.ensureValidSession();
+      if (session == null) return;
+      final token = session.tokens.idToken ?? session.tokens.accessToken;
+      if (token == null) return;
+      final active = await widget.services.cloudMatch.getActiveSessions(
+        token: token,
+        streamingBaseUrl: 'https://prod.cloudmatchbeta.nvidiagrid.net/',
+      );
+      if (!mounted || active.isEmpty) return;
+      final first = active.first;
+      showNeonSnackbar(
+        context,
+        'Active session found (appId ${first.appId}). Resume it?',
+        actionLabel: 'Resume',
+        copyable: false,
+        onAction: () => _resumeActiveSession(first),
+      );
+    } catch (e) {
+      debugPrint('[resume] check failed: $e');
+    }
+  }
+
+  void _resumeActiveSession(ActiveSessionInfo info) {
+    final settings = widget.services.settings.buildStreamSettings();
+    final appId = '${info.appId}';
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StreamPage(
+          services: widget.services,
+          game: CatalogGame(
+            id: appId,
+            title: 'Resume session',
+            launchAppId: appId,
+          ),
+          resumeClaim: SessionClaimRequest(
+            streamingBaseUrl: info.streamingBaseUrl,
+            sessionId: info.sessionId,
+            serverIp: info.serverIp ?? '',
+            appId: appId,
+            settings: settings,
+          ),
+        ),
+      ),
+    );
+  }
 
   static const _destinations = [
     RailDestination(

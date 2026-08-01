@@ -5,11 +5,14 @@ import '../theme/neon.dart';
 
 /// Show a modern neon snackbar. [isError] tints it red; when [copyable], a
 /// copy button is appended so error text can be grabbed for bug reports.
+/// Optionally pass [actionLabel] + [onAction] for an action button.
 void showNeonSnackbar(
   BuildContext context,
   String message, {
   bool isError = false,
   bool copyable = true,
+  String? actionLabel,
+  VoidCallback? onAction,
 }) {
   final messenger = ScaffoldMessenger.of(context);
   messenger.hideCurrentSnackBar();
@@ -32,6 +35,27 @@ void showNeonSnackbar(
               style: const TextStyle(color: Neon.ink, fontSize: 13),
             ),
           ),
+          if (actionLabel != null && onAction != null) ...[
+            TextButton(
+              onPressed: () {
+                messenger.hideCurrentSnackBar();
+                onAction();
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: Neon.accent,
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+              child: Text(
+                actionLabel.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
+          ],
           if (copyable)
             IconButton(
               tooltip: 'Copy',

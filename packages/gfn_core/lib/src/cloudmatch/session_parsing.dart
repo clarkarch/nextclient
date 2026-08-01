@@ -74,6 +74,79 @@ int? extractSeatSetupStep(Map<String, dynamic>? session) {
   return null;
 }
 
+/// Port of extractAdState — surfaces queue ads from session fields.
+SessionAdState? extractAdState(Map<String, dynamic>? session) {
+  if (session == null) return null;
+
+  bool? toBool(Object? v) {
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    return null;
+  }
+
+  bool? nestedBool(String key, String sub) {
+    final nested = session[key];
+    if (nested is! Map) return null;
+    return toBool(nested[sub]);
+  }
+
+  final sessionAdsRequired = toBool(session['sessionAdsRequired']) ??
+      toBool(session['isAdsRequired']) ??
+      nestedBool('sessionProgress', 'isAdsRequired') ??
+      nestedBool('progressInfo', 'isAdsRequired');
+
+  final ads = <SessionAdInfo>[];
+  final rawAds = session['sessionAds'];
+  if (rawAds is List) {
+    for (var i = 0; i < rawAds.length; i++) {
+      final ad = rawAds[i];
+      if (ad is! Map) continue;
+      final durationMs = (ad['durationMs'] as num?)?.toInt() ??
+          ((ad['adLengthInSeconds'] as num?)?.toInt() ?? 0) * 1000;
+      ads.add(SessionAdInfo(
+        adId: ad['adId'] as String? ?? 'ad-${i + 1}',
+        state: (ad['state'] as num?)?.toInt(),
+        adUrl: ad['adUrl'] as String?,
+        mediaUrl: ad['mediaUrl'] as String?,
+        clickThroughUrl: ad['clickThroughUrl'] as String?,
+        durationMs: durationMs > 0 ? durationMs : null,
+      ));
+    }
+  }
+
+  final opportunity = session['opportunity'];
+  final opp = opportunity is Map ? opportunity : null;
+  final queuePaused = toBool(opp?['queuePaused']) ??
+      (opp?['state'] is String
+          ? (opp!['state'] as String).toLowerCase() == 'graceperiodstart'
+          : null);
+  final effectiveIsAdsRequired = sessionAdsRequired ?? ads.isNotEmpty;
+  final message = opp?['message'] as String? ??
+      opp?['description'] as String? ??
+      (queuePaused == true
+          ? 'Resume ads to stay in queue.'
+          : effectiveIsAdsRequired == true
+              ? 'Finish ads to stay in queue.'
+              : null);
+
+  if (effectiveIsAdsRequired != true &&
+      ads.isEmpty &&
+      queuePaused != true &&
+      message == null) {
+    return null;
+  }
+
+  return SessionAdState(
+    isAdsRequired: effectiveIsAdsRequired ?? false,
+    sessionAdsRequired: sessionAdsRequired,
+    isQueuePaused: queuePaused,
+    gracePeriodSeconds: (opp?['gracePeriodSeconds'] as num?)?.toInt(),
+    message: message,
+    sessionAds: ads,
+    ads: ads,
+  );
+}
+
 /// Port of normalizeIceServers
 Future<List<IceServer>> normalizeIceServers(
   CloudMatchResponse response,
@@ -180,8 +253,10 @@ Future<SessionInfo> toSessionInfo({
   }
 
   final signaling = resolveSignaling(payload);
-  final queuePosition = extractQueuePosition(_sessionMap(payload));
-  final seatSetupStep = extractSeatSetupStep(_sessionMap(payload));
+  final sessionMap = _sessionMap(payload);
+  final queuePosition = extractQueuePosition(sessionMap);
+  final seatSetupStep = extractSeatSetupStep(sessionMap);
+  final adState = extractAdState(sessionMap);
   final negotiatedProfile = _extractNegotiatedStreamProfile(payload);
   final appLaunchMode =
       _echoedSessionAppLaunchMode(payload) ?? fallbackAppLaunchMode;
@@ -192,6 +267,7 @@ Future<SessionInfo> toSessionInfo({
     status: payload.session.status,
     queuePosition: queuePosition,
     seatSetupStep: seatSetupStep,
+    adState: adState,
     zone: zone,
     streamingBaseUrl: streamingBaseUrl,
     serverIp: signaling.serverIp,

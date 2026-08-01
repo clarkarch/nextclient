@@ -3,6 +3,7 @@ import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
 import '../../theme/neon.dart';
+import '../../utils/friendly_error.dart';
 import '../../widgets/neon_button.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_chip.dart';
@@ -68,6 +69,8 @@ class _AccountPageState extends State<AccountPage> {
                     const SizedBox(height: 16),
                     _planCard(),
                     const SizedBox(height: 16),
+                    _accountsCard(),
+                    const SizedBox(height: 16),
                     NeonCard(
                       padding: EdgeInsets.zero,
                       child: NeonSettingTile(
@@ -90,6 +93,85 @@ class _AccountPageState extends State<AccountPage> {
               ),
             ),
     );
+  }
+
+  /// Saved-account switcher: switch / add / remove accounts.
+  Widget _accountsCard() {
+    final saved = widget.services.auth.getSavedAccounts();
+    final activeId = widget.services.auth.getSession()?.user.userId;
+    return NeonCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(14, 12, 14, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'ACCOUNTS',
+                style: TextStyle(
+                  color: Neon.accent,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.6,
+                ),
+              ),
+            ),
+          ),
+          for (final acc in saved) ...[
+            if (acc != saved.first) const Divider(height: 1),
+            _AccountRow(
+              account: acc,
+              active: acc.userId == activeId,
+              onSwitch: () => _switchAccount(acc),
+              onRemove: () => _removeAccount(acc),
+            ),
+          ],
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.person_add_alt_1,
+            title: 'Add account',
+            subtitle: 'Sign in with another NVIDIA account',
+            onTap: _addAccount,
+            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _switchAccount(SavedAccount acc) async {
+    try {
+      await widget.services.auth.switchAccount(userId: acc.userId);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      widget.onSignOut();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Switch failed: ${friendlyError(e)}')),
+      );
+    }
+  }
+
+  Future<void> _addAccount() async {
+    try {
+      await widget.services.auth.login();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      widget.onSignOut();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Add account failed: ${friendlyError(e)}')),
+      );
+    }
+  }
+
+  Future<void> _removeAccount(SavedAccount acc) async {
+    await widget.services.auth.removeAccount(userId: acc.userId);
+    if (!mounted) return;
+    setState(() {});
   }
 
   Widget _profileCard(AuthUser user) {
@@ -287,6 +369,88 @@ class _AvatarFallback extends StatelessWidget {
             fontSize: 28,
             fontWeight: FontWeight.w900,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountRow extends StatelessWidget {
+  final SavedAccount account;
+  final bool active;
+  final VoidCallback onSwitch;
+  final VoidCallback onRemove;
+
+  const _AccountRow({
+    required this.account,
+    required this.active,
+    required this.onSwitch,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: active ? null : onSwitch,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                gradient: Neon.accentGradient,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Center(
+                child: Text(
+                  account.displayName.isNotEmpty
+                      ? account.displayName[0].toUpperCase()
+                      : '?',
+                  style: const TextStyle(
+                    color: Neon.bgA,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    account.displayName,
+                    style: const TextStyle(
+                      color: Neon.ink,
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    account.email ?? account.providerCode,
+                    style: const TextStyle(
+                      color: Neon.inkMuted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (active)
+              const Icon(Icons.check_circle, color: Neon.accent, size: 18)
+            else
+              const Icon(Icons.swap_horiz, color: Neon.inkMuted, size: 18),
+            IconButton(
+              tooltip: 'Remove account',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.delete_outline,
+                  size: 16, color: Neon.inkMuted),
+              onPressed: onRemove,
+            ),
+          ],
         ),
       ),
     );

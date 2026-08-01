@@ -6,6 +6,7 @@ import '../../widgets/neon_card.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/section_header.dart';
+import '../log_viewer_page.dart';
 import 'account_page.dart';
 import 'language_page.dart';
 import 'region_page.dart';
@@ -75,6 +76,17 @@ class SettingsPage extends StatelessWidget {
                   onTap: () => _open(
                     context,
                     AccountPage(services: services, onSignOut: onSignOut),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+                ),
+                const Divider(height: 1),
+                NeonSettingTile(
+                  icon: Icons.terminal,
+                  title: 'Logs',
+                  subtitle: 'Debug log viewer',
+                  onTap: () => _open(
+                    context,
+                    LogViewerPage(logSink: services.logSink),
                   ),
                   trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
                 ),
