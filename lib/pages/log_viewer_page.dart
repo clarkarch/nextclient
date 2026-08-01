@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../theme/neon.dart';
 import '../widgets/neon_chip.dart';
 import '../widgets/neon_page_scaffold.dart';
+import '../widgets/neon_snackbar.dart';
 
 /// Live view over the in-memory [RingBufferLogSink].
 class LogViewerPage extends StatefulWidget {
@@ -62,12 +64,38 @@ class _LogViewerPageState extends State<LogViewerPage> {
     };
   }
 
+  static String _format(LogEntry e) {
+    final t = e.timestamp;
+    final time = '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}:'
+        '${t.second.toString().padLeft(2, '0')}.'
+        '${t.millisecond.toString().padLeft(3, '0')}';
+    return '[$time] [${e.level.name.toUpperCase()}] [${e.category}] ${e.message}';
+  }
+
+  void _copyVisible() {
+    final visible = _visible;
+    if (visible.isEmpty) return;
+    final text = visible.map(_format).join('\n');
+    Clipboard.setData(ClipboardData(text: text));
+    showNeonSnackbar(
+      context,
+      'Copied ${visible.length} log line${visible.length == 1 ? '' : 's'}',
+      copyable: false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return NeonPageScaffold(
       title: 'Logs',
       showBack: true,
       actions: [
+        IconButton(
+          tooltip: 'Copy visible logs',
+          icon: const Icon(Icons.copy_all, size: 18, color: Neon.inkSoft),
+          onPressed: _copyVisible,
+        ),
         IconButton(
           tooltip: 'Follow scroll',
           icon: Icon(
@@ -140,13 +168,21 @@ class _LogViewerPageState extends State<LogViewerPage> {
   }
 }
 
-class _LogLine extends StatelessWidget {
+class _LogLine extends StatefulWidget {
   final LogEntry entry;
 
   const _LogLine({required this.entry});
 
   @override
+  State<_LogLine> createState() => _LogLineState();
+}
+
+class _LogLineState extends State<_LogLine> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
+    final entry = widget.entry;
     final color = switch (entry.level) {
       LogLevel.debug => Neon.inkMuted,
       LogLevel.info => Neon.inkSoft,
@@ -158,52 +194,77 @@ class _LogLine extends StatelessWidget {
         '${t.minute.toString().padLeft(2, '0')}:'
         '${t.second.toString().padLeft(2, '0')}.'
         '${t.millisecond.toString().padLeft(3, '0')}';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 86,
-            child: Text(
-              time,
-              style: const TextStyle(
-                color: Neon.inkMuted,
-                fontSize: 11,
-                fontFamily: 'monospace',
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 86,
+              child: Text(
+                time,
+                style: const TextStyle(
+                  color: Neon.inkMuted,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
-          ),
-          SizedBox(
-            width: 54,
-            child: Text(
-              entry.level.name.toUpperCase(),
-              style: TextStyle(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
+            SizedBox(
+              width: 54,
+              child: Text(
+                entry.level.name.toUpperCase(),
+                style: TextStyle(
+                  color: color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
-          ),
-          SizedBox(
-            width: 90,
-            child: Text(
-              entry.category,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Neon.inkMuted,
-                fontSize: 11,
-                fontFamily: 'monospace',
+            SizedBox(
+              width: 90,
+              child: Text(
+                entry.category,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Neon.inkMuted,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: Text(
-              entry.message,
-              style: TextStyle(color: color, fontSize: 11.5, height: 1.35),
+            Expanded(
+              child: Text(
+                entry.message,
+                style: TextStyle(color: color, fontSize: 11.5, height: 1.35),
+              ),
             ),
-          ),
-        ],
+            SizedBox(
+              width: 20,
+              child: _hover
+                  ? InkWell(
+                      onTap: () {
+                        Clipboard.setData(
+                            ClipboardData(text: _LogViewerPageState._format(entry)));
+                        showNeonSnackbar(
+                          context,
+                          'Log line copied',
+                          copyable: false,
+                        );
+                      },
+                      child: const Icon(
+                        Icons.copy,
+                        size: 13,
+                        color: Neon.inkMuted,
+                      ),
+                    )
+                  : null,
+            ),
+          ],
+        ),
       ),
     );
   }
