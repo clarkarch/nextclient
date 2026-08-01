@@ -11,6 +11,7 @@ class GameArt extends StatefulWidget {
   final BorderRadius borderRadius;
   final Widget? overlay;
   final String? label;
+  final int cacheWidth;
 
   const GameArt({
     super.key,
@@ -19,6 +20,7 @@ class GameArt extends StatefulWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(14)),
     this.overlay,
     this.label,
+    this.cacheWidth = 800,
   });
 
   @override
@@ -54,6 +56,7 @@ class _GameArtState extends State<GameArt> {
         url!,
         fit: BoxFit.cover,
         filterQuality: FilterQuality.medium,
+        cacheWidth: widget.cacheWidth,
         loadingBuilder: (context, child, progress) {
           if (progress == null) return child;
           return _placeholder();

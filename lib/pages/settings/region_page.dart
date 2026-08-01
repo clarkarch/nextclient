@@ -47,6 +47,7 @@ class _RegionPageState extends State<RegionPage> {
         _loading = false;
       });
     } catch (e) {
+      debugPrint('[region] load failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;

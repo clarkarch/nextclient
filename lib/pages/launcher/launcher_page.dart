@@ -68,6 +68,7 @@ class _LauncherPageState extends State<LauncherPage> {
         }
       });
     } catch (e) {
+      debugPrint('[launcher] regions load failed: $e');
       if (!mounted) return;
       setState(() {
         _loadingRegions = false;

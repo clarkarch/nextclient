@@ -4,7 +4,6 @@ import 'package:gfn_core/gfn_core.dart';
 import '../../main.dart';
 import '../../widgets/catalog_game_card.dart';
 import '../../widgets/featured_carousel.dart';
-import '../../widgets/game_grid.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
@@ -68,6 +67,7 @@ class _HomePageState extends State<HomePage> {
         }
       });
     } catch (e) {
+      debugPrint('[home] load failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -80,36 +80,59 @@ class _HomePageState extends State<HomePage> {
     try {
       return await future;
     } catch (e) {
-      debugPrint('Home section load failed: $e');
+      debugPrint('[home] section load failed: $e');
       return null;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final all = _all;
     return NeonPageScaffold(
-      child: _loading && _all == null
-          ? const GameGridSkeleton()
-          : _error != null && _all == null
-              ? SizedBox(
-                  height: 400,
-                  child: NeonErrorView(message: _error!, onRetry: _load),
-                )
-              : _content(),
+      slivers: _buildSlivers(all),
     );
   }
 
-  Widget _content() {
+  List<Widget> _buildSlivers(List<CatalogGame>? all) {
     final featured = _featured ?? const <CatalogGame>[];
     final recent = _recent ?? const <CatalogGame>[];
-    final all = _all ?? const <CatalogGame>[];
+    final games = all ?? const <CatalogGame>[];
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SectionHeader(title: 'Featured'),
-        if (featured.isNotEmpty)
-          FeaturedCarousel(
+    if (_loading && all == null) {
+      return const [
+        SliverToBoxAdapter(child: Padding(
+          padding: EdgeInsets.only(top: 20),
+          child: GameGridSkeleton(),
+        )),
+      ];
+    }
+    if (_error != null &&
+        featured.isEmpty &&
+        recent.isEmpty &&
+        games.isEmpty) {
+      return [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 40),
+            child: SizedBox(
+              height: 320,
+              child: NeonErrorView(message: _error!, onRetry: _load),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    return [
+      if (featured.isNotEmpty) ...[
+        const SliverToBoxAdapter(
+          child: SectionHeader(
+            title: 'Featured',
+            padding: EdgeInsets.fromLTRB(0, 20, 0, 14),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: FeaturedCarousel(
             slides: featured
                 .map((g) => FeaturedSlide(
                       title: g.title,
@@ -122,9 +145,12 @@ class _HomePageState extends State<HomePage> {
             onPlay: (s) => _play(s.data as CatalogGame),
             onSelect: (s) => _openDetails(s.data as CatalogGame),
           ),
-        if (featured.isNotEmpty) const SizedBox(height: 36),
-        if (recent.isNotEmpty) ...[
-          SectionHeader(
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 36)),
+      ],
+      if (recent.isNotEmpty) ...[
+        SliverToBoxAdapter(
+          child: SectionHeader(
             title: 'Recently Played',
             actionLabel: 'See All',
             onAction: () {
@@ -138,7 +164,9 @@ class _HomePageState extends State<HomePage> {
               );
             },
           ),
-          SizedBox(
+        ),
+        SliverToBoxAdapter(
+          child: SizedBox(
             height: 165,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
@@ -154,23 +182,45 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ),
-          const SizedBox(height: 36),
-        ],
-        const SectionHeader(title: 'All Games'),
-        if (all.isNotEmpty)
-          GameGrid(
-            itemCount: all.length,
-            itemBuilder: (context, i) {
-              final game = all[i];
-              return CatalogGameCard(
-                game: game,
-                onTap: () => _openDetails(game),
-                onPlay: () => _play(game),
-              );
-            },
-          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 36)),
       ],
-    );
+      const SliverToBoxAdapter(child: SectionHeader(title: 'All Games')),
+      if (games.isNotEmpty)
+        SliverPadding(
+          padding: const EdgeInsets.only(bottom: 32),
+          sliver: SliverGrid(            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 210,
+              mainAxisExtent: 210 / 1.3,
+              mainAxisSpacing: 26,
+              crossAxisSpacing: 16,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final game = games[i];
+                return CatalogGameCard(
+                  game: game,
+                  onTap: () => _openDetails(game),
+                  onPlay: () => _play(game),
+                );
+              },
+              childCount: games.length,
+            ),
+          ),
+        ),
+      if (games.isEmpty && !_loading)
+        const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(
+              child: Text(
+                'No games available.',
+                style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+              ),
+            ),
+          ),
+        ),
+    ];
   }
 
   List<NeonChip>? _slideChips(CatalogGame game) {

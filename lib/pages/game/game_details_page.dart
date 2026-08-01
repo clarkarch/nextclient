@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
@@ -11,6 +12,7 @@ import '../../widgets/neon_page_scaffold.dart';
 import '../launcher/play_flow.dart';
 
 /// Rich game detail screen: hero art, metadata, description, screenshots.
+/// Falls back to the base [CatalogGame] data when the details query fails.
 class GameDetailsPage extends StatefulWidget {
   final AppServices services;
   final CatalogGame game;
@@ -43,18 +45,36 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
     });
     try {
       final token = await widget.services.auth.resolveJwtToken();
-      // The `apps` query expects the CMS app id, not the numeric variant
-      // (launch) appId.
-      final details = await widget.services.catalog.fetchGameDetails(
-        token: token,
-        appId: widget.game.id,
-      );
+      // The `apps` query expects the CMS app id; fall back to the numeric
+      // launch appId in case the panels id isn't a valid query key.
+      final candidates = <String>{
+        widget.game.id,
+        if (widget.game.launchAppId != null) widget.game.launchAppId!,
+      }.toList();
+
+      GameDetails? details;
+      String? lastError;
+      for (final id in candidates) {
+        try {
+          details = await widget.services.catalog.fetchGameDetails(
+            token: token,
+            appId: id,
+          );
+          break;
+        } catch (e) {
+          debugPrint('[details] fetch failed for $id: $e');
+          lastError = e.toString();
+        }
+      }
+
       if (!mounted) return;
       setState(() {
         _details = details;
         _loading = false;
+        _error = details == null ? (lastError ?? 'No details available') : null;
       });
     } catch (e) {
+      debugPrint('[details] unexpected failure for ${widget.game.id}: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -75,15 +95,7 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
             children: [
               _hero(),
               const SizedBox(height: 20),
-              if (_loading && _details == null)
-                const Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Center(child: NeonSpinner(label: 'Loading details')),
-                )
-              else if (_error != null && _details == null)
-                NeonErrorView(message: _error!, onRetry: _load)
-              else
-                _meta(),
+              _meta(),
             ],
           ),
         ),
@@ -177,26 +189,37 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
         ),
     ];
 
-    final description = details?.longDescription ??
-        details?.shortDescription ??
-        (details == null ? _error ?? '' : '');
+    String? description;
+    if (details != null) {
+      description = details.longDescription ?? details.shortDescription;
+    }
+    if (description == null || description.isEmpty) {
+      description = game.title;
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (chips.isNotEmpty)
-          Wrap(spacing: 8, runSpacing: 8, children: chips),
-        if (description.isNotEmpty) ...[
-          const SizedBox(height: 20),
-          Text(
-            description,
-            style: const TextStyle(
-              color: Neon.inkSoft,
-              fontSize: 14,
-              height: 1.6,
-            ),
+        if (_loading && details == null) ...[
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(child: NeonSpinner(label: 'Loading details')),
           ),
         ],
+        if (_error != null) ...[
+          _InlineError(message: _error!, onRetry: _load),
+          const SizedBox(height: 16),
+        ],
+        if (chips.isNotEmpty) Wrap(spacing: 8, runSpacing: 8, children: chips),
+        const SizedBox(height: 20),
+        Text(
+          description,
+          style: const TextStyle(
+            color: Neon.inkSoft,
+            fontSize: 14,
+            height: 1.6,
+          ),
+        ),
         if (details != null && details.screenshots.isNotEmpty) ...[
           const SizedBox(height: 28),
           const Text(
@@ -226,6 +249,49 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _InlineError({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Neon.error.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, size: 18, color: Neon.error),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: Neon.error, fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copy error',
+            icon: const Icon(Icons.copy, size: 16, color: Neon.error),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: message));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Error copied to clipboard')),
+              );
+            },
+          ),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
+      ),
     );
   }
 }

@@ -2,14 +2,19 @@ import 'package:flutter/material.dart';
 
 import '../theme/neon.dart';
 
-/// Shared scrollable page scaffold: layered background + optional top bar
+/// Shared page scaffold: layered background + optional top bar
 /// (back button + title) + padded scrollable content.
+///
+/// Pass [slivers] for lazy content (grids/carousel); otherwise pass [child]
+/// for a simple padded scroll body.
 class NeonPageScaffold extends StatefulWidget {
   final String? title;
   final bool showBack;
   final List<Widget>? actions;
-  final Widget child;
+  final Widget? child;
+  final List<Widget>? slivers;
   final EdgeInsetsGeometry padding;
+  final EdgeInsetsGeometry sliverPadding;
   final ScrollController? scrollController;
   final Color? background;
 
@@ -18,11 +23,14 @@ class NeonPageScaffold extends StatefulWidget {
     this.title,
     this.showBack = false,
     this.actions,
-    required this.child,
+    this.child,
+    this.slivers,
     this.padding = const EdgeInsets.fromLTRB(28, 20, 28, 32),
+    this.sliverPadding = const EdgeInsets.symmetric(horizontal: 28),
     this.scrollController,
     this.background,
-  });
+  }) : assert(child == null || slivers == null,
+            'Provide either child or slivers, not both.');
 
   @override
   State<NeonPageScaffold> createState() => _NeonPageScaffoldState();
@@ -70,16 +78,29 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
               child: Scrollbar(
                 controller: _controller,
                 thumbVisibility: true,
-                child: SingleChildScrollView(
-                  controller: _controller,
-                  padding: widget.padding,
-                  child: widget.child,
-                ),
+                child: _scrollView(),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _scrollView() {
+    if (widget.slivers != null) {
+      return CustomScrollView(
+        controller: _controller,
+        slivers: [
+          for (final sliver in widget.slivers!)
+            SliverPadding(padding: widget.sliverPadding, sliver: sliver),
+        ],
+      );
+    }
+    return SingleChildScrollView(
+      controller: _controller,
+      padding: widget.padding,
+      child: widget.child,
     );
   }
 }
@@ -101,7 +122,7 @@ class _TopBar extends StatelessWidget {
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 20),
       decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0x1FFFFFFF))),
+        border: Border(bottom: BorderSide(color: Color(0x12FFFFFF))),
       ),
       child: Row(
         children: [
@@ -148,7 +169,6 @@ class _RoundIconButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: const Color(0x0FFFFFFF),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0x22FFFFFF)),
         ),
         child: Icon(icon, size: 20, color: Neon.inkSoft),
       ),

@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
-import '../../theme/neon.dart';
 import '../../widgets/catalog_game_card.dart';
-import '../../widgets/game_grid.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/section_header.dart';
@@ -47,6 +45,7 @@ class _LibraryPageState extends State<LibraryPage> {
         _loading = false;
       });
     } catch (e) {
+      debugPrint('[library] load failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -59,41 +58,62 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget build(BuildContext context) {
     final games = _games;
     return NeonPageScaffold(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SectionHeader(
-            title: games == null ? 'Library' : 'My Library · ${games.length}',
+      slivers: _slivers(games),
+    );
+  }
+
+  List<Widget> _slivers(List<CatalogGame>? games) {
+    final list = games ?? const <CatalogGame>[];
+    return [
+      SliverToBoxAdapter(
+        child: SectionHeader(
+          title: games == null ? 'Library' : 'My Library · ${games.length}',
+          padding: const EdgeInsets.fromLTRB(0, 20, 0, 14),
+        ),
+      ),
+      if (_loading && games == null)
+        const SliverToBoxAdapter(child: GameGridSkeleton())
+      else if (_error != null && games == null)
+        SliverToBoxAdapter(
+          child: SizedBox(
+            height: 320,
+            child: NeonErrorView(message: _error!, onRetry: _load),
           ),
-          if (_loading && games == null)
-            const GameGridSkeleton()
-          else if (_error != null && games == null)
-            SizedBox(
-              height: 320,
-              child: NeonErrorView(message: _error!, onRetry: _load),
-            )
-          else if (games != null && games.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(40),
-              child: Center(
-                child: Text(
-                  'Your library is empty.',
-                  style: TextStyle(color: Neon.inkMuted, fontSize: 13),
-                ),
+        )
+      else if (list.isEmpty)
+        const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(
+              child: Text(
+                'Your library is empty.',
+                style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
               ),
-            )
-          else if (games != null)
-            GameGrid(
-              itemCount: games.length,
-              itemBuilder: (context, i) {
-                final game = games[i];
+            ),
+          ),
+        )
+      else
+        SliverPadding(
+          padding: const EdgeInsets.only(bottom: 32),
+          sliver: SliverGrid(
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 210,
+              mainAxisExtent: 210 / 1.3,
+              mainAxisSpacing: 26,
+              crossAxisSpacing: 16,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) {
+                final game = list[i];
                 return CatalogGameCard(
                   game: game,
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) =>
-                            GameDetailsPage(services: widget.services, game: game),
+                        builder: (_) => GameDetailsPage(
+                          services: widget.services,
+                          game: game,
+                        ),
                       ),
                     );
                   },
@@ -101,9 +121,10 @@ class _LibraryPageState extends State<LibraryPage> {
                       services: widget.services, game: game),
                 );
               },
+              childCount: list.length,
             ),
-        ],
-      ),
-    );
+          ),
+        ),
+    ];
   }
 }

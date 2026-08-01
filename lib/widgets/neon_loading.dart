@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/neon.dart';
 
@@ -146,7 +147,7 @@ class GameGridSkeleton extends StatelessWidget {
   }
 }
 
-/// Reusable error panel with a retry action.
+/// Reusable error panel with a copy button and a retry action.
 class NeonErrorView extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
@@ -167,23 +168,49 @@ class NeonErrorView extends StatelessWidget {
           children: [
             const Icon(Icons.error_outline, size: 34, color: Neon.error),
             const SizedBox(height: 12),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Neon.inkSoft, fontSize: 13),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: SelectableText(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Neon.inkSoft, fontSize: 13),
+              ),
             ),
             const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('RETRY'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Neon.accent,
-                side: const BorderSide(color: Neon.accent),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: message));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Error copied to clipboard')),
+                    );
+                  },
+                  icon: const Icon(Icons.copy, size: 15),
+                  label: const Text('COPY'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Neon.inkSoft,
+                    side: const BorderSide(color: Color(0x44FFFFFF)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('RETRY'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Neon.accent,
+                    side: const BorderSide(color: Neon.accent),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
-import '../../theme/neon.dart';
 import '../../widgets/catalog_game_card.dart';
-import '../../widgets/game_grid.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../game/game_details_page.dart';
 import '../launcher/play_flow.dart';
@@ -25,35 +23,54 @@ class RecentlyPlayedPage extends StatelessWidget {
     return NeonPageScaffold(
       title: 'Recently Played',
       showBack: true,
-      child: games.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.all(40),
-              child: Center(
-                child: Text(
-                  'No recently played games yet.',
-                  style: TextStyle(color: Neon.inkMuted, fontSize: 13),
+      slivers: games.isEmpty
+          ? const [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.all(40),
+                  child: Center(
+                    child: Text(
+                      'No recently played games yet.',
+                      style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+                    ),
+                  ),
                 ),
               ),
-            )
-          : GameGrid(
-              itemCount: games.length,
-              itemBuilder: (context, i) {
-                final game = games[i];
-                return CatalogGameCard(
-                  game: game,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            GameDetailsPage(services: services, game: game),
-                      ),
-                    );
-                  },
-                  onPlay: () => PlayFlow.launch(context,
-                      services: services, game: game),
-                );
-              },
-            ),
+            ]
+          : [
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(0, 20, 0, 32),
+                sliver: SliverGrid(
+                  gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 210,
+                    mainAxisExtent: 210 / 1.3,
+                    mainAxisSpacing: 26,
+                    crossAxisSpacing: 16,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, i) {
+                      final game = games[i];
+                      return CatalogGameCard(
+                        game: game,
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => GameDetailsPage(
+                                services: services,
+                                game: game,
+                              ),
+                            ),
+                          );
+                        },
+                        onPlay: () => PlayFlow.launch(context,
+                            services: services, game: game),
+                      );
+                    },
+                    childCount: games.length,
+                  ),
+                ),
+              ),
+            ],
     );
   }
 }
