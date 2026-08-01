@@ -144,8 +144,8 @@ class _ShellState extends State<Shell> {
               ),
               RailDestination(
                 label: 'Library',
-                icon: Icons.newspaper_outlined,
-                selectedIcon: Icons.newspaper,
+                icon: Icons.library_books_outlined,
+                selectedIcon: Icons.library_books,
               ),
               RailDestination(
                 label: 'Settings',
