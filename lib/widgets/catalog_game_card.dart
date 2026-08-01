@@ -10,14 +10,12 @@ import 'neon_chip.dart';
 class CatalogGameCard extends StatelessWidget {
   final CatalogGame game;
   final VoidCallback? onTap;
-  final VoidCallback? onPlay;
   final bool showOwnedBadge;
 
   const CatalogGameCard({
     super.key,
     required this.game,
     this.onTap,
-    this.onPlay,
     this.showOwnedBadge = true,
   });
 
@@ -29,7 +27,6 @@ class CatalogGameCard extends StatelessWidget {
       imageUrl: game.imageUrl,
       inLibrary: showOwnedBadge && game.isInLibrary,
       onTap: onTap,
-      onPlay: onPlay,
       cornerBadge: _tierBadge(),
     );
   }

@@ -123,56 +123,32 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
   }
 }
 
-/// Animated pager indicator: a pill slides smoothly between fixed dots.
+/// Animated pager indicator: the active dot grows into a pill; solid colors
+/// lerp smoothly so there's no teleporting.
 class _PagerDots extends StatelessWidget {
   final int count;
   final int index;
-
-  static const double _slot = 20;
-  static const double _dot = 6;
 
   const _PagerDots({required this.count, required this.index});
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: _dot,
-      width: count * _slot,
-      child: Stack(
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < count; i++)
-                Container(
-                  width: _dot,
-                  height: _dot,
-                  margin: EdgeInsets.symmetric(
-                    horizontal: (_slot - _dot) / 2,
-                  ),
-                  decoration: const BoxDecoration(
-                    color: Color(0x44FFFFFF),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-            ],
-          ),
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 340),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < count; i++)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
             curve: Curves.easeOutCubic,
-            left: index * _slot,
-            child: Container(
-              width: _slot,
-              height: _dot,
-              decoration: BoxDecoration(
-                gradient: Neon.accentGradient,
-                borderRadius: BorderRadius.circular(3),
-                boxShadow: Neon.glowShadow(radius: 8, alpha: 0.4),
-              ),
+            width: i == index ? 24 : 6,
+            height: 6,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            decoration: BoxDecoration(
+              color: i == index ? Neon.accent : const Color(0x33FFFFFF),
+              borderRadius: BorderRadius.circular(3),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }

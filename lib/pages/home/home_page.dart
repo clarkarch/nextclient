@@ -173,7 +173,6 @@ class _HomePageState extends State<HomePage> {
                 child: CatalogGameCard(
                   game: recent[i],
                   onTap: () => _openDetails(recent[i]),
-                  onPlay: () => _play(recent[i]),
                 ),
               ),
             ),
@@ -198,7 +197,6 @@ class _HomePageState extends State<HomePage> {
                 return CatalogGameCard(
                   game: game,
                   onTap: () => _openDetails(game),
-                  onPlay: () => _play(game),
                 );
               },
               childCount: games.length,

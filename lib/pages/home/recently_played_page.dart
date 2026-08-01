@@ -6,7 +6,6 @@ import '../../widgets/catalog_game_card.dart';
 import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../game/game_details_page.dart';
-import '../launcher/play_flow.dart';
 
 /// "See All" grid for the recently played row.
 class RecentlyPlayedPage extends StatelessWidget {
@@ -63,8 +62,6 @@ class RecentlyPlayedPage extends StatelessWidget {
                             ),
                           );
                         },
-                        onPlay: () => PlayFlow.launch(context,
-                            services: services, game: game),
                       );
                     },
                     childCount: games.length,

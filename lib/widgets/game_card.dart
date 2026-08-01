@@ -4,19 +4,14 @@ import '../theme/neon.dart';
 import 'game_art.dart';
 import 'neon_chip.dart';
 
-/// 16:9 game poster card with hover lift + glow and an optional play overlay.
-///
-/// Pure presentation: [game] is the raw domain object; taps are forwarded via
-/// [onTap] / [onPlay]. Use a [GridView] childAspectRatio of 16/11 or similar so
-/// the title row below the art fits.
+/// 16:9 game poster card with hover lift + glow. Tapping always routes to the
+/// game details screen ([onTap]); launching happens there via Play.
 class GameCard extends StatefulWidget {
   final String title;
   final String? subtitle;
   final String? imageUrl;
   final bool inLibrary;
-  final bool showPlayOnHover;
   final VoidCallback? onTap;
-  final VoidCallback? onPlay;
   final Widget? cornerBadge;
 
   const GameCard({
@@ -25,9 +20,7 @@ class GameCard extends StatefulWidget {
     this.subtitle,
     this.imageUrl,
     this.inLibrary = false,
-    this.showPlayOnHover = true,
     this.onTap,
-    this.onPlay,
     this.cornerBadge,
   });
 
@@ -45,6 +38,7 @@ class _GameCardState extends State<GameCard> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           transform: Matrix4.translationValues(0, _hover ? -4 : 0, 0),
@@ -63,9 +57,6 @@ class _GameCardState extends State<GameCard> {
                     imageUrl: widget.imageUrl,
                     label: widget.title,
                     borderRadius: const BorderRadius.all(Radius.circular(16)),
-                    overlay: _hover && widget.showPlayOnHover
-                        ? _PlayOverlay(onPlay: widget.onPlay)
-                        : null,
                   ),
                   if (widget.inLibrary)
                     Positioned(
@@ -110,39 +101,6 @@ class _GameCardState extends State<GameCard> {
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PlayOverlay extends StatelessWidget {
-  final VoidCallback? onPlay;
-
-  const _PlayOverlay({this.onPlay});
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: Neon.scrim,
-          borderRadius: const BorderRadius.all(Radius.circular(16)),
-        ),
-        child: Center(
-          child: GestureDetector(
-            onTap: onPlay,
-            child: Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: Neon.accentGradient,
-                boxShadow: Neon.glowShadow(radius: 18, alpha: 0.6),
-              ),
-              child: const Icon(Icons.play_arrow, color: Neon.bgA, size: 26),
-            ),
           ),
         ),
       ),

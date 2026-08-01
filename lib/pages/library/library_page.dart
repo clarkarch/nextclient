@@ -8,7 +8,6 @@ import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/section_header.dart';
 import '../game/game_details_page.dart';
-import '../launcher/play_flow.dart';
 
 /// User's owned/connected games, 16:9 grid.
 class LibraryPage extends StatefulWidget {
@@ -118,8 +117,6 @@ class _LibraryPageState extends State<LibraryPage> {
                       ),
                     );
                   },
-                  onPlay: () => PlayFlow.launch(context,
-                      services: widget.services, game: game),
                 );
               },
               childCount: list.length,
