@@ -25,13 +25,13 @@ class Neon {
   static const accentGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [accent, violet],
+    colors: [Color(0xFF00E5FF), Color(0xFF00A8CC)],
   );
 
   static const heroGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF0090C4), Color(0xFF4D2BD6)],
+    colors: [Color(0xFF00C4F0), Color(0xFF0079A3)],
   );
 
   static const scrim = LinearGradient(

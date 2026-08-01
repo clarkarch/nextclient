@@ -19,12 +19,14 @@ class AppVariant {
   });
 
   factory AppVariant.fromJson(Map<String, dynamic> json) {
+    final controls = json['supportedControls'];
     return AppVariant(
       id: json['id'] as String,
       shortName: json['shortName'] as String?,
       appStore: json['appStore'] as String?,
-      supportedControls: (json['supportedControls'] as List<dynamic>? ?? [])
-          .cast<String>(),
+      supportedControls: controls is List
+          ? controls.whereType<String>().toList()
+          : const <String>[],
       minimumSizeInBytes: (json['minimumSizeInBytes'] as num?)?.toInt(),
       gfn: json['gfn'] is Map<String, dynamic>
           ? VariantGfn.fromJson(json['gfn'] as Map<String, dynamic>)
@@ -62,7 +64,10 @@ class VariantGfn {
   });
 
   factory VariantGfn.fromJson(Map<String, dynamic> json) {
-    final library = json['library'] as Map<String, dynamic>? ?? {};
+    final libraryValue = json['library'];
+    final library = libraryValue is Map<String, dynamic>
+        ? libraryValue
+        : const <String, dynamic>{};
     return VariantGfn(
       status: json['status'] as String?,
       libraryStatus: library['status'] as String?,

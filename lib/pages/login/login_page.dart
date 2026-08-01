@@ -81,8 +81,8 @@ class _LoginPageState extends State<LoginPage> {
           gradient: RadialGradient(
             center: Alignment.topLeft,
             radius: 1.6,
-            colors: [Color(0x1F00D9FF), Color(0x00000000), Color(0x0F8B5CF6)],
-            stops: [0, 0.6, 1],
+            colors: [Color(0x1F00D9FF), Color(0x00000000)],
+            stops: [0, 0.6],
           ),
         ),
         child: Center(

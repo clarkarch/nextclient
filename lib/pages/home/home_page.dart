@@ -4,6 +4,7 @@ import 'package:gfn_core/gfn_core.dart';
 import '../../main.dart';
 import '../../widgets/catalog_game_card.dart';
 import '../../widgets/featured_carousel.dart';
+import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
@@ -125,12 +126,7 @@ class _HomePageState extends State<HomePage> {
 
     return [
       if (featured.isNotEmpty) ...[
-        const SliverToBoxAdapter(
-          child: SectionHeader(
-            title: 'Featured',
-            padding: EdgeInsets.fromLTRB(0, 20, 0, 14),
-          ),
-        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 20)),
         SliverToBoxAdapter(
           child: FeaturedCarousel(
             slides: featured
@@ -189,7 +185,8 @@ class _HomePageState extends State<HomePage> {
       if (games.isNotEmpty)
         SliverPadding(
           padding: const EdgeInsets.only(bottom: 32),
-          sliver: SliverGrid(            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+          sliver: GuardedSliverGrid(
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 210,
               mainAxisExtent: 210 / 1.3,
               mainAxisSpacing: 26,

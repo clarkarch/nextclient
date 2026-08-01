@@ -325,12 +325,12 @@ class _AutoCard extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: selected
-              ? const LinearGradient(
-                  colors: [Color(0x2200D9FF), Color(0x1A8B5CF6)],
-                )
-              : null,
+          decoration: BoxDecoration(
+            gradient: selected
+                ? const LinearGradient(
+                    colors: [Color(0x2200D9FF), Color(0x1400A8CC)],
+                  )
+                : null,
           color: selected ? null : Neon.bgC,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(

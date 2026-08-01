@@ -3,6 +3,7 @@ import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
 import '../../widgets/catalog_game_card.dart';
+import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../game/game_details_page.dart';
 import '../launcher/play_flow.dart';
@@ -40,7 +41,7 @@ class RecentlyPlayedPage extends StatelessWidget {
           : [
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(0, 20, 0, 32),
-                sliver: SliverGrid(
+                sliver: GuardedSliverGrid(
                   gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                     maxCrossAxisExtent: 210,
                     mainAxisExtent: 210 / 1.3,

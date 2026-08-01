@@ -41,36 +41,48 @@ class GameDetails {
 
   factory GameDetails.fromJson(Map<String, dynamic> json) {
     final app = json['app'] as Map<String, dynamic>? ?? json;
-    final gfn = app['gfn'] as Map<String, dynamic>?;
-    final variants = (app['variants'] as List<dynamic>? ?? [])
-        .whereType<Map<String, dynamic>>()
-        .map(AppVariant.fromJson)
-        .toList();
-    final ratings = app['contentRatings'] as List<dynamic>? ?? [];
+    final gfnValue = app['gfn'];
+    final gfn =
+        gfnValue is Map<String, dynamic> ? gfnValue : null;
+    final imagesValue = app['images'];
+    final images = imagesValue is Map<String, dynamic> ? imagesValue : null;
+    final variantsRaw = app['variants'];
+    final variants = variantsRaw is List
+        ? variantsRaw
+            .whereType<Map<String, dynamic>>()
+            .map(AppVariant.fromJson)
+            .toList()
+        : const <AppVariant>[];
+    final ratingsRaw = app['contentRatings'];
+    final ratings =
+        ratingsRaw is List ? ratingsRaw.whereType<Map<String, dynamic>>() : <Map<String, dynamic>>[];
     return GameDetails(
       id: app['id'] as String,
       title: app['title'] as String,
       publisherName: app['publisherName'] as String?,
       developerName: app['developerName'] as String?,
-      genres: (app['genres'] as List<dynamic>? ?? []).cast<String>(),
+      genres: _stringList(app['genres']),
       shortDescription: app['shortDescription'] as String?,
       longDescription: app['longDescription'] as String?,
       maxLocalPlayers: (app['maxLocalPlayers'] as num?)?.toInt(),
       maxOnlinePlayers: (app['maxOnlinePlayers'] as num?)?.toInt(),
-      supportedControls: (app['supportedControls'] as List<dynamic>? ?? [])
-          .cast<String>(),
+      supportedControls: _stringList(app['supportedControls']),
       contentRatingCategories: ratings
-          .whereType<Map<String, dynamic>>()
           .map((r) => r['categoryKey'] as String? ?? '')
           .where((c) => c.isNotEmpty)
           .toList(),
-      images: app['images'] as Map<String, dynamic>?,
+      images: images,
       variants: variants,
       playabilityState: gfn?['playabilityState'] as String?,
       minimumMembershipTierLabel:
           gfn?['minimumMembershipTierLabel'] as String?,
       playType: gfn?['playType'] as String?,
     );
+  }
+
+  static List<String> _stringList(Object? value) {
+    if (value is! List) return const [];
+    return value.whereType<String>().toList();
   }
 
   /// Best 16:9 hero image for the details header.

@@ -44,7 +44,7 @@ class FeaturedSlide {
 
 class _FeaturedCarouselState extends State<FeaturedCarousel> {
   final PageController _controller =
-      PageController(viewportFraction: 0.9);
+      PageController(viewportFraction: 0.86);
   int _index = 0;
   Timer? _timer;
 
@@ -69,8 +69,8 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
       final next = (_index + 1) % widget.slides.length;
       _controller.animateToPage(
         next,
-        duration: const Duration(milliseconds: 600),
-        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeInOutCubic,
       );
     });
   }
@@ -85,7 +85,7 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         // Banner height: 16:9 ratio capped so it never dominates the screen.
-        final height = (width * 9 / 16).clamp(220.0, 400.0);
+        final height = (width * 9 / 16).clamp(260.0, 460.0);
         return Column(
           children: [
             SizedBox(
@@ -97,42 +97,57 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
                   setState(() => _index = i);
                   _startTimer();
                 },
-                itemBuilder: (context, i) => _Slide(
-                  slide: slides[i],
-                  onPlay: widget.onPlay == null
-                      ? null
-                      : () => widget.onPlay!(slides[i]),
-                  onSelect: widget.onSelect == null
-                      ? null
-                      : () => widget.onSelect!(slides[i]),
+                itemBuilder: (context, i) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: _Slide(
+                    slide: slides[i],
+                    onPlay: widget.onPlay == null
+                        ? null
+                        : () => widget.onPlay!(slides[i]),
+                    onSelect: widget.onSelect == null
+                        ? null
+                        : () => widget.onSelect!(slides[i]),
+                  ),
                 ),
               ),
             ),
             if (slides.length > 1)
               Padding(
-                padding: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.only(top: 14),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     for (var i = 0; i < slides.length; i++)
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: i == _index ? 18 : 6,
-                        height: 6,
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        decoration: BoxDecoration(
-                          gradient:
-                              i == _index ? Neon.accentGradient : null,
-                          color: i == _index ? null : const Color(0x44FFFFFF),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
+                      _Dot(active: i == _index, accentGradient: Neon.accentGradient),
                   ],
                 ),
               ),
           ],
         );
       },
+    );
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final bool active;
+  final Gradient accentGradient;
+
+  const _Dot({required this.active, required this.accentGradient});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOut,
+      width: active ? 22 : 6,
+      height: 6,
+      margin: const EdgeInsets.symmetric(horizontal: 3),
+      decoration: BoxDecoration(
+        gradient: active ? accentGradient : null,
+        color: active ? null : const Color(0x44FFFFFF),
+        borderRadius: BorderRadius.circular(3),
+      ),
     );
   }
 }
@@ -158,48 +173,55 @@ class _Slide extends StatelessWidget {
               decoration: BoxDecoration(
                 gradient: Neon.scrim,
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (slide.chips != null && slide.chips!.isNotEmpty)
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: slide.chips!,
-                      ),
-                    const SizedBox(height: 10),
-                    Text(
-                      slide.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Neon.ink,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.3,
-                        shadows: [
-                          Shadow(color: Colors.black, blurRadius: 12),
-                        ],
-                      ),
-                    ),
-                    if (slide.subtitle != null)
-                      Text(
-                        slide.subtitle!,
-                        style: const TextStyle(
-                          color: Neon.inkSoft,
-                          fontSize: 13,
-                          shadows: [
-                            Shadow(color: Colors.black, blurRadius: 8),
-                          ],
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (slide.chips != null && slide.chips!.isNotEmpty)
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 6,
+                            children: slide.chips!,
+                          ),
+                        const SizedBox(height: 8),
+                        Text(
+                          slide.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Neon.ink,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.3,
+                            shadows: [
+                              Shadow(color: Colors.black, blurRadius: 12),
+                            ],
+                          ),
                         ),
-                      ),
-                    const SizedBox(height: 12),
-                    if (onPlay != null)
-                      NeonButton(label: 'Play', onPressed: onPlay),
-                  ],
+                        if (slide.subtitle != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            slide.subtitle!,
+                            style: const TextStyle(
+                              color: Neon.inkSoft,
+                              fontSize: 13,
+                              shadows: [
+                                Shadow(color: Colors.black, blurRadius: 8),
+                              ],
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        if (onPlay != null)
+                          NeonButton(label: 'Play', onPressed: onPlay),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),

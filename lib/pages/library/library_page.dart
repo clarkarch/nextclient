@@ -3,6 +3,7 @@ import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
 import '../../widgets/catalog_game_card.dart';
+import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/section_header.dart';
@@ -95,7 +96,7 @@ class _LibraryPageState extends State<LibraryPage> {
       else
         SliverPadding(
           padding: const EdgeInsets.only(bottom: 32),
-          sliver: SliverGrid(
+          sliver: GuardedSliverGrid(
             gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 210,
               mainAxisExtent: 210 / 1.3,
