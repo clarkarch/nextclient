@@ -73,6 +73,10 @@ class CloudMatchResponseSession {
   final Map<String, dynamic>? sessionRequestData;
   final String? serverIp;
 
+  /// The raw `session` object from the response, kept intact so nested queue
+  /// fields (`seatSetupInfo` / `sessionProgress` / `progressInfo`) survive.
+  final Map<String, dynamic>? rawJson;
+
   const CloudMatchResponseSession({
     required this.sessionId,
     required this.status,
@@ -82,6 +86,7 @@ class CloudMatchResponseSession {
     this.iceServers = const [],
     this.sessionRequestData,
     this.serverIp,
+    this.rawJson,
   });
 
   factory CloudMatchResponseSession.fromJson(Map<String, dynamic> json) {
@@ -97,6 +102,7 @@ class CloudMatchResponseSession {
       iceServers: _parseIceServers(json),
       sessionRequestData: json['sessionRequestData'] as Map<String, dynamic>?,
       serverIp: (json['sessionControlInfo'] as Map<String, dynamic>?)?['ip'] as String?,
+      rawJson: json,
     );
   }
 

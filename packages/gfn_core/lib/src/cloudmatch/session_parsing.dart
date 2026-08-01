@@ -209,7 +209,8 @@ Future<SessionInfo> toSessionInfo({
 }
 
 Map<String, dynamic>? _sessionMap(CloudMatchResponse payload) {
-  return _asMap(payload.session.toJson());
+  // Prefer the raw response session so nested queue fields survive.
+  return payload.session.rawJson ?? _asMap(payload.session.toJson());
 }
 
 Map<String, dynamic>? _sessionRequestData(CloudMatchResponse payload) {

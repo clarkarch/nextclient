@@ -149,30 +149,38 @@ class _StreamPageState extends State<StreamPage> {
   }
 }
 
-class _ProgressSurface extends StatelessWidget {
+class _ProgressSurface extends StatefulWidget {
   final CatalogGame game;
   final SessionState state;
   final SessionInfo? session;
   final List<SessionPhaseEvent> events;
 
   const _ProgressSurface({
+    super.key,
     required this.game,
     required this.state,
     this.session,
     this.events = const [],
   });
 
-  String get _statusText => switch (state) {
+  @override
+  State<_ProgressSurface> createState() => _ProgressSurfaceState();
+}
+
+class _ProgressSurfaceState extends State<_ProgressSurface> {
+  bool _showLogs = false;
+
+  String get _statusText => switch (widget.state) {
         SessionState.requesting => 'REQUESTING SESSION',
         SessionState.queued => 'QUEUED',
         SessionState.allocating => 'ALLOCATING SERVER',
         SessionState.idle => 'PREPARING',
-        _ => state.name.toUpperCase(),
+        _ => widget.state.name.toUpperCase(),
       };
 
   @override
   Widget build(BuildContext context) {
-    final s = session;
+    final s = widget.session;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: ConstrainedBox(
@@ -183,8 +191,8 @@ class _ProgressSurface extends StatelessWidget {
             SizedBox(
               width: 200,
               child: GameArt(
-                imageUrl: game.imageUrl,
-                label: game.title,
+                imageUrl: widget.game.imageUrl,
+                label: widget.game.title,
                 borderRadius: const BorderRadius.all(Radius.circular(18)),
                 overlay: DecoratedBox(
                   decoration: BoxDecoration(
@@ -198,7 +206,7 @@ class _ProgressSurface extends StatelessWidget {
             const NeonSpinner(size: 34),
             const SizedBox(height: 16),
             Text(
-              game.title,
+              widget.game.title,
               style: const TextStyle(
                 color: Neon.ink,
                 fontSize: 17,
@@ -208,13 +216,13 @@ class _ProgressSurface extends StatelessWidget {
             const SizedBox(height: 8),
             NeonChip(
               label: _statusText,
-              tone: state == SessionState.queued
+              tone: widget.state == SessionState.queued
                   ? NeonChipTone.warning
-                  : state == SessionState.allocating
+                  : widget.state == SessionState.allocating
                       ? NeonChipTone.violet
                       : NeonChipTone.accent,
             ),
-            if (state == SessionState.queued && s?.queuePosition != null) ...[
+            if (widget.state == SessionState.queued && s?.queuePosition != null) ...[
               const SizedBox(height: 24),
               const Text(
                 'QUEUE POSITION',
@@ -244,104 +252,170 @@ class _ProgressSurface extends StatelessWidget {
                 ),
               ],
             ],
-            const SizedBox(height: 28),
-            NeonCard(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  _InfoRow(label: 'State', value: state.name.toUpperCase()),
-                  if (s != null) ...[
-                    const Divider(height: 12),
-                    _InfoRow(
-                      label: 'Status code',
-                      value: '${s.status}',
-                    ),
-                    if (s.queuePosition != null) ...[
-                      const Divider(height: 12),
-                      _InfoRow(
-                        label: 'Queue position',
-                        value: '#${s.queuePosition}',
-                      ),
-                    ],
-                    if (s.seatSetupStep != null) ...[
-                      const Divider(height: 12),
-                      _InfoRow(
-                        label: 'Seat setup step',
-                        value: '${s.seatSetupStep}',
-                      ),
-                    ],
-                    const Divider(height: 12),
-                    _InfoRow(label: 'Zone', value: s.zone),
-                    if (s.sessionId.isNotEmpty) ...[
-                      const Divider(height: 12),
-                      _InfoRow(
-                        label: 'Session ID',
-                        value: _short(s.sessionId),
-                      ),
-                    ],
-                    if (s.gpuType != null) ...[
-                      const Divider(height: 12),
-                      _InfoRow(label: 'GPU', value: s.gpuType!),
-                    ],
-                  ],
-                ],
-              ),
+            const SizedBox(height: 24),
+            _LogsToggle(
+              open: _showLogs,
+              onTap: () => setState(() => _showLogs = !_showLogs),
             ),
-            if (events.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              NeonCard(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'TRANSITIONS',
-                      style: TextStyle(
-                        color: Neon.inkMuted,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.6,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    for (final e in events.reversed.take(6))
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '${_stateLabel(e.from)} → ${_stateLabel(e.to)}',
-                                style: const TextStyle(
-                                  color: Neon.inkSoft,
-                                  fontSize: 12.5,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              _time(e.timestamp),
-                              style: const TextStyle(
-                                color: Neon.inkMuted,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+            if (_showLogs) ...[
+              const SizedBox(height: 12),
+              _LogsPanel(session: s, events: widget.events),
             ],
           ],
         ),
       ),
     );
   }
+}
 
-  String _short(String id) =>
+class _LogsToggle extends StatelessWidget {
+  final bool open;
+  final VoidCallback onTap;
+
+  const _LogsToggle({required this.open, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: const Color(0x0FFFFFFF),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0x22FFFFFF)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              open ? Icons.terminal : Icons.terminal_outlined,
+              size: 16,
+              color: Neon.inkSoft,
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'SESSION INFO',
+              style: TextStyle(
+                color: Neon.inkSoft,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.4,
+              ),
+            ),
+            const SizedBox(width: 4),
+            AnimatedRotation(
+              turns: open ? 0.5 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: const Icon(Icons.expand_more, size: 16, color: Neon.inkSoft),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LogsPanel extends StatelessWidget {
+  final SessionInfo? session;
+  final List<SessionPhaseEvent> events;
+
+  const _LogsPanel({this.session, this.events = const []});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = session;
+    return Column(
+      children: [
+        NeonCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              _InfoRow(label: 'State', value: _sessionLabel(s)),
+              if (s != null) ...[
+                const Divider(height: 12),
+                _InfoRow(label: 'Status code', value: '${s.status}'),
+                if (s.queuePosition != null) ...[
+                  const Divider(height: 12),
+                  _InfoRow(label: 'Queue position', value: '#${s.queuePosition}'),
+                ],
+                if (s.seatSetupStep != null) ...[
+                  const Divider(height: 12),
+                  _InfoRow(label: 'Seat setup step', value: '${s.seatSetupStep}'),
+                ],
+                const Divider(height: 12),
+                _InfoRow(label: 'Zone', value: s.zone),
+                if (s.sessionId.isNotEmpty) ...[
+                  const Divider(height: 12),
+                  _InfoRow(label: 'Session ID', value: _short(s.sessionId)),
+                ],
+                if (s.gpuType != null) ...[
+                  const Divider(height: 12),
+                  _InfoRow(label: 'GPU', value: s.gpuType!),
+                ],
+              ],
+            ],
+          ),
+        ),
+        if (events.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          NeonCard(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'TRANSITIONS',
+                  style: TextStyle(
+                    color: Neon.inkMuted,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.6,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                for (final e in events.reversed.take(8))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${_stateLabel(e.from)} → ${_stateLabel(e.to)}',
+                            style: const TextStyle(
+                              color: Neon.inkSoft,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          _time(e.timestamp),
+                          style: const TextStyle(
+                            color: Neon.inkMuted,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  static String _short(String id) =>
       id.length > 8 ? '${id.substring(0, 8)}…' : id;
 
-  String _stateLabel(SessionState s) => switch (s) {
+  static String _sessionLabel(SessionInfo? s) {
+    if (s == null) return '—';
+    return s.status == 2 || s.status == 3 ? 'ready' : 'active';
+  }
+
+  static String _stateLabel(SessionState s) => switch (s) {
         SessionState.idle => 'idle',
         SessionState.requesting => 'requesting',
         SessionState.queued => 'queued',
@@ -350,7 +424,7 @@ class _ProgressSurface extends StatelessWidget {
         SessionState.error => 'error',
       };
 
-  String _time(DateTime t) {
+  static String _time(DateTime t) {
     final h = t.hour.toString().padLeft(2, '0');
     final m = t.minute.toString().padLeft(2, '0');
     final s = t.second.toString().padLeft(2, '0');
