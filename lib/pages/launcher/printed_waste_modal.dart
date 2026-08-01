@@ -129,7 +129,37 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
 
   List<_ZoneView> get _eligible => _views.values.where((v) => !v.nuked).toList();
 
-  /// Lowest queue position among eligible zones (the auto default).
+  /// Auto-selected zone: weighted best ping + queue, with queue prioritized.
+  _ZoneView? get _autoZone {
+    final eligible = _eligible;
+    if (eligible.isEmpty) return null;
+    final withPing = eligible.where((v) => v.pingMs != null).toList();
+    final pool = withPing.isNotEmpty ? withPing : eligible;
+    final maxPing = pool
+        .map((v) => v.pingMs ?? 999)
+        .reduce((a, b) => a > b ? a : b)
+        .toDouble();
+    final maxQueue = pool
+        .map((v) => v.zone.queuePosition ?? 999)
+        .reduce((a, b) => a > b ? a : b)
+        .toDouble();
+    _ZoneView? best;
+    var bestScore = double.infinity;
+    for (final v in pool) {
+      final pingScore = maxPing <= 0 ? 0 : (v.pingMs ?? maxPing) / maxPing;
+      final queueScore =
+          maxQueue <= 0 ? 0 : (v.zone.queuePosition ?? maxQueue) / maxQueue;
+      // Queue is prioritized over ping.
+      final score = pingScore * 0.4 + queueScore * 0.6;
+      if (score < bestScore) {
+        bestScore = score;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  /// Lowest queue position among eligible zones.
   _ZoneView? get _lowestQueue {
     final eligible = _eligible;
     if (eligible.isEmpty) return null;
@@ -146,7 +176,7 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
     return withPing.first;
   }
 
-  String? get _autoZoneId => _lowestQueue?.zoneId;
+  String? get _autoZoneId => _autoZone?.zoneId;
 
   void _confirm() {
     final id = _selectedZoneId ?? _autoZoneId;
@@ -258,9 +288,15 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
 
     final eligible = _views.values.where((v) => !v.nuked).toList()
       ..sort((a, b) {
-        final regionCompare = (a.zone.region ?? '')
-            .compareTo(b.zone.region ?? '');
-        if (regionCompare != 0) return regionCompare;
+        // Lowest ping first (unknown pings sink to the bottom), then queue.
+        if (a.pingMs != null && b.pingMs != null) {
+          final pingCmp = a.pingMs!.compareTo(b.pingMs!);
+          if (pingCmp != 0) return pingCmp;
+        } else if (a.pingMs != null) {
+          return -1;
+        } else if (b.pingMs != null) {
+          return 1;
+        }
         return (a.zone.queuePosition ?? 999)
             .compareTo(b.zone.queuePosition ?? 999);
       });
@@ -277,39 +313,57 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
       );
     }
 
-    final auto = _lowestQueue;
+    final auto = _autoZone;
+    final lowestQueue = _lowestQueue;
     final lowestPing = _lowestPing;
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       children: [
         if (auto != null) ...[
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: _RecommendCard(
                   icon: Icons.bolt,
-                  title: 'Lowest Queue',
-                  subtitle: 'Best ping + queue balance',
+                  title: 'Auto',
+                  subtitle: 'Ping + queue · queue priority',
                   view: auto,
                   selected: _selectedZoneId == null ||
                       _selectedZoneId == auto.zoneId,
                   onTap: () => setState(() => _selectedZoneId = null),
                 ),
               ),
-              if (lowestPing != null) ...[
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _RecommendCard(
-                    icon: Icons.speed,
-                    title: 'Lowest Ping',
-                    subtitle: 'Lowest latency to you',
-                    view: lowestPing,
-                    selected: _selectedZoneId == lowestPing.zoneId,
-                    onTap: () => setState(
-                        () => _selectedZoneId = lowestPing.zoneId),
-                  ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _RecommendCard(
+                  icon: Icons.queue,
+                  title: 'Lowest Queue',
+                  subtitle: 'Shortest wait',
+                  view: lowestQueue ?? auto,
+                  selected: lowestQueue != null &&
+                      _selectedZoneId == lowestQueue.zoneId,
+                  onTap: lowestQueue == null
+                      ? null
+                      : () => setState(
+                          () => _selectedZoneId = lowestQueue.zoneId),
                 ),
-              ],
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _RecommendCard(
+                  icon: Icons.speed,
+                  title: 'Lowest Ping',
+                  subtitle: 'Lowest latency to you',
+                  view: lowestPing ?? auto,
+                  selected: lowestPing != null &&
+                      _selectedZoneId == lowestPing.zoneId,
+                  onTap: lowestPing == null
+                      ? null
+                      : () => setState(
+                          () => _selectedZoneId = lowestPing.zoneId),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -318,6 +372,8 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
           _ZoneRow(
             view: view,
             isAuto: auto != null && view.zoneId == auto.zoneId,
+            isLowestQueue:
+                lowestQueue != null && view.zoneId == lowestQueue.zoneId,
             isLowestPing:
                 lowestPing != null && view.zoneId == lowestPing.zoneId,
             selected: _selectedZoneId == view.zoneId,
@@ -372,7 +428,7 @@ class _RecommendCard extends StatelessWidget {
   final String subtitle;
   final _ZoneView view;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _RecommendCard({
     required this.icon,
@@ -380,17 +436,18 @@ class _RecommendCard extends StatelessWidget {
     required this.subtitle,
     required this.view,
     required this.selected,
-    required this.onTap,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onTap != null;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           gradient: selected
               ? const LinearGradient(
@@ -408,15 +465,19 @@ class _RecommendCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon, color: Neon.accent, size: 16),
+                Icon(icon, color: enabled ? Neon.accent : Neon.inkMuted, size: 15),
                 const SizedBox(width: 6),
-                Text(
-                  title.toUpperCase(),
-                  style: const TextStyle(
-                    color: Neon.accent,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1,
+                Expanded(
+                  child: Text(
+                    title.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: enabled ? Neon.accent : Neon.inkMuted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.8,
+                    ),
                   ),
                 ),
               ],
@@ -428,7 +489,7 @@ class _RecommendCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Neon.ink,
-                fontSize: 13,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -453,7 +514,7 @@ class _RecommendCard extends StatelessWidget {
               subtitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Neon.inkMuted, fontSize: 10.5),
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 10),
             ),
           ],
         ),
@@ -537,6 +598,7 @@ class _ReloadButtonState extends State<_ReloadButton>
 class _ZoneRow extends StatelessWidget {
   final _ZoneView view;
   final bool isAuto;
+  final bool isLowestQueue;
   final bool isLowestPing;
   final bool selected;
   final VoidCallback onTap;
@@ -544,6 +606,7 @@ class _ZoneRow extends StatelessWidget {
   const _ZoneRow({
     required this.view,
     required this.isAuto,
+    required this.isLowestQueue,
     required this.isLowestPing,
     required this.selected,
     required this.onTap,
@@ -590,9 +653,21 @@ class _ZoneRow extends StatelessWidget {
             if (isAuto) ...[
               const SizedBox(width: 6),
               const Text(
-                'QUEUE',
+                'AUTO',
                 style: TextStyle(
                   color: Neon.accent,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+            if (isLowestQueue && !isAuto) ...[
+              const SizedBox(width: 6),
+              const Text(
+                'QUEUE',
+                style: TextStyle(
+                  color: Neon.success,
                   fontSize: 9.5,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 1,
