@@ -89,10 +89,16 @@ class NeonSidebar extends StatelessWidget {
                 onTap: () => onSelect(i),
               ),
           const Spacer(),
-          Center(
-            child: NeonSidenavButton(onPressed: onToggle, expanded: expanded),
+          Align(
+            alignment: expanded ? Alignment.centerLeft : Alignment.center,
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: expanded ? 22 : 0,
+                bottom: 12,
+              ),
+              child: NeonSidenavButton(onPressed: onToggle, expanded: expanded),
+            ),
           ),
-          const SizedBox(height: 12),
         ],
       ),
     );
