@@ -5,11 +5,10 @@ import 'main.dart';
 import 'pages/home/home_page.dart';
 import 'pages/library/library_page.dart';
 import 'pages/login/login_page.dart';
-import 'pages/settings/account_page.dart';
 import 'pages/settings/settings_page.dart';
 import 'theme/neon.dart';
-import 'widgets/neon_chip.dart';
 import 'widgets/neon_rail.dart';
+import 'widgets/neon_sidenav_button.dart';
 
 class DebugShellApp extends StatefulWidget {
   const DebugShellApp({super.key});
@@ -30,7 +29,7 @@ class _DebugShellAppState extends State<DebugShellApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'NEXTC',
+      title: 'NEXTCLIENT',
       debugShowCheckedModeBanner: false,
       theme: buildNeonTheme(),
       home: FutureBuilder<AppServices>(
@@ -119,10 +118,28 @@ class Shell extends StatefulWidget {
 class _ShellState extends State<Shell> {
   int _index = 0;
 
+  static const _destinations = [
+    RailDestination(
+      label: 'Home',
+      icon: Icons.home_outlined,
+      selectedIcon: Icons.home,
+    ),
+    RailDestination(
+      label: 'Library',
+      icon: Icons.gamepad_outlined,
+      selectedIcon: Icons.gamepad,
+    ),
+    RailDestination(
+      label: 'Settings',
+      icon: Icons.settings_outlined,
+      selectedIcon: Icons.settings,
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      HomePage(services: widget.services),
+      HomePage(services: widget.services, onSignOut: widget.onSignOut),
       LibraryPage(services: widget.services),
       SettingsPage(
         services: widget.services,
@@ -135,114 +152,19 @@ class _ShellState extends State<Shell> {
       body: Row(
         children: [
           NeonRail(
-            brand: 'N',
-            destinations: const [
-              RailDestination(
-                label: 'Home',
-                icon: Icons.home_outlined,
-                selectedIcon: Icons.home,
-              ),
-              RailDestination(
-                label: 'Library',
-                icon: Icons.gamepad_outlined,
-                selectedIcon: Icons.gamepad,
-              ),
-              RailDestination(
-                label: 'Settings',
-                icon: Icons.settings_outlined,
-                selectedIcon: Icons.settings,
-              ),
-            ],
+            destinations: _destinations,
             selectedIndex: _index,
             onSelect: (i) => setState(() => _index = i),
-            footer: _AccountFooter(
-              services: widget.services,
-              onSignOut: widget.onSignOut,
+            footer: NeonSidenavButton(
+              destinations: _destinations,
+              selectedIndex: _index,
+              onSelect: (i) => setState(() => _index = i),
             ),
           ),
           Expanded(
             child: IndexedStack(index: _index, children: pages),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _AccountFooter extends StatelessWidget {
-  final AppServices services;
-  final VoidCallback onSignOut;
-
-  const _AccountFooter({
-    required this.services,
-    required this.onSignOut,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final user = services.auth.getSession()?.user;
-    if (user == null) return const SizedBox.shrink();
-    return Column(
-      children: [
-        _RailAvatar(
-          initial: user.displayName.isNotEmpty
-              ? user.displayName[0].toUpperCase()
-              : '?',
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => AccountPage(
-                  services: services,
-                  onSignOut: onSignOut,
-                ),
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 6),
-        NeonChip(
-          label: user.membershipTier,
-          tone: user.membershipTier == 'ULTIMATE'
-              ? NeonChipTone.accent
-              : user.membershipTier == 'PRIORITY'
-                  ? NeonChipTone.violet
-                  : NeonChipTone.neutral,
-        ),
-      ],
-    );
-  }
-}
-
-class _RailAvatar extends StatelessWidget {
-  final String initial;
-  final VoidCallback onTap;
-
-  const _RailAvatar({required this.initial, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          gradient: Neon.accentGradient,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Neon.accent.withValues(alpha: 0.5)),
-          boxShadow: Neon.glowShadow(radius: 14, alpha: 0.3),
-        ),
-        child: Center(
-          child: Text(
-            initial,
-            style: const TextStyle(
-              color: Neon.bgA,
-              fontSize: 18,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
       ),
     );
   }

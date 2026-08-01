@@ -18,7 +18,6 @@ class RailDestination {
 /// Left icon rail (gaming-launcher style). Reusable: pass any list of
 /// [RailDestination], the selected index, and an optional [footer].
 class NeonRail extends StatelessWidget {
-  final String brand;
   final List<RailDestination> destinations;
   final int selectedIndex;
   final ValueChanged<int> onSelect;
@@ -26,7 +25,6 @@ class NeonRail extends StatelessWidget {
 
   const NeonRail({
     super.key,
-    required this.brand,
     required this.destinations,
     required this.selectedIndex,
     required this.onSelect,
@@ -50,8 +48,7 @@ class NeonRail extends StatelessWidget {
       ),
       child: Column(
         children: [
-          _BrandMark(label: brand),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
           for (var i = 0; i < destinations.length; i++)
             _RailItem(
               destination: destinations[i],
@@ -61,38 +58,6 @@ class NeonRail extends StatelessWidget {
           const Spacer(),
           if (footer != null) ...[footer!, const SizedBox(height: 12)],
         ],
-      ),
-    );
-  }
-}
-
-class _BrandMark extends StatelessWidget {
-  final String label;
-
-  const _BrandMark({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 22),
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          gradient: Neon.accentGradient,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: Neon.glowShadow(radius: 16, alpha: 0.45),
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: Neon.bgA,
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
       ),
     );
   }

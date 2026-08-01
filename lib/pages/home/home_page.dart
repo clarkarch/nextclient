@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
+import '../../theme/neon.dart';
 import '../../widgets/catalog_game_card.dart';
 import '../../widgets/featured_carousel.dart';
 import '../../widgets/guarded_sliver_grid.dart';
@@ -11,13 +12,20 @@ import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/section_header.dart';
 import '../game/game_details_page.dart';
 import '../launcher/play_flow.dart';
+import '../settings/account_page.dart';
 import 'recently_played_page.dart';
+import 'search_page.dart';
 
 /// Home: featured carousel + recently played row (See All) + all games grid.
 class HomePage extends StatefulWidget {
   final AppServices services;
+  final VoidCallback onSignOut;
 
-  const HomePage({super.key, required this.services});
+  const HomePage({
+    super.key,
+    required this.services,
+    required this.onSignOut,
+  });
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -90,6 +98,10 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final all = _all;
     return NeonPageScaffold(
+      header: _HomeTopBar(
+        services: widget.services,
+        onSignOut: widget.onSignOut,
+      ),
       slivers: _buildSlivers(all),
     );
   }
@@ -244,5 +256,122 @@ class _HomePageState extends State<HomePage> {
 
   void _play(CatalogGame game) {
     PlayFlow.launch(context, services: widget.services, game: game);
+  }
+}
+
+/// Home top bar: NEXTCLIENT brand on the left; search + profile on the right.
+class _HomeTopBar extends StatelessWidget {
+  final AppServices services;
+  final VoidCallback onSignOut;
+
+  const _HomeTopBar({required this.services, required this.onSignOut});
+
+  @override
+  Widget build(BuildContext context) {
+    final user = services.auth.getSession()?.user;
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0x12FFFFFF))),
+      ),
+      child: Row(
+        children: [
+          ShaderMask(
+            shaderCallback: (bounds) => Neon.accentGradient.createShader(bounds),
+            child: const Text(
+              'NEXTCLIENT',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+          const Spacer(),
+          _TopIconButton(
+            icon: Icons.search,
+            tooltip: 'Search games',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => SearchPage(services: services),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+          if (user != null)
+            GestureDetector(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AccountPage(
+                      services: services,
+                      onSignOut: onSignOut,
+                    ),
+                  ),
+                );
+              },
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  gradient: Neon.accentGradient,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Neon.accent.withValues(alpha: 0.5)),
+                  boxShadow: Neon.glowShadow(radius: 12, alpha: 0.3),
+                ),
+                child: Center(
+                  child: Text(
+                    user.displayName.isNotEmpty
+                        ? user.displayName[0].toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                      color: Neon.bgA,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TopIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _TopIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: const Color(0x0FFFFFFF),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0x22FFFFFF)),
+          ),
+          child: Icon(icon, size: 20, color: Neon.inkSoft),
+        ),
+      ),
+    );
   }
 }

@@ -182,7 +182,7 @@ class _Brand extends StatelessWidget {
         ),
         const SizedBox(height: 18),
         const Text(
-          'NEXTC',
+          'NEXTCLIENT',
           style: TextStyle(
             color: Neon.ink,
             fontSize: 28,

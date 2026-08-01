@@ -108,7 +108,7 @@ class _StreamPageState extends State<StreamPage> {
       child: Row(
         children: [
           Text(
-            'NEXTC',
+            'NEXTCLIENT',
             style: const TextStyle(
               color: Neon.ink,
               fontSize: 14,

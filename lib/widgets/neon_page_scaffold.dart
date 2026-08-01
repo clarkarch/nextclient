@@ -13,6 +13,7 @@ class NeonPageScaffold extends StatefulWidget {
   final List<Widget>? actions;
   final Widget? child;
   final List<Widget>? slivers;
+  final Widget? header;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry sliverPadding;
   final ScrollController? scrollController;
@@ -25,6 +26,7 @@ class NeonPageScaffold extends StatefulWidget {
     this.actions,
     this.child,
     this.slivers,
+    this.header,
     this.padding = const EdgeInsets.fromLTRB(28, 20, 28, 32),
     this.sliverPadding = const EdgeInsets.symmetric(horizontal: 28),
     this.scrollController,
@@ -66,7 +68,9 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
         ),
         child: Column(
           children: [
-            if (widget.title != null ||
+            if (widget.header != null)
+              widget.header!
+            else if (widget.title != null ||
                 widget.showBack ||
                 (widget.actions != null && widget.actions!.isNotEmpty))
               _TopBar(
