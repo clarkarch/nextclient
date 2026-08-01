@@ -2,20 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
-import '../../state/user_settings.dart';
 import '../../theme/neon.dart';
 import '../../widgets/game_art.dart';
 import '../../widgets/neon_button.dart';
-import '../../widgets/neon_card.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_page_scaffold.dart';
-import '../../widgets/neon_setting_tile.dart';
-import '../settings/stream_quality_page.dart';
 import '../stream/stream_page.dart';
 import 'printed_waste_modal.dart';
 
-/// Pre-launch options: region + stream quality summary, then Launch →
-/// (printedwaste picker for free tier) → streaming.
+/// Launcher options: pick which store variant (Steam / Epic / ...) to launch,
+/// then Launch → (printedwaste picker for free tier) → queue → streaming.
 class LauncherPage extends StatefulWidget {
   final AppServices services;
   final CatalogGame game;
@@ -31,80 +27,53 @@ class LauncherPage extends StatefulWidget {
 }
 
 class _LauncherPageState extends State<LauncherPage> {
-  List<StreamRegion>? _regions;
-  bool _loadingRegions = false;
-  String? _regionsError;
   bool _launching = false;
+  String? _selectedVariantId;
+
+  /// Variants that can actually be launched (numeric app ids).
+  List<AppVariant> get _launchableVariants =>
+      widget.game.variants.where((v) => _isNumericId(v.id)).toList();
 
   @override
   void initState() {
     super.initState();
-    _loadRegions();
+    _selectedVariantId = _defaultVariantId();
   }
 
-  Future<void> _loadRegions() async {
-    setState(() {
-      _loadingRegions = true;
-      _regionsError = null;
-    });
-    try {
-      final session = await widget.services.auth.ensureValidSession();
-      final token = session?.tokens.idToken ?? session?.tokens.accessToken;
-      final result = await widget.services.subscription.fetchDynamicRegions(
-        token: token,
-        streamingBaseUrl: _defaultStreamingBaseUrl,
-      );
-      if (!mounted) return;
-      setState(() {
-        _regions = result.regions;
-        _loadingRegions = false;
-        if (_regions != null && _regions!.isNotEmpty) {
-          final saved = widget.services.settings.selectedRegionUrl;
-          final match =
-              _regions!.any((r) => r.url == saved);
-          if (widget.services.settings.selectedRegionUrl == null || !match) {
-            widget.services.settings.selectedRegionUrl = _regions!.first.url;
-          }
-        }
-      });
-    } catch (e) {
-      debugPrint('[launcher] regions load failed: $e');
-      if (!mounted) return;
-      setState(() {
-        _loadingRegions = false;
-        _regionsError = 'Could not load regions: $e';
-      });
+  String? _defaultVariantId() {
+    final launch = widget.game.launchAppId;
+    final variants = _launchableVariants;
+    if (variants.isEmpty) return launch;
+    // Prefer the variant that matches the resolved launch app id.
+    for (final v in variants) {
+      if (v.id == launch) return v.id;
     }
+    return variants.first.id;
   }
 
   String get _defaultStreamingBaseUrl =>
       'https://prod.cloudmatchbeta.nvidiagrid.net/';
-
-  String get _qualitySummary {
-    final s = widget.services.settings;
-    return '${s.resolution} · ${s.fps}fps · ${s.maxBitrateMbps} Mbps · '
-        '${s.codec.name.toUpperCase()}'
-        '${s.enableL4S ? ' · L4S' : ''}'
-        '${s.enableCloudGsync ? ' · G-SYNC' : ''}';
-  }
 
   bool get _isFreeTier {
     final tier = widget.services.auth.getSession()?.user.membershipTier;
     return tier == null || tier.toUpperCase() == 'FREE';
   }
 
+  static bool _isNumericId(String value) =>
+      value.isNotEmpty && RegExp(r'^\d+$').hasMatch(value);
+
   Future<void> _launch() async {
-    final appId = widget.game.launchAppId;
+    final appId = _selectedVariantId ?? widget.game.launchAppId;
     if (appId == null || appId.isEmpty) {
       _toast('This game has no launchable app id.');
       return;
     }
-    final regionUrl = widget.services.settings.selectedRegionUrl ??
-        _defaultStreamingBaseUrl;
+    final streamingBaseUrl =
+        widget.services.settings.selectedRegionUrl ?? _defaultStreamingBaseUrl;
 
     setState(() => _launching = true);
 
-    String? streamingBaseUrl = regionUrl;
+    var effectiveBaseUrl = streamingBaseUrl;
 
     // Free tier: let the user pick a community-queue server (printedwaste).
     if (_isFreeTier) {
@@ -127,7 +96,7 @@ class _LauncherPageState extends State<LauncherPage> {
             ),
           );
           if (chosen != null) {
-            streamingBaseUrl = chosen;
+            effectiveBaseUrl = chosen;
           }
         }
       } catch (e) {
@@ -147,7 +116,7 @@ class _LauncherPageState extends State<LauncherPage> {
           game: widget.game,
           request: SessionCreateRequest(
             token: null,
-            streamingBaseUrl: streamingBaseUrl,
+            streamingBaseUrl: effectiveBaseUrl,
             appId: appId,
             internalTitle: widget.game.title,
             zone: 'prod',
@@ -166,7 +135,6 @@ class _LauncherPageState extends State<LauncherPage> {
 
   @override
   Widget build(BuildContext context) {
-    final settings = widget.services.settings;
     return NeonPageScaffold(
       title: 'Launch',
       showBack: true,
@@ -177,41 +145,11 @@ class _LauncherPageState extends State<LauncherPage> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _GameHeader(game: widget.game),
-              const SizedBox(height: 24),
-              NeonCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    NeonSettingTile(
-                      icon: Icons.public,
-                      title: 'Region',
-                      subtitle: _regionSubtitle(),
-                      onTap: null,
-                      trailing: _regionDropdown(settings),
-                    ),
-                    const Divider(height: 1),
-                    NeonSettingTile(
-                      icon: Icons.high_quality,
-                      title: 'Stream Quality',
-                      subtitle: _qualitySummary,
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => StreamQualityPage(
-                              services: widget.services,
-                            ),
-                          ),
-                        );
-                      },
-                      trailing: const Icon(
-                        Icons.chevron_right,
-                        color: Neon.inkMuted,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 28),
+              if (_launchableVariants.isNotEmpty) ...[
+                const SizedBox(height: 28),
+                _storeSection(),
+              ],
+              const SizedBox(height: 32),
               Center(
                 child: NeonButton(
                   label: 'Launch',
@@ -228,57 +166,101 @@ class _LauncherPageState extends State<LauncherPage> {
     );
   }
 
-  Widget _regionDropdown(UserSettings settings) {
-    if (_loadingRegions) {
-      return const SizedBox(
-        width: 18,
-        height: 18,
-        child: CircularProgressIndicator(
-          strokeWidth: 2,
-          color: Neon.accent,
+  Widget _storeSection() {
+    final variants = _launchableVariants;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'CHOOSE STORE',
+          style: TextStyle(
+            color: Neon.accent,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 2,
+          ),
         ),
-      );
-    }
-    if (_regionsError != null) {
-      return TextButton(onPressed: _loadRegions, child: const Text('Retry'));
-    }
-    final regions = _regions ?? const <StreamRegion>[];
-    if (regions.isEmpty) {
-      return const Text(
-        'No regions',
-        style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-      );
-    }
-    return DropdownButton<String>(
-      value: settings.selectedRegionUrl,
-      dropdownColor: Neon.bgC,
-      underline: const SizedBox.shrink(),
-      icon: const Icon(Icons.expand_more, color: Neon.accent, size: 18),
-      style: const TextStyle(color: Neon.ink, fontSize: 13),
-      items: regions
-          .map((r) => DropdownMenuItem(
-                value: r.url,
-                child: Text(
-                  r.name,
-                  style: const TextStyle(
-                    color: Neon.ink,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ))
-          .toList(),
-      onChanged: (v) {
-        if (v != null) settings.selectedRegionUrl = v;
-      },
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final v in variants)
+              _StoreChip(
+                label: _storeLabel(v),
+                selected: v.id == _selectedVariantId,
+                onTap: () => setState(() => _selectedVariantId = v.id),
+              ),
+          ],
+        ),
+      ],
     );
   }
 
-  String _regionSubtitle() {
-    final url = widget.services.settings.selectedRegionUrl;
-    if (url == null) return 'Loading regions…';
-    final region = _regions?.where((r) => r.url == url).firstOrNull;
-    return region?.url ?? url;
+  String _storeLabel(AppVariant v) {
+    final store = v.appStore ?? v.shortName;
+    if (store == null || store.isEmpty) return 'Variant ${v.id}';
+    const names = {
+      'Steam': 'Steam',
+      'Epic Games Store': 'Epic Games',
+      'GOG': 'GOG',
+      'Ubisoft Connect': 'Ubisoft',
+      'Ubisoft': 'Ubisoft',
+      'Xbox Game Pass': 'Xbox Game Pass',
+      'Microsoft Store': 'Microsoft Store',
+      'EA App': 'EA App',
+      'Battle.net': 'Battle.net',
+    };
+    return names[store] ?? store;
+  }
+}
+
+class _StoreChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _StoreChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          gradient: selected ? Neon.accentGradient : null,
+          color: selected ? null : Neon.bgC,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: selected ? Neon.glowShadow(radius: 16, alpha: 0.35) : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.storefront,
+              size: 16,
+              color: selected ? Neon.bgA : Neon.inkSoft,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label.toUpperCase(),
+              style: TextStyle(
+                color: selected ? Neon.bgA : Neon.ink,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

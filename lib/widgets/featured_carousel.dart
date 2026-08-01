@@ -114,13 +114,7 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
             if (slides.length > 1)
               Padding(
                 padding: const EdgeInsets.only(top: 14),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    for (var i = 0; i < slides.length; i++)
-                      _Dot(active: i == _index, accentGradient: Neon.accentGradient),
-                  ],
-                ),
+                child: _PagerDots(count: slides.length, index: _index),
               ),
           ],
         );
@@ -129,24 +123,55 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
   }
 }
 
-class _Dot extends StatelessWidget {
-  final bool active;
-  final Gradient accentGradient;
+/// Animated pager indicator: a pill slides smoothly between fixed dots.
+class _PagerDots extends StatelessWidget {
+  final int count;
+  final int index;
 
-  const _Dot({required this.active, required this.accentGradient});
+  static const double _slot = 20;
+  static const double _dot = 6;
+
+  const _PagerDots({required this.count, required this.index});
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOut,
-      width: active ? 22 : 6,
-      height: 6,
-      margin: const EdgeInsets.symmetric(horizontal: 3),
-      decoration: BoxDecoration(
-        gradient: active ? accentGradient : null,
-        color: active ? null : const Color(0x44FFFFFF),
-        borderRadius: BorderRadius.circular(3),
+    return SizedBox(
+      height: _dot,
+      width: count * _slot,
+      child: Stack(
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < count; i++)
+                Container(
+                  width: _dot,
+                  height: _dot,
+                  margin: EdgeInsets.symmetric(
+                    horizontal: (_slot - _dot) / 2,
+                  ),
+                  decoration: const BoxDecoration(
+                    color: Color(0x44FFFFFF),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+            ],
+          ),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 340),
+            curve: Curves.easeOutCubic,
+            left: index * _slot,
+            child: Container(
+              width: _slot,
+              height: _dot,
+              decoration: BoxDecoration(
+                gradient: Neon.accentGradient,
+                borderRadius: BorderRadius.circular(3),
+                boxShadow: Neon.glowShadow(radius: 8, alpha: 0.4),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
