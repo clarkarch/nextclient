@@ -10,32 +10,40 @@ import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/neon_switch.dart';
 
-/// Stream quality options sent to the NVIDIA server on launch.
-class StreamQualityPage extends StatelessWidget {
+/// Stream quality options sent to the NVIDIA server on launch. Options are
+/// gated by the account's entitled resolutions when the subscription is known.
+class StreamQualityPage extends StatefulWidget {
   final AppServices services;
 
   const StreamQualityPage({super.key, required this.services});
 
+  @override
+  State<StreamQualityPage> createState() => _StreamQualityPageState();
+}
+
+class _StreamQualityPageState extends State<StreamQualityPage> {
+  SubscriptionInfo? _subscription;
+
   /// Resolution options grouped by aspect ratio, with membership tier tags.
   static const _resolutions = <String, List<_ResOption>>{
     '16:9': [
-      _ResOption('1280x720', '720p', OptionTier.free),
-      _ResOption('1920x1080', '1080p', OptionTier.free),
-      _ResOption('2560x1440', '1440p', OptionTier.priority),
-      _ResOption('3840x2160', '4K', OptionTier.ultimate),
+      _ResOption('1280x720', '720p', OptionTier.free, 1280, 720),
+      _ResOption('1920x1080', '1080p', OptionTier.free, 1920, 1080),
+      _ResOption('2560x1440', '1440p', OptionTier.priority, 2560, 1440),
+      _ResOption('3840x2160', '4K', OptionTier.ultimate, 3840, 2160),
     ],
     '16:10': [
-      _ResOption('1680x1050', 'WSXGA', OptionTier.free),
-      _ResOption('1920x1200', '1200p', OptionTier.free),
-      _ResOption('2560x1600', '1600p', OptionTier.priority),
-      _ResOption('3840x2400', '4K', OptionTier.ultimate),
+      _ResOption('1680x1050', 'WSXGA', OptionTier.free, 1680, 1050),
+      _ResOption('1920x1200', '1200p', OptionTier.free, 1920, 1200),
+      _ResOption('2560x1600', '1600p', OptionTier.priority, 2560, 1600),
+      _ResOption('3840x2400', '4K', OptionTier.ultimate, 3840, 2400),
     ],
     '21:9': [
-      _ResOption('2560x1080', 'Ultrawide 1080p', OptionTier.free),
-      _ResOption('3440x1440', 'Ultrawide 1440p', OptionTier.priority),
+      _ResOption('2560x1080', 'Ultrawide 1080p', OptionTier.free, 2560, 1080),
+      _ResOption('3440x1440', 'Ultrawide 1440p', OptionTier.priority, 3440, 1440),
     ],
     '32:9': [
-      _ResOption('5120x1440', 'Super Ultrawide', OptionTier.ultimate),
+      _ResOption('5120x1440', 'Super Ultrawide', OptionTier.ultimate, 5120, 1440),
     ],
   };
 
@@ -55,8 +63,35 @@ class StreamQualityPage extends StatelessWidget {
   static const _bitrateMax = 75;
 
   bool get _isFreeTier {
-    final tier = services.auth.getSession()?.user.membershipTier;
+    final tier = widget.services.auth.getSession()?.user.membershipTier;
     return tier == null || tier.toUpperCase() == 'FREE';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.services.loadSubscription().then((info) {
+      if (mounted) setState(() => _subscription = info);
+    });
+  }
+
+  /// Whether an option is usable. Prefers the account's entitled
+  /// resolutions; falls back to membership-tier rules when unknown.
+  bool _canUse(OptionTier tier, {int? width, int? height, int? fps}) {
+    final subscription = _subscription;
+    if (subscription != null) {
+      final entitled = subscription.entitledResolutions;
+      if (entitled.isNotEmpty) {
+        if (width != null && height != null) {
+          return entitled.any((r) => r.width == width && r.height == height);
+        }
+        if (fps != null) {
+          return entitled.any((r) => r.fps == fps);
+        }
+        return true;
+      }
+    }
+    return !_isFreeTier || tier == OptionTier.free;
   }
 
   @override
@@ -65,9 +100,9 @@ class StreamQualityPage extends StatelessWidget {
       title: 'Stream Quality',
       showBack: true,
       child: ListenableBuilder(
-        listenable: services.settings,
+        listenable: widget.services.settings,
         builder: (context, _) {
-          final s = services.settings;
+          final s = widget.services.settings;
           return NeonCard(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -93,6 +128,10 @@ class StreamQualityPage extends StatelessWidget {
                 const SizedBox(height: 10),
                 _colorDropdown(s),
                 const SizedBox(height: 22),
+                _SectionLabel(label: 'Launch mode'),
+                const SizedBox(height: 10),
+                _appLaunchModeDropdown(s),
+                const SizedBox(height: 22),
                 _SectionLabel(label: 'Features'),
                 const SizedBox(height: 6),
                 _toggleRow(
@@ -109,6 +148,12 @@ class StreamQualityPage extends StatelessWidget {
                   value: s.enableCloudGsync,
                   onChanged: (v) => s.enableCloudGsync = v,
                 ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, top: 8),
+                  child: _SectionLabel(label: 'Native Cloud G-SYNC mode'),
+                ),
+                const SizedBox(height: 8),
+                _nativeCloudGsyncDropdown(s),
               ],
             ),
           );
@@ -118,7 +163,6 @@ class StreamQualityPage extends StatelessWidget {
   }
 
   Widget _resolutionSelector(UserSettings s) {
-    // Detect the current aspect ratio from the saved resolution.
     var currentRatio = '16:9';
     for (final entry in _resolutions.entries) {
       if (entry.value.any((r) => r.resolution == s.resolution)) {
@@ -140,8 +184,6 @@ class StreamQualityPage extends StatelessWidget {
                 label: ratio,
                 selected: ratio == currentRatio,
                 onTap: () {
-                  // Switch ratio; keep the current resolution if it belongs
-                  // here, otherwise pick the highest option in the ratio.
                   final inRatio = _resolutions[ratio]!
                       .any((r) => r.resolution == s.resolution);
                   if (!inRatio) {
@@ -161,7 +203,7 @@ class StreamQualityPage extends StatelessWidget {
                 label: opt.label,
                 selected: opt.resolution == s.resolution,
                 tier: opt.tier,
-                enabled: !_isFreeTier || opt.tier == OptionTier.free,
+                enabled: _canUse(opt.tier, width: opt.width, height: opt.height),
                 onTap: () => s.resolution = opt.resolution,
               ),
           ],
@@ -180,7 +222,7 @@ class StreamQualityPage extends StatelessWidget {
             label: '$fps fps',
             selected: s.fps == fps,
             tier: tier,
-            enabled: !_isFreeTier || tier == OptionTier.free,
+            enabled: _canUse(tier, fps: fps),
             onTap: () => s.fps = fps,
           ),
       ],
@@ -245,6 +287,36 @@ class StreamQualityPage extends StatelessWidget {
     );
   }
 
+  Widget _appLaunchModeDropdown(UserSettings s) {
+    return NeonDropdown<AppLaunchMode>(
+      value: s.appLaunchMode,
+      onChanged: (v) {
+        if (v != null) s.appLaunchMode = v;
+      },
+      items: [
+        for (final m in AppLaunchMode.values)
+          NeonDropdownItem(m, switch (m) {
+            AppLaunchMode.default_ => 'Default',
+            AppLaunchMode.gamepadFriendly => 'Gamepad friendly',
+            AppLaunchMode.touchFriendly => 'Touch friendly',
+          }),
+      ],
+    );
+  }
+
+  Widget _nativeCloudGsyncDropdown(UserSettings s) {
+    return NeonDropdown<NativeStreamerFeatureMode>(
+      value: s.nativeCloudGsyncMode,
+      onChanged: (v) {
+        if (v != null) s.nativeCloudGsyncMode = v;
+      },
+      items: [
+        for (final m in NativeStreamerFeatureMode.values)
+          NeonDropdownItem(m, m.name.toUpperCase()),
+      ],
+    );
+  }
+
   Widget _toggleRow({
     required IconData icon,
     required String title,
@@ -271,8 +343,16 @@ class _ResOption {
   final String resolution;
   final String label;
   final OptionTier tier;
+  final int width;
+  final int height;
 
-  const _ResOption(this.resolution, this.label, this.tier);
+  const _ResOption(
+    this.resolution,
+    this.label,
+    this.tier,
+    this.width,
+    this.height,
+  );
 }
 
 class _SectionLabel extends StatelessWidget {

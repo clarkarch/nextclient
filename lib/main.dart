@@ -29,6 +29,8 @@ class AppServices {
   final RingBufferLogSink logSink;
   final SharedPreferences prefs;
 
+  SubscriptionInfo? _subscription;
+
   AppServices._({
     required this.auth,
     required this.catalog,
@@ -40,6 +42,28 @@ class AppServices {
     required this.logSink,
     required this.prefs,
   });
+
+  /// Fetch the user's GFN subscription (tier, hours, entitled resolutions),
+  /// caching it for the lifetime of the app.
+  Future<SubscriptionInfo?> loadSubscription() async {
+    final cached = _subscription;
+    if (cached != null) return cached;
+    try {
+      final session = await auth.ensureValidSession();
+      if (session == null) return null;
+      final token = session.tokens.idToken ?? session.tokens.accessToken;
+      if (token == null) return null;
+      final info = await subscription.fetchSubscription(
+        token: token,
+        userId: session.user.userId,
+      );
+      _subscription = info;
+      return info;
+    } catch (e) {
+      debugPrint('[subscription] load failed: $e');
+      return null;
+    }
+  }
 
   static Future<AppServices> create() async {
     final prefs = await SharedPreferences.getInstance();

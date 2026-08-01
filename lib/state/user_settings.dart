@@ -16,6 +16,8 @@ class UserSettings extends ChangeNotifier {
   static const _keyGameLanguage = 'settings.gameLanguage';
   static const _keyL4S = 'settings.l4s';
   static const _keyCloudGsync = 'settings.cloudGsync';
+  static const _keyAppLaunchMode = 'settings.appLaunchMode';
+  static const _keyNativeCloudGsyncMode = 'settings.nativeCloudGsyncMode';
   static const _keyRegionUrl = 'settings.regionUrl';
 
   String _resolution = '1920x1080';
@@ -27,6 +29,9 @@ class UserSettings extends ChangeNotifier {
   GameLanguage _gameLanguage = GameLanguage.enUS;
   bool _enableL4S = false;
   bool _enableCloudGsync = false;
+  AppLaunchMode _appLaunchMode = AppLaunchMode.default_;
+  NativeStreamerFeatureMode _nativeCloudGsyncMode =
+      NativeStreamerFeatureMode.auto;
   String? _selectedRegionUrl;
 
   UserSettings(this._prefs) {
@@ -42,6 +47,8 @@ class UserSettings extends ChangeNotifier {
   GameLanguage get gameLanguage => _gameLanguage;
   bool get enableL4S => _enableL4S;
   bool get enableCloudGsync => _enableCloudGsync;
+  AppLaunchMode get appLaunchMode => _appLaunchMode;
+  NativeStreamerFeatureMode get nativeCloudGsyncMode => _nativeCloudGsyncMode;
   String? get selectedRegionUrl => _selectedRegionUrl;
 
   set resolution(String v) {
@@ -110,6 +117,20 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set appLaunchMode(AppLaunchMode v) {
+    if (_appLaunchMode == v) return;
+    _appLaunchMode = v;
+    _save(_keyAppLaunchMode, v.name);
+    notifyListeners();
+  }
+
+  set nativeCloudGsyncMode(NativeStreamerFeatureMode v) {
+    if (_nativeCloudGsyncMode == v) return;
+    _nativeCloudGsyncMode = v;
+    _save(_keyNativeCloudGsyncMode, v.name);
+    notifyListeners();
+  }
+
   set selectedRegionUrl(String? v) {
     if (_selectedRegionUrl == v) return;
     _selectedRegionUrl = v;
@@ -132,6 +153,8 @@ class UserSettings extends ChangeNotifier {
       gameLanguage: _gameLanguage,
       enableL4S: _enableL4S,
       enableCloudGsync: _enableCloudGsync,
+      appLaunchMode: _appLaunchMode,
+      nativeCloudGsyncMode: _nativeCloudGsyncMode,
     );
   }
 
@@ -149,6 +172,12 @@ class UserSettings extends ChangeNotifier {
             _gameLanguage;
     _enableL4S = _prefs.getBool(_keyL4S) ?? _enableL4S;
     _enableCloudGsync = _prefs.getBool(_keyCloudGsync) ?? _enableCloudGsync;
+    _appLaunchMode =
+        AppLaunchMode.values.asNameMap()[_prefs.getString(_keyAppLaunchMode)] ??
+            _appLaunchMode;
+    _nativeCloudGsyncMode = NativeStreamerFeatureMode.values
+            .asNameMap()[_prefs.getString(_keyNativeCloudGsyncMode)] ??
+        _nativeCloudGsyncMode;
     _selectedRegionUrl = _prefs.getString(_keyRegionUrl);
   }
 
