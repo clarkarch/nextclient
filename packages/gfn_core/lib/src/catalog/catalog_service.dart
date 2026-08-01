@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../http/client.dart'
     show GfnLcarsHeadersOptions, buildGfnLcarsHeaders;
 import '../models/catalog.dart';
+import '../models/game_details.dart';
 import 'graphql.dart'
     show LcarsQueryName, fetchLcarsGraphQl, throwGraphQlErrors;
 
@@ -175,6 +176,64 @@ class CatalogService {
       providerStreamingBaseUrl: providerStreamingBaseUrl,
     );
     return flattenPanels(payload);
+  }
+
+  /// Library games that have a recorded play date, newest first. Port of
+  /// OpenNOW's recently-played derivation using the `librarySectionWithTime`
+  /// persisted query (`lastPlayedDate`).
+  Future<List<CatalogGame>> fetchRecentlyPlayed({
+    required String token,
+    String? providerStreamingBaseUrl,
+  }) async {
+    final payload = await fetchPanels(
+      token: token,
+      panelNames: ['LIBRARY'],
+      providerStreamingBaseUrl: providerStreamingBaseUrl,
+      withLibraryTime: true,
+    );
+    final games = flattenPanels(payload)
+        .where((g) => g.lastPlayedDate != null)
+        .toList()
+      ..sort((a, b) => b.lastPlayedDate!.compareTo(a.lastPlayedDate!));
+    return games;
+  }
+
+  /// Rich metadata for a single app from the `appDataForAppId` persisted query.
+  Future<GameDetails> fetchGameDetails({
+    required String token,
+    required String appId,
+    String? providerStreamingBaseUrl,
+  }) async {
+    final vpcId = await getVpcId(
+      token: token,
+      providerStreamingBaseUrl: providerStreamingBaseUrl,
+    );
+    final payload = await fetchLcarsGraphQl(
+      client: client,
+      queryName: LcarsQueryName.appDataForAppId,
+      variables: {
+        'vpcId': vpcId,
+        'locale': defaultLocale,
+        'appIds': [appId],
+      },
+      token: token,
+      isMac: isMac,
+      context: 'Game details GraphQL failed',
+    );
+
+    final errors = payload['errors'];
+    if (errors is List && errors.isNotEmpty) {
+      throwGraphQlErrors(errors, 'Game details GraphQL failed');
+    }
+
+    final items = (payload['data'] as Map<String, dynamic>?)?['apps'] is Map
+        ? ((payload['data'] as Map<String, dynamic>)['apps']
+                as Map<String, dynamic>)['items']
+        : null;
+    if (items is! List || items.isEmpty || items.first is! Map<String, dynamic>) {
+      throw StateError('Game details returned no app for appId $appId');
+    }
+    return GameDetails.fromJson(items.first as Map<String, dynamic>);
   }
 }
 

@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'app.dart';
+import 'state/session_controller.dart';
+import 'state/user_settings.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +24,8 @@ class AppServices {
   final CloudMatchService cloudMatch;
   final PrintedWasteService printedWaste;
   final SubscriptionService subscription;
+  final UserSettings settings;
+  final SessionController session;
   final RingBufferLogSink logSink;
   final SharedPreferences prefs;
 
@@ -31,6 +35,8 @@ class AppServices {
     required this.cloudMatch,
     required this.printedWaste,
     required this.subscription,
+    required this.settings,
+    required this.session,
     required this.logSink,
     required this.prefs,
   });
@@ -73,12 +79,20 @@ class AppServices {
     );
     final subscription = SubscriptionService(client: client, isMac: isMac);
 
+    final settings = UserSettings(prefs);
+    final session = SessionController(
+      cloudMatch: cloudMatch,
+      getToken: () => auth.resolveJwtToken(),
+    );
+
     return AppServices._(
       auth: auth,
       catalog: catalog,
       cloudMatch: cloudMatch,
       printedWaste: printedWaste,
       subscription: subscription,
+      settings: settings,
+      session: session,
       logSink: logSink,
       prefs: prefs,
     );

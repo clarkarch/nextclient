@@ -1,5 +1,6 @@
-import 'dart:convert' show jsonDecode, jsonEncode;
+import 'dart:convert' show jsonDecode, jsonEncode, utf8;
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:http/http.dart' as http;
 
 import '../http/client.dart' show buildGfnGraphQlHeaders;
@@ -470,14 +471,20 @@ Future<Map<String, dynamic>> fetchLcarsGraphQl({
   String? fallbackQuery,
 }) async {
   final definition = lcarsQueryDefinitions[queryName]!;
-  final sha256Hash = definition.sha256Hash;
+  final effectiveQuery = fallbackQuery ?? definition.query;
+  // NVIDIA's registry hashes are stale relative to the query text shipped
+  // here (APQ_HASH_MISMATCH). Compute the hash from the query text so the
+  // server executes and registers our query; fall back to the stored hash
+  // for definitions without an inline query.
+  final sha256Hash = effectiveQuery != null
+      ? sha256.convert(utf8.encode(effectiveQuery)).toString()
+      : definition.sha256Hash;
   if (sha256Hash == null) {
     throw StateError('LCARS query $queryName does not define a persisted-query hash');
   }
 
   final effectiveEndpoint = endpoint ?? lcarsCdnGraphqlUrl;
   final effectiveContext = context ?? 'GFN GraphQL failed';
-  final effectiveQuery = fallbackQuery ?? definition.query;
   final huId = _randomHuId();
 
   Map<String, String> buildParams({bool withQuery = false}) {

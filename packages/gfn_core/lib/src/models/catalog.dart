@@ -1,3 +1,6 @@
+import '../catalog/game_images.dart'
+    show landscapeImageKeys, normalizeImageValues;
+
 class AppVariant {
   final String id;
   final String? shortName;
@@ -110,6 +113,35 @@ class CatalogGame {
     this.launchAppId,
     this.isInLibrary = false,
   });
+
+  /// Best 16:9 landscape art (hero/banner/key art) for cards.
+  String? get imageUrl {
+    for (final key in landscapeImageKeys) {
+      final value = normalizeImageValues(images?[key]);
+      if (value.isNotEmpty) return value.first;
+    }
+    return null;
+  }
+
+  /// Marquee hero (highest-fidelity landscape) for the featured carousel.
+  String? get marqueeImageUrl {
+    final value = normalizeImageValues(images?['MARQUEE_HERO_IMAGE']);
+    if (value.isNotEmpty) return value.first;
+    return imageUrl;
+  }
+
+  /// Most recent play date across variants, if any.
+  DateTime? get lastPlayedDate {
+    DateTime? latest;
+    for (final v in variants) {
+      final raw = v.gfn?.lastPlayedDate;
+      if (raw == null || raw.isEmpty) continue;
+      final parsed = DateTime.tryParse(raw);
+      if (parsed == null) continue;
+      if (latest == null || parsed.isAfter(latest)) latest = parsed;
+    }
+    return latest;
+  }
 
   factory CatalogGame.fromJson(Map<String, dynamic> json) {
     final app = json['app'] as Map<String, dynamic>? ?? json;

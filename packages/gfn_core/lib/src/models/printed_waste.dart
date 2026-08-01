@@ -1,3 +1,5 @@
+import '../http/client.dart' show isStandardGfnZone;
+
 class PrintedWasteQueueData {
   final Map<String, PrintedWasteZoneData> zones;
 
@@ -60,4 +62,16 @@ class PrintedWasteServerEntry {
       nuked: json['nuked'] as bool?,
     );
   }
+}
+
+/// Port of endpoints.ts — build the direct CloudMatch base URL for a zone.
+/// "NP-AMS-08" → "https://np-ams-08.cloudmatchbeta.nvidiagrid.net/"
+
+/// True if any queue zone is standard and not flagged as nuked.
+bool hasAnyEligiblePrintedWasteZone(
+  PrintedWasteQueueData queue,
+  PrintedWasteServerMapping mapping,
+) {
+  return queue.zones.keys.any((zoneId) =>
+      isStandardGfnZone(zoneId) && mapping.servers[zoneId]?.nuked != true);
 }
