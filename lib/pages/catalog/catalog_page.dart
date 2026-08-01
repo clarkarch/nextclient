@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
+import '../session/session_page.dart';
 
 class CatalogPage extends StatefulWidget {
   final AppServices services;
@@ -18,6 +19,7 @@ class _CatalogPageState extends State<CatalogPage> {
   List<CatalogGame>? _games;
   String? _error;
   bool _loading = false;
+  bool _libraryOnly = false;
 
   Future<void> _load() async {
     setState(() {
@@ -45,13 +47,28 @@ class _CatalogPageState extends State<CatalogPage> {
 
   @override
   Widget build(BuildContext context) {
+    final games = _games;
+    final shown = _libraryOnly
+        ? (games ?? []).where((g) => g.isInLibrary).toList()
+        : (games ?? []);
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        FilledButton.icon(
-          icon: const Icon(Icons.refresh),
-          label: const Text('Fetch catalog'),
-          onPressed: _loading ? null : _load,
+        Row(
+          children: [
+            FilledButton.icon(
+              icon: const Icon(Icons.refresh),
+              label: const Text('Fetch catalog'),
+              onPressed: _loading ? null : _load,
+            ),
+            const Spacer(),
+            FilterChip(
+              label: const Text('Library only'),
+              selected: _libraryOnly,
+              onSelected: (v) => setState(() => _libraryOnly = v),
+            ),
+          ],
         ),
         if (_loading) const Padding(
           padding: EdgeInsets.all(16),
@@ -62,14 +79,51 @@ class _CatalogPageState extends State<CatalogPage> {
             padding: const EdgeInsets.all(8),
             child: Text(_error!, style: const TextStyle(color: Colors.red)),
           ),
-        if (_games != null)
-          ..._games!.map((game) => ListTile(
-                leading: _Thumb(url: game.id),
-                title: Text(game.title),
-                subtitle: Text('variants: ${game.variants.length}'),
+        if (games != null)
+          Text(
+            '${shown.length} games${_libraryOnly ? ' in library' : ''} '
+            '(total ${games.length})',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if (games != null)
+          ...shown.map((game) => ListTile(
+                leading: game.isInLibrary
+                    ? const Icon(Icons.check_circle, color: Colors.green)
+                    : _Thumb(url: game.id),
+                title: Text(
+                  game.title,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  'appId: ${game.launchAppId ?? "n/a"}'
+                  '${game.isInLibrary ? " · in library" : ""}'
+                  '${game.variants.isNotEmpty ? " · ${game.variants.length} variants" : ""}',
+                ),
+                isThreeLine: false,
+                trailing: game.launchAppId != null
+                    ? IconButton(
+                        icon: const Icon(Icons.play_arrow),
+                        tooltip: 'Launch this game',
+                        onPressed: () => _launchGame(game),
+                      )
+                    : null,
                 onTap: () => _showDetail(game),
               )),
       ],
+    );
+  }
+
+  void _launchGame(CatalogGame game) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text('Launch ${game.title}')),
+          body: SessionPage(
+            services: widget.services,
+            initialGame: game,
+          ),
+        ),
+      ),
     );
   }
 

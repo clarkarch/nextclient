@@ -94,6 +94,8 @@ class CatalogGame {
   final String? playabilityState;
   final String? minimumMembershipTierLabel;
   final String? playType;
+  final String? launchAppId;
+  final bool isInLibrary;
 
   const CatalogGame({
     required this.id,
@@ -105,26 +107,47 @@ class CatalogGame {
     this.playabilityState,
     this.minimumMembershipTierLabel,
     this.playType,
+    this.launchAppId,
+    this.isInLibrary = false,
   });
 
   factory CatalogGame.fromJson(Map<String, dynamic> json) {
     final app = json['app'] as Map<String, dynamic>? ?? json;
+    final variants = (app['variants'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map((v) => AppVariant.fromJson(v))
+        .toList();
     return CatalogGame(
       id: app['id'] as String,
       title: app['title'] as String,
       shortName: app['shortName'] as String?,
       publisherName: app['publisherName'] as String?,
-      variants: (app['variants'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map((v) => AppVariant.fromJson(v))
-          .toList(),
+      variants: variants,
       images: app['images'] as Map<String, dynamic>?,
       playabilityState: (app['gfn'] as Map<String, dynamic>?)?['playabilityState'] as String?,
       minimumMembershipTierLabel:
           (app['gfn'] as Map<String, dynamic>?)?['minimumMembershipTierLabel'] as String?,
       playType: (app['gfn'] as Map<String, dynamic>?)?['playType'] as String?,
+      launchAppId: _resolveLaunchAppId(variants, app['id'] as String),
+      isInLibrary: variants.any((v) => isOwnedLibraryStatus(v.gfn?.libraryStatus)),
     );
   }
+
+  /// Port of gameAppMapper.ts resolveAppData.numericAppId — the preferred
+  /// numeric variant id (selected variant first), falling back to the app id
+  /// if it is itself numeric.
+  static String? _resolveLaunchAppId(List<AppVariant> variants, String appId) {
+    for (final v in variants) {
+      if (v.gfn?.librarySelected == true && _isNumericId(v.id)) return v.id;
+    }
+    for (final v in variants) {
+      if (_isNumericId(v.id)) return v.id;
+    }
+    return _isNumericId(appId) ? appId : null;
+  }
+
+  static bool _isNumericId(String value) =>
+      value.isNotEmpty && RegExp(r'^\d+$').hasMatch(value);
 
   Map<String, dynamic> toJson() {
     return {
@@ -137,6 +160,8 @@ class CatalogGame {
       'playabilityState': playabilityState,
       'minimumMembershipTierLabel': minimumMembershipTierLabel,
       'playType': playType,
+      'launchAppId': launchAppId,
+      'isInLibrary': isInLibrary,
     };
   }
 }

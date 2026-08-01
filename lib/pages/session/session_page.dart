@@ -5,8 +5,13 @@ import '../../main.dart';
 
 class SessionPage extends StatefulWidget {
   final AppServices services;
+  final CatalogGame? initialGame;
 
-  const SessionPage({super.key, required this.services});
+  const SessionPage({
+    super.key,
+    required this.services,
+    this.initialGame,
+  });
 
   @override
   State<SessionPage> createState() => _SessionPageState();
@@ -15,13 +20,54 @@ class SessionPage extends StatefulWidget {
 class _SessionPageState extends State<SessionPage> {
   SessionLifecycle? _lifecycle;
   final List<SessionPhaseEvent> _events = [];
-  final _appIdController = TextEditingController(text: '2460648703');
-  final _regionController = TextEditingController(text: 'NP-AMS-08');
+  late final TextEditingController _appIdController;
+  List<StreamRegion>? _regions;
+  String? _selectedRegionUrl;
+  String? _regionsError;
+  bool _loadingRegions = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _appIdController = TextEditingController(
+      text: widget.initialGame?.launchAppId ?? '',
+    );
+    _loadRegions();
+  }
+
+  Future<void> _loadRegions() async {
+    setState(() {
+      _loadingRegions = true;
+      _regionsError = null;
+    });
+    try {
+      final session = await widget.services.auth.ensureValidSession();
+      final token = session?.tokens.idToken ?? session?.tokens.accessToken;
+      final result = await widget.services.subscription.fetchDynamicRegions(
+        token: token,
+        streamingBaseUrl: session?.provider.streamingServiceUrl ?? '',
+      );
+      if (!mounted) return;
+      setState(() {
+        _regions = result.regions;
+        _loadingRegions = false;
+        // Default to first region if none selected.
+        if (_selectedRegionUrl == null && result.regions.isNotEmpty) {
+          _selectedRegionUrl = result.regions.first.url;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingRegions = false;
+        _regionsError = 'Could not load regions: $e';
+      });
+    }
+  }
 
   @override
   void dispose() {
     _appIdController.dispose();
-    _regionController.dispose();
     super.dispose();
   }
 
@@ -45,7 +91,17 @@ class _SessionPageState extends State<SessionPage> {
   Future<void> _launch() async {
     final lifecycle = _getLifecycle();
     final appId = _appIdController.text.trim();
-    if (appId.isEmpty) return;
+    if (appId.isEmpty) {
+      _showError('Enter a numeric app ID (pick a game from Catalog, or use the '
+          'appId shown there).');
+      return;
+    }
+    final regionUrl = _selectedRegionUrl;
+    if (regionUrl == null || regionUrl.isEmpty) {
+      _showError('Select a region first (list loads automatically; if empty, '
+          'check the log for the regions request).');
+      return;
+    }
     setState(() => _events.clear());
 
     final token = await widget.services.auth.resolveJwtToken();
@@ -53,7 +109,8 @@ class _SessionPageState extends State<SessionPage> {
       token: token,
       appId: appId,
       internalTitle: '',
-      zone: _regionController.text.trim(),
+      zone: 'prod',
+      streamingBaseUrl: regionUrl,
       settings: _defaultSettings(),
     ));
   }
@@ -72,66 +129,123 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final lifecycle = _getLifecycle();
+    final initial = widget.initialGame;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        TextField(
-          controller: _appIdController,
-          decoration: const InputDecoration(
-            labelText: 'App ID (numeric)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _regionController,
-          decoration: const InputDecoration(
-            labelText: 'Zone (e.g. NP-AMS-08)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            FilledButton.icon(
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('Launch'),
-              onPressed: _launch,
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.stop),
-              label: const Text('Stop'),
-              onPressed: () => _getLifecycle().stop(),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        _StateCard(state: lifecycle.state),
-        const SizedBox(height: 8),
-        if (lifecycle.lastError != null)
-          Card(
-            color: Colors.red.withValues(alpha: 0.1),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(
-                lifecycle.lastError!,
-                style: const TextStyle(color: Colors.red),
+          if (initial != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(initial.title,
+                        style: Theme.of(context).textTheme.titleMedium),
+                    Text('appId: ${initial.launchAppId ?? "n/a"}'),
+                    Text('in library: ${initial.isInLibrary}'),
+                  ],
+                ),
               ),
             ),
+          TextField(
+            controller: _appIdController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'App ID (numeric)',
+              helperText: 'Pick a game in Catalog and tap play, or enter its appId',
+              border: OutlineInputBorder(),
+            ),
           ),
-        const SizedBox(height: 8),
-        Text('Transitions (${_events.length})',
-            style: Theme.of(context).textTheme.titleMedium),
-        ..._events.map((event) => ListTile(
-              dense: true,
-              leading: Text(_stateLabel(event.from)),
-              title: Text('${_stateLabel(event.from)} -> ${_stateLabel(event.to)}'),
-              subtitle: Text(event.message),
-            )),
+          const SizedBox(height: 8),
+          Text('Region:'),
+          if (_loadingRegions)
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text('Loading regions...'),
+                ],
+              ),
+            )
+          else if (_regionsError != null)
+            Row(
+              children: [
+                Expanded(
+                  child: Text(_regionsError!,
+                      style: const TextStyle(color: Colors.orange)),
+                ),
+                TextButton(onPressed: _loadRegions, child: const Text('Retry')),
+              ],
+            )
+          else if (_regions == null || _regions!.isEmpty)
+            const Text('No regions returned (check log for the serverInfo request)')
+          else
+            DropdownButtonFormField<String>(
+              initialValue: _selectedRegionUrl,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              items: _regions!
+                  .map((r) => DropdownMenuItem(
+                        value: r.url,
+                        child: Text('${r.name} · $r.url'),
+                      ))
+                  .toList(),
+              onChanged: (v) => setState(() => _selectedRegionUrl = v),
+            ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              FilledButton.icon(
+                icon: const Icon(Icons.play_arrow),
+                label: const Text('Launch'),
+                onPressed: _launch,
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.stop),
+                label: const Text('Stop'),
+                onPressed: () => _getLifecycle().stop(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _StateCard(state: lifecycle.state),
+          const SizedBox(height: 8),
+          if (lifecycle.lastError != null)
+            Card(
+              color: Colors.red.withValues(alpha: 0.1),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  lifecycle.lastError!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Text('Transitions (${_events.length})',
+              style: Theme.of(context).textTheme.titleMedium),
+          ..._events.map((event) => ListTile(
+                dense: true,
+                leading: Text(_stateLabel(event.from)),
+                title: Text('${_stateLabel(event.from)} -> ${_stateLabel(event.to)}'),
+                subtitle: Text(event.message),
+              )),
       ],
     );
   }

@@ -17,6 +17,7 @@ export 'src/cloudmatch/signaling.dart';
 export 'src/cloudmatch/transport.dart';
 export 'src/http/client.dart';
 export 'src/http/errors.dart';
+export 'src/http/region_ping.dart';
 export 'src/logging.dart';
 export 'src/models/auth.dart';
 export 'src/models/catalog.dart';

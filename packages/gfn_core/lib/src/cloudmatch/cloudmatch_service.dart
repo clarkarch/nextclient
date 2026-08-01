@@ -15,7 +15,7 @@ import '../models/cloudmatch_types.dart';
 import '../models/session.dart';
 import 'session_parsing.dart' show toSessionInfo;
 import 'session_request.dart'
-    show buildClaimRequestBody, buildSessionRequestBody;
+    show buildClaimRequestBody, buildSessionRequestBody, createNetworkTestSession;
 import 'signaling.dart'
     show isReadySessionStatus, resolveSignaling, streamingServerIp;
 import 'transport.dart'
@@ -58,13 +58,28 @@ class CloudMatchService {
       isMac: isMac,
     );
 
+    final networkTestSessionId = await createNetworkTestSession(
+      client: client,
+      base: base,
+      token: token,
+      clientId: clientId,
+      deviceId: deviceId,
+      settings: input.settings,
+      isMac: isMac,
+      nowMillis: DateTime.now().millisecondsSinceEpoch,
+    );
+
     final body = buildSessionRequestBody(
       appId: input.appId,
       internalTitle: input.internalTitle,
       settings: input.settings,
       deviceHashId: deviceId,
       clientPlatformName: 'windows',
+      networkTestSessionId: networkTestSessionId,
       accountLinked: input.accountLinked ?? true,
+      enablePersistingInGameSettings: input.enablePersistingInGameSettings ?? false,
+      supportsInGameSettingsPersistence:
+          input.supportsInGameSettingsPersistence ?? false,
     );
 
     final query = Uri(queryParameters: {

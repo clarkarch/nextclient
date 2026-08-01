@@ -33,9 +33,9 @@ class NetworkTestSessionCache {
   }) {
     final resolution = parseResolution(settings.resolution);
     final identityHash = sha256Hex(
-      '$token\0',
+      '$token\u0000',
     );
-    return '$base\0${resolution.width}x${resolution.height}@${settings.fps}\0$identityHash';
+    return '$base\u0000${resolution.width}x${resolution.height}@${settings.fps}\u0000$identityHash';
   }
 
   String? getCached({
@@ -173,6 +173,8 @@ Map<String, dynamic> buildSessionRequestBody({
   required String clientPlatformName,
   String? networkTestSessionId,
   bool accountLinked = true,
+  bool enablePersistingInGameSettings = false,
+  bool supportsInGameSettingsPersistence = false,
 }) {
   final resolution = parseResolution(settings.resolution);
   final cq = settings.colorQuality;
@@ -224,8 +226,8 @@ Map<String, dynamic> buildSessionRequestBody({
       'partnerCustomData': '',
       'accountLinked': accountLinked,
       'enablePersistingInGameSettings': shouldEnableInGameSettingsPersistence(
-        enablePersistingInGameSettings: false,
-        supportsInGameSettingsPersistence: false,
+        enablePersistingInGameSettings: enablePersistingInGameSettings,
+        supportsInGameSettingsPersistence: supportsInGameSettingsPersistence,
       ),
       'userAge': 26,
       'requestedStreamingFeatures': buildRequestedStreamingFeatures(
