@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
@@ -49,6 +51,7 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   bool _loading = true;
   bool _pinging = false;
   String? _selectedZoneId;
+  Timer? _autoRefresh;
 
   bool get _refreshing => _loading || _pinging;
 
@@ -56,6 +59,49 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   void initState() {
     super.initState();
     _load();
+    // Refresh queue positions while the picker stays open (keep pings).
+    _autoRefresh = Timer.periodic(
+      const Duration(minutes: 2),
+      (_) => _refreshQueueOnly(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _autoRefresh?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshQueueOnly() async {
+    try {
+      final queue =
+          await widget.services.printedWaste.fetchPrintedWasteQueue();
+      var mapping = const PrintedWasteServerMapping(servers: {});
+      try {
+        mapping =
+            await widget.services.printedWaste.fetchPrintedWasteServerMapping();
+      } catch (_) {}
+      if (!mounted) return;
+      final old = _views;
+      final views = <String, _ZoneView>{};
+      for (final entry in queue.zones.entries) {
+        if (!isStandardGfnZone(entry.key)) continue;
+        final meta = mapping.servers[entry.key];
+        views[entry.key] = _ZoneView(
+          zoneId: entry.key,
+          zone: entry.value,
+          routingUrl: buildGfnZoneStreamingBaseUrl(entry.key),
+          pingMs: old[entry.key]?.pingMs,
+          nuked: meta?.nuked == true,
+        );
+      }
+      setState(() {
+        _views = views;
+        _error = null;
+      });
+    } catch (_) {
+      // Keep the last known data on transient refresh failures.
+    }
   }
 
   Future<void> _load() async {

@@ -18,13 +18,35 @@ class CatalogService {
   final http.Client client;
   final bool isMac;
 
+  String? _cachedVpcId;
+  final Map<String, ({DateTime at, List<CatalogGame> games})> _cache = {};
+
+  static const _cacheTtl = Duration(minutes: 5);
+
   CatalogService({required this.client, required this.isMac});
 
+  List<CatalogGame>? _cached(String key) {
+    final hit = _cache[key];
+    if (hit == null) return null;
+    if (DateTime.now().difference(hit.at) > _cacheTtl) {
+      _cache.remove(key);
+      return null;
+    }
+    return hit.games;
+  }
+
+  void _store(String key, List<CatalogGame> games) {
+    _cache[key] = (at: DateTime.now(), games: games);
+  }
+
   /// Port of gameAppMapper.ts getVpcId — resolves the server's VPC ID.
+  /// Cached for the lifetime of the service.
   Future<String> getVpcId({
     String? token,
     String? providerStreamingBaseUrl,
   }) async {
+    final cached = _cachedVpcId;
+    if (cached != null) return cached;
     Uri validatedBaseUrl;
     try {
       final candidate =
@@ -57,13 +79,19 @@ class CatalogService {
       ),
     );
 
-    if (response.statusCode != 200) return 'GFN-PC';
+    if (response.statusCode != 200) {
+      _cachedVpcId = 'GFN-PC';
+      return _cachedVpcId!;
+    }
 
     final decoded = jsonDecode(response.body);
     final requestStatus =
         decoded is Map ? decoded['requestStatus'] : null;
     final serverId = requestStatus is Map ? requestStatus['serverId'] : null;
-    return serverId is String && serverId.isNotEmpty ? serverId : 'GFN-PC';
+    _cachedVpcId = serverId is String && serverId.isNotEmpty
+        ? serverId
+        : 'GFN-PC';
+    return _cachedVpcId!;
   }
 
   /// Port of catalogBrowse.ts fetchPanels — fetch home/library/marquee panels.
@@ -142,12 +170,16 @@ class CatalogService {
     required String token,
     String? providerStreamingBaseUrl,
   }) async {
+    final cached = _cached('main');
+    if (cached != null) return cached;
     final payload = await fetchPanels(
       token: token,
       panelNames: ['MAIN'],
       providerStreamingBaseUrl: providerStreamingBaseUrl,
     );
-    return flattenPanels(payload);
+    final games = flattenPanels(payload);
+    _store('main', games);
+    return games;
   }
 
   /// Port of catalogBrowse.ts featuredGamesFromPanels + fetchFeaturedGames
@@ -155,13 +187,16 @@ class CatalogService {
     required String token,
     String? providerStreamingBaseUrl,
   }) async {
+    final cached = _cached('featured');
+    if (cached != null) return cached;
     final payload = await fetchPanels(
       token: token,
       panelNames: ['MARQUEE'],
       providerStreamingBaseUrl: providerStreamingBaseUrl,
     );
-    final games = flattenPanels(payload);
-    return games.take(6).toList();
+    final games = flattenPanels(payload).take(6).toList();
+    _store('featured', games);
+    return games;
   }
 
   /// Port of catalogBrowse.ts fetchPanels with LIBRARY panels — the user's
@@ -170,12 +205,16 @@ class CatalogService {
     required String token,
     String? providerStreamingBaseUrl,
   }) async {
+    final cached = _cached('library');
+    if (cached != null) return cached;
     final payload = await fetchPanels(
       token: token,
       panelNames: ['LIBRARY'],
       providerStreamingBaseUrl: providerStreamingBaseUrl,
     );
-    return flattenPanels(payload);
+    final games = flattenPanels(payload);
+    _store('library', games);
+    return games;
   }
 
   /// Library games that have a recorded play date, newest first. Port of
@@ -185,6 +224,8 @@ class CatalogService {
     required String token,
     String? providerStreamingBaseUrl,
   }) async {
+    final cached = _cached('recent');
+    if (cached != null) return cached;
     final payload = await fetchPanels(
       token: token,
       panelNames: ['LIBRARY'],
@@ -195,6 +236,7 @@ class CatalogService {
         .where((g) => g.lastPlayedDate != null)
         .toList()
       ..sort((a, b) => b.lastPlayedDate!.compareTo(a.lastPlayedDate!));
+    _store('recent', games);
     return games;
   }
 

@@ -104,6 +104,7 @@ class _HomePageState extends State<HomePage> {
         services: widget.services,
         onSignOut: widget.onSignOut,
         showBrand: widget.showBrand,
+        onRefresh: _load,
       ),
       slivers: _buildSlivers(all),
     );
@@ -262,16 +263,18 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-/// Home top bar: NEXTCLIENT brand on the left; search + profile on the right.
+/// Home top bar: NEXTCLIENT brand on the left; refresh + search + profile.
 class _HomeTopBar extends StatelessWidget {
   final AppServices services;
   final VoidCallback onSignOut;
   final bool showBrand;
+  final VoidCallback onRefresh;
 
   const _HomeTopBar({
     required this.services,
     required this.onSignOut,
     required this.showBrand,
+    required this.onRefresh,
   });
 
   @override
@@ -300,6 +303,12 @@ class _HomeTopBar extends StatelessWidget {
               ),
             ),
           const Spacer(),
+          _TopIconButton(
+            icon: Icons.refresh,
+            tooltip: 'Refresh catalog',
+            onTap: onRefresh,
+          ),
+          const SizedBox(width: 8),
           _TopIconButton(
             icon: Icons.search,
             tooltip: 'Search games',

@@ -22,6 +22,7 @@ class _RegionPageState extends State<RegionPage> {
   List<StreamRegion>? _regions;
   String? _error;
   bool _loading = true;
+  final Map<String, int> _pings = {};
 
   @override
   void initState() {
@@ -46,6 +47,7 @@ class _RegionPageState extends State<RegionPage> {
         _regions = result.regions;
         _loading = false;
       });
+      await _ping(result.regions);
     } catch (e) {
       debugPrint('[region] load failed: $e');
       if (!mounted) return;
@@ -56,12 +58,37 @@ class _RegionPageState extends State<RegionPage> {
     }
   }
 
+  Future<void> _ping(List<StreamRegion> regions) async {
+    if (regions.isEmpty) return;
+    final results = await pingRegions(regions.take(12).toList());
+    if (!mounted) return;
+    setState(() {
+      for (final r in results) {
+        if (r.pingMs != null) _pings[r.url] = r.pingMs!;
+      }
+    });
+  }
+
+  Color _pingColor(int ms) {
+    if (ms < 30) return Neon.success;
+    if (ms < 80) return Neon.violet;
+    if (ms < 150) return Neon.warning;
+    return Neon.error;
+  }
+
   @override
   Widget build(BuildContext context) {
     final regions = _regions;
     return NeonPageScaffold(
       title: 'Region',
       showBack: true,
+      actions: [
+        IconButton(
+          tooltip: 'Re-measure latency',
+          icon: const Icon(Icons.speed, size: 18, color: Neon.inkSoft),
+          onPressed: _regions == null ? null : () => _load(),
+        ),
+      ],
       child: _loading && regions == null
           ? const NeonLoadingView(label: 'Loading regions')
           : _error != null && regions == null
@@ -93,17 +120,36 @@ class _RegionPageState extends State<RegionPage> {
                                       widget.services.settings.selectedRegionUrl =
                                           regions[i].url;
                                     },
-                                    trailing: regions[i].url == selected
-                                        ? const Icon(
-                                            Icons.check_circle,
-                                            color: Neon.accent,
-                                            size: 20,
-                                          )
-                                        : const Icon(
-                                            Icons.circle_outlined,
-                                            color: Neon.inkMuted,
-                                            size: 20,
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (_pings[regions[i].url] != null)
+                                          Padding(
+                                            padding:
+                                                const EdgeInsets.only(right: 10),
+                                            child: Text(
+                                              '${_pings[regions[i].url]}ms',
+                                              style: TextStyle(
+                                                color: _pingColor(
+                                                    _pings[regions[i].url]!),
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
                                           ),
+                                        regions[i].url == selected
+                                            ? const Icon(
+                                                Icons.check_circle,
+                                                color: Neon.accent,
+                                                size: 20,
+                                              )
+                                            : const Icon(
+                                                Icons.circle_outlined,
+                                                color: Neon.inkMuted,
+                                                size: 20,
+                                              ),
+                                      ],
+                                    ),
                                   ),
                                 ],
                               ],

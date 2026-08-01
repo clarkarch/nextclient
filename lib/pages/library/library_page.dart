@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
+import '../../theme/neon.dart';
 import '../../widgets/catalog_game_card.dart';
 import '../../widgets/filter_sort_bar.dart';
 import '../../widgets/guarded_sliver_grid.dart';
@@ -157,19 +158,31 @@ class _LibraryPageState extends State<LibraryPage> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(bottom: 20),
-            child: FilterSortBar(
-              groups: groups,
-              sortOptions: _sortOptions,
-              sortId: _sortId,
-              filterIds: _filterIds,
-              onSortChanged: (id) => setState(() => _sortId = id),
-              onFiltersChanged: (ids) {
-                setState(() {
-                  _filterIds
-                    ..clear()
-                    ..addAll(ids);
-                });
-              },
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilterSortBar(
+                    groups: groups,
+                    sortOptions: _sortOptions,
+                    sortId: _sortId,
+                    filterIds: _filterIds,
+                    onSortChanged: (id) => setState(() => _sortId = id),
+                    onFiltersChanged: (ids) {
+                      setState(() {
+                        _filterIds
+                          ..clear()
+                          ..addAll(ids);
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Refresh library',
+                  icon: const Icon(Icons.refresh, size: 18, color: Neon.inkSoft),
+                  onPressed: _load,
+                ),
+              ],
             ),
           ),
         ),
