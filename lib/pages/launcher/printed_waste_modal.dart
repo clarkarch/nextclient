@@ -47,7 +47,10 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   Map<String, _ZoneView> _views = const {};
   String? _error;
   bool _loading = true;
+  bool _pinging = false;
   String? _selectedZoneId;
+
+  bool get _refreshing => _loading || _pinging;
 
   @override
   void initState() {
@@ -56,7 +59,10 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final queue =
           await widget.services.printedWaste.fetchPrintedWasteQueue();
@@ -84,7 +90,6 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
       setState(() {
         _views = views;
         _loading = false;
-        _error = null;
       });
 
       await _ping();
@@ -100,6 +105,7 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   Future<void> _ping() async {
     final zones = _views.values.where((v) => !v.nuked).toList();
     if (zones.isEmpty) return;
+    setState(() => _pinging = true);
     final regions = zones
         .map((v) => StreamRegion(name: v.zoneId, url: v.routingUrl))
         .toList();
@@ -117,16 +123,30 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
             nuked: e.value.nuked,
           ),
       };
+      _pinging = false;
     });
   }
 
-  String? get _autoZoneId {
-    final eligible = _views.values.where((v) => !v.nuked).toList()
-      ..sort((a, b) => (a.zone.queuePosition ?? 999)
-          .compareTo(b.zone.queuePosition ?? 999));
+  List<_ZoneView> get _eligible => _views.values.where((v) => !v.nuked).toList();
+
+  /// Lowest queue position among eligible zones (the auto default).
+  _ZoneView? get _lowestQueue {
+    final eligible = _eligible;
     if (eligible.isEmpty) return null;
-    return eligible.first.zoneId;
+    eligible.sort((a, b) => (a.zone.queuePosition ?? 999)
+        .compareTo(b.zone.queuePosition ?? 999));
+    return eligible.first;
   }
+
+  /// Lowest ping among eligible zones with a measured ping.
+  _ZoneView? get _lowestPing {
+    final withPing = _eligible.where((v) => v.pingMs != null).toList();
+    if (withPing.isEmpty) return null;
+    withPing.sort((a, b) => a.pingMs!.compareTo(b.pingMs!));
+    return withPing.first;
+  }
+
+  String? get _autoZoneId => _lowestQueue?.zoneId;
 
   void _confirm() {
     final id = _selectedZoneId ?? _autoZoneId;
@@ -189,6 +209,10 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
                 ),
               ],
             ),
+          ),
+          _ReloadButton(
+            spinning: _refreshing,
+            onPressed: _refreshing ? null : _load,
           ),
           IconButton(
             icon: const Icon(Icons.close, color: Neon.inkMuted, size: 20),
@@ -253,18 +277,49 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
       );
     }
 
-    final auto = _autoZoneId;
+    final auto = _lowestQueue;
+    final lowestPing = _lowestPing;
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       children: [
         if (auto != null) ...[
-          _AutoCard(view: _views[auto]!, selected: _selectedZoneId == null),
+          Row(
+            children: [
+              Expanded(
+                child: _RecommendCard(
+                  icon: Icons.bolt,
+                  title: 'Lowest Queue',
+                  subtitle: 'Best ping + queue balance',
+                  view: auto,
+                  selected: _selectedZoneId == null ||
+                      _selectedZoneId == auto.zoneId,
+                  onTap: () => setState(() => _selectedZoneId = null),
+                ),
+              ),
+              if (lowestPing != null) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _RecommendCard(
+                    icon: Icons.speed,
+                    title: 'Lowest Ping',
+                    subtitle: 'Lowest latency to you',
+                    view: lowestPing,
+                    selected: _selectedZoneId == lowestPing.zoneId,
+                    onTap: () => setState(
+                        () => _selectedZoneId = lowestPing.zoneId),
+                  ),
+                ),
+              ],
+            ],
+          ),
           const SizedBox(height: 16),
         ],
         for (final view in eligible) ...[
           _ZoneRow(
             view: view,
-            isAuto: view.zoneId == auto,
+            isAuto: auto != null && view.zoneId == auto.zoneId,
+            isLowestPing:
+                lowestPing != null && view.zoneId == lowestPing.zoneId,
             selected: _selectedZoneId == view.zoneId,
             onTap: () => setState(() {
               _selectedZoneId =
@@ -301,7 +356,7 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
               NeonButton(
                 label: 'Launch',
                 icon: Icons.rocket_launch,
-                onPressed: _loading ? null : _confirm,
+                onPressed: _refreshing ? null : _confirm,
               ),
             ],
           ),
@@ -311,68 +366,95 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   }
 }
 
-class _AutoCard extends StatelessWidget {
+class _RecommendCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
   final _ZoneView view;
   final bool selected;
+  final VoidCallback onTap;
 
-  const _AutoCard({required this.view, required this.selected});
+  const _RecommendCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.view,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: null,
+      onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: selected
-                ? const LinearGradient(
-                    colors: [Color(0x2200D9FF), Color(0x1400A8CC)],
-                  )
-                : null,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          gradient: selected
+              ? const LinearGradient(
+                  colors: [Color(0x2200D9FF), Color(0x1400A8CC)],
+                )
+              : null,
           color: selected ? null : Neon.bgC,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: selected ? Neon.accent : const Color(0x22FFFFFF),
           ),
         ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.bolt, color: Neon.accent, size: 20),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'AUTO SELECTED',
-                    style: TextStyle(
-                      color: Neon.accent,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.2,
-                    ),
+            Row(
+              children: [
+                Icon(icon, color: Neon.accent, size: 16),
+                const SizedBox(width: 6),
+                Text(
+                  title.toUpperCase(),
+                  style: const TextStyle(
+                    color: Neon.accent,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1,
                   ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Best ping + queue balance',
-                    style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-                  ),
-                ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              view.zoneId,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Neon.ink,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
               ),
             ),
-            NeonChip(
-              label: '${view.zone.queuePosition}',
-              tone: _queueTone(view.zone.queuePosition ?? 999),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (view.pingMs != null)
+                  NeonChip(
+                    label: '${view.pingMs}ms',
+                    tone: _pingTone(view.pingMs!),
+                  ),
+                NeonChip(
+                  label: 'Q${view.zone.queuePosition ?? '--'}',
+                  tone: _queueTone(view.zone.queuePosition ?? 999),
+                ),
+              ],
             ),
-            if (view.pingMs != null) ...[
-              const SizedBox(width: 8),
-              NeonChip(
-                label: '${view.pingMs}ms',
-                tone: _pingTone(view.pingMs!),
-              ),
-            ],
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 10.5),
+            ),
           ],
         ),
       ),
@@ -394,15 +476,75 @@ class _AutoCard extends StatelessWidget {
   }
 }
 
+/// Refresh icon that spins while the queue/ping data is being fetched.
+class _ReloadButton extends StatefulWidget {
+  final VoidCallback? onPressed;
+  final bool spinning;
+
+  const _ReloadButton({this.onPressed, this.spinning = false});
+
+  @override
+  State<_ReloadButton> createState() => _ReloadButtonState();
+}
+
+class _ReloadButtonState extends State<_ReloadButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.spinning) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReloadButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.spinning && !_controller.isAnimating) {
+      _controller.repeat();
+    } else if (!widget.spinning && _controller.isAnimating) {
+      _controller.stop();
+      _controller.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Reload queue data',
+      icon: RotationTransition(
+        turns: _controller,
+        child: Icon(
+          Icons.refresh,
+          color: widget.spinning ? Neon.accent : Neon.inkMuted,
+          size: 20,
+        ),
+      ),
+      onPressed: widget.onPressed,
+    );
+  }
+}
+
 class _ZoneRow extends StatelessWidget {
   final _ZoneView view;
   final bool isAuto;
+  final bool isLowestPing;
   final bool selected;
   final VoidCallback onTap;
 
   const _ZoneRow({
     required this.view,
     required this.isAuto,
+    required this.isLowestPing,
     required this.selected,
     required this.onTap,
   });
@@ -448,9 +590,21 @@ class _ZoneRow extends StatelessWidget {
             if (isAuto) ...[
               const SizedBox(width: 6),
               const Text(
-                'AUTO',
+                'QUEUE',
                 style: TextStyle(
                   color: Neon.accent,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+            if (isLowestPing && !isAuto) ...[
+              const SizedBox(width: 6),
+              const Text(
+                'PING',
+                style: TextStyle(
+                  color: Neon.violet,
                   fontSize: 9.5,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 1,
