@@ -85,7 +85,30 @@ class _AccountPageState extends State<AccountPage> {
                       icon: Icons.logout,
                       onPressed: () async {
                         await widget.services.auth.logout();
+                        if (!context.mounted) return;
+                        final messenger = ScaffoldMessenger.of(context);
+                        // Pop any pushed routes (Account / Settings sub-screens)
+                        // so the rebuilt Login page is visible underneath.
                         widget.onSignOut();
+                        Navigator.of(
+                          context,
+                        ).popUntil((route) => route.isFirst);
+                        messenger.hideCurrentSnackBar();
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            behavior: SnackBarBehavior.floating,
+                            duration: Duration(seconds: 2),
+                            backgroundColor: Neon.bgC,
+                            content: Text(
+                              'Signed out',
+                              style: TextStyle(
+                                color: Neon.ink,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        );
                       },
                     ),
                   ],
@@ -204,22 +227,20 @@ class _AccountPageState extends State<AccountPage> {
             const SizedBox(height: 4),
             Text(
               user.email!,
-              style: const TextStyle(
-                color: Neon.inkMuted,
-                fontSize: 13,
-              ),
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 13),
             ),
           ],
           const SizedBox(height: 10),
           NeonChip(
             label: _subscription?.membershipTier ?? user.membershipTier,
-            tone: (user.membershipTier == 'ULTIMATE' ||
+            tone:
+                (user.membershipTier == 'ULTIMATE' ||
                     _subscription?.membershipTier == 'ULTIMATE')
                 ? NeonChipTone.accent
                 : (user.membershipTier == 'PRIORITY' ||
-                        _subscription?.membershipTier == 'PRIORITY')
-                    ? NeonChipTone.violet
-                    : NeonChipTone.neutral,
+                      _subscription?.membershipTier == 'PRIORITY')
+                ? NeonChipTone.violet
+                : NeonChipTone.neutral,
             filled: true,
           ),
         ],
@@ -242,74 +263,73 @@ class _AccountPageState extends State<AccountPage> {
               ),
             )
           : sub == null
-              ? const Text(
-                  'Subscription details unavailable.',
-                  style: TextStyle(color: Neon.inkMuted, fontSize: 12.5),
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'PLAN',
-                      style: TextStyle(
-                        color: Neon.accent,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 2,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (sub.isUnlimited) ...[
-                      const _PlanRow(label: 'Type', value: 'Unlimited'),
-                      const Divider(height: 14),
-                    ],
-                    _PlanRow(
-                      label: 'Remaining',
-                      value: sub.isUnlimited
-                          ? 'Unlimited'
-                          : '${sub.remainingHours.toStringAsFixed(1)} h',
-                    ),
-                    const Divider(height: 14),
-                    _PlanRow(
-                      label: 'Used',
-                      value: '${sub.usedHours.toStringAsFixed(1)} h',
-                    ),
-                    if (sub.storageAddon != null) ...[
-                      const Divider(height: 14),
-                      _PlanRow(
-                        label: 'Storage',
-                        value:
-                            '${sub.storageAddon!.sizeGb?.toStringAsFixed(0) ?? '?'} GB'
-                                ' · ${sub.storageAddon!.regionName ?? 'N/A'}',
-                      ),
-                    ],
-                    if (sub.entitledResolutions.isNotEmpty) ...[
-                      const Divider(height: 14),
-                      const Text(
-                        'ENTITLED RESOLUTIONS',
-                        style: TextStyle(
-                          color: Neon.inkMuted,
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final r in sub.entitledResolutions)
-                            NeonChip(
-                              label:
-                                  '${r.width}x${r.height} · ${r.fps}fps',
-                              tone: NeonChipTone.violet,
-                            ),
-                        ],
-                      ),
-                    ],
-                  ],
+          ? const Text(
+              'Subscription details unavailable.',
+              style: TextStyle(color: Neon.inkMuted, fontSize: 12.5),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'PLAN',
+                  style: TextStyle(
+                    color: Neon.accent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2,
+                  ),
                 ),
+                const SizedBox(height: 12),
+                if (sub.isUnlimited) ...[
+                  const _PlanRow(label: 'Type', value: 'Unlimited'),
+                  const Divider(height: 14),
+                ],
+                _PlanRow(
+                  label: 'Remaining',
+                  value: sub.isUnlimited
+                      ? 'Unlimited'
+                      : '${sub.remainingHours.toStringAsFixed(1)} h',
+                ),
+                const Divider(height: 14),
+                _PlanRow(
+                  label: 'Used',
+                  value: '${sub.usedHours.toStringAsFixed(1)} h',
+                ),
+                if (sub.storageAddon != null) ...[
+                  const Divider(height: 14),
+                  _PlanRow(
+                    label: 'Storage',
+                    value:
+                        '${sub.storageAddon!.sizeGb?.toStringAsFixed(0) ?? '?'} GB'
+                        ' · ${sub.storageAddon!.regionName ?? 'N/A'}',
+                  ),
+                ],
+                if (sub.entitledResolutions.isNotEmpty) ...[
+                  const Divider(height: 14),
+                  const Text(
+                    'ENTITLED RESOLUTIONS',
+                    style: TextStyle(
+                      color: Neon.inkMuted,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.4,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final r in sub.entitledResolutions)
+                        NeonChip(
+                          label: '${r.width}x${r.height} · ${r.fps}fps',
+                          tone: NeonChipTone.violet,
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
     );
   }
 
@@ -431,10 +451,7 @@ class _AccountRow extends StatelessWidget {
                   ),
                   Text(
                     account.email ?? account.providerCode,
-                    style: const TextStyle(
-                      color: Neon.inkMuted,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
                   ),
                 ],
               ),
@@ -446,8 +463,11 @@ class _AccountRow extends StatelessWidget {
             IconButton(
               tooltip: 'Remove account',
               visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.delete_outline,
-                  size: 16, color: Neon.inkMuted),
+              icon: const Icon(
+                Icons.delete_outline,
+                size: 16,
+                color: Neon.inkMuted,
+              ),
               onPressed: onRemove,
             ),
           ],

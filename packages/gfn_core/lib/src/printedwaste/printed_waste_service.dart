@@ -22,7 +22,7 @@ class PrintedWasteService {
         .get(
           Uri.parse(printedWasteQueueUrl),
           headers: {
-            'User-Agent': 'opennow/$appVersion',
+            'User-Agent': 'nextclient/$appVersion',
             'Accept': 'application/json',
           },
         )
@@ -78,7 +78,7 @@ class PrintedWasteService {
         .get(
           Uri.parse(printedWasteServerMappingUrl),
           headers: {
-            'User-Agent': 'opennow/$appVersion',
+            'User-Agent': 'nextclient/$appVersion',
             'Accept': 'application/json',
           },
         )

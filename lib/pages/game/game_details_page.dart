@@ -93,11 +93,7 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
           constraints: const BoxConstraints(maxWidth: 860),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _hero(),
-              const SizedBox(height: 20),
-              _meta(),
-            ],
+            children: [_hero(), const SizedBox(height: 20), _meta()],
           ),
         ),
       ),
@@ -109,10 +105,16 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
     final heroUrl = details?.heroImageUrl ?? widget.game.imageUrl;
     return Stack(
       children: [
-        GameArt(
-          imageUrl: heroUrl,
-          label: widget.game.title,
-          borderRadius: const BorderRadius.all(Radius.circular(22)),
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: const BorderRadius.all(Radius.circular(22)),
+            boxShadow: Neon.softShadow(radius: 30),
+          ),
+          child: GameArt(
+            imageUrl: heroUrl,
+            label: widget.game.title,
+            borderRadius: const BorderRadius.all(Radius.circular(22)),
+          ),
         ),
         Positioned(
           left: 20,
@@ -134,9 +136,7 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
                         fontSize: 30,
                         fontWeight: FontWeight.w900,
                         letterSpacing: 0.3,
-                        shadows: [
-                          Shadow(color: Colors.black, blurRadius: 14),
-                        ],
+                        shadows: [Shadow(color: Colors.black, blurRadius: 14)],
                       ),
                     ),
                     if (widget.game.publisherName != null)
@@ -145,9 +145,7 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
                         style: const TextStyle(
                           color: Neon.inkSoft,
                           fontSize: 13,
-                          shadows: [
-                            Shadow(color: Colors.black, blurRadius: 8),
-                          ],
+                          shadows: [Shadow(color: Colors.black, blurRadius: 8)],
                         ),
                       ),
                   ],
@@ -184,10 +182,7 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
       if (details?.genres.isNotEmpty ?? false)
         ...details!.genres.map((g) => NeonChip(label: g)),
       if (game.playabilityState != null)
-        NeonChip(
-          label: game.playabilityState!,
-          tone: NeonChipTone.success,
-        ),
+        NeonChip(label: game.playabilityState!, tone: NeonChipTone.success),
     ];
 
     String? description;

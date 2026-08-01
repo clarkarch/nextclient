@@ -94,15 +94,9 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     if (_session == null) {
-      return LoginPage(
-        services: widget.services,
-        onAuthenticated: _refresh,
-      );
+      return LoginPage(services: widget.services, onAuthenticated: _refresh);
     }
-    return Shell(
-      services: widget.services,
-      onSignOut: _refresh,
-    );
+    return Shell(services: widget.services, onSignOut: _refresh);
   }
 }
 
@@ -133,7 +127,6 @@ class _ShellState extends State<Shell> {
       final session = await widget.services.auth.ensureValidSession();
       if (session == null) return;
       final token = session.tokens.idToken ?? session.tokens.accessToken;
-      if (token == null) return;
       final active = await widget.services.cloudMatch.getActiveSessions(
         token: token,
         streamingBaseUrl: 'https://prod.cloudmatchbeta.nvidiagrid.net/',
@@ -203,10 +196,7 @@ class _ShellState extends State<Shell> {
         showBrand: !_sidebarExpanded,
       ),
       LibraryPage(services: widget.services),
-      SettingsPage(
-        services: widget.services,
-        onSignOut: widget.onSignOut,
-      ),
+      SettingsPage(services: widget.services, onSignOut: widget.onSignOut),
     ];
 
     return Scaffold(

@@ -3,6 +3,7 @@ import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
 import '../../state/user_settings.dart';
+import '../../theme/neon.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_dropdown.dart';
 import '../../widgets/neon_option_chip.dart';
@@ -40,10 +41,22 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
     ],
     '21:9': [
       _ResOption('2560x1080', 'Ultrawide 1080p', OptionTier.free, 2560, 1080),
-      _ResOption('3440x1440', 'Ultrawide 1440p', OptionTier.priority, 3440, 1440),
+      _ResOption(
+        '3440x1440',
+        'Ultrawide 1440p',
+        OptionTier.priority,
+        3440,
+        1440,
+      ),
     ],
     '32:9': [
-      _ResOption('5120x1440', 'Super Ultrawide', OptionTier.ultimate, 5120, 1440),
+      _ResOption(
+        '5120x1440',
+        'Super Ultrawide',
+        OptionTier.ultimate,
+        5120,
+        1440,
+      ),
     ],
   };
 
@@ -184,8 +197,9 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
                 label: ratio,
                 selected: ratio == currentRatio,
                 onTap: () {
-                  final inRatio = _resolutions[ratio]!
-                      .any((r) => r.resolution == s.resolution);
+                  final inRatio = _resolutions[ratio]!.any(
+                    (r) => r.resolution == s.resolution,
+                  );
                   if (!inRatio) {
                     s.resolution = _resolutions[ratio]!.first.resolution;
                   }
@@ -203,7 +217,11 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
                 label: opt.label,
                 selected: opt.resolution == s.resolution,
                 tier: opt.tier,
-                enabled: _canUse(opt.tier, width: opt.width, height: opt.height),
+                enabled: _canUse(
+                  opt.tier,
+                  width: opt.width,
+                  height: opt.height,
+                ),
                 onTap: () => s.resolution = opt.resolution,
               ),
           ],
@@ -248,7 +266,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
             '${s.maxBitrateMbps} Mbps',
             textAlign: TextAlign.right,
             style: const TextStyle(
-              color: Color(0xFF00D9FF),
+              color: Neon.accent,
               fontSize: 13,
               fontWeight: FontWeight.w800,
             ),
@@ -281,9 +299,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
         ColorQuality(bitDepth: 0, chromaFormat: 1),
         ColorQuality(bitDepth: 1, chromaFormat: 0),
         ColorQuality(bitDepth: 1, chromaFormat: 1),
-      ]
-          .map((c) => NeonDropdownItem(c, _colorLabel(c)))
-          .toList(),
+      ].map((c) => NeonDropdownItem(c, _colorLabel(c))).toList(),
     );
   }
 
@@ -365,7 +381,7 @@ class _SectionLabel extends StatelessWidget {
     return Text(
       label.toUpperCase(),
       style: const TextStyle(
-        color: Color(0xFF00D9FF),
+        color: Neon.accent,
         fontSize: 11,
         fontWeight: FontWeight.w800,
         letterSpacing: 2,

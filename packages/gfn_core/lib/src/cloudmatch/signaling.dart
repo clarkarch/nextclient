@@ -142,7 +142,10 @@ ResolvedSignaling resolveSignaling(CloudMatchResponse response) {
   if (raw.startsWith('wss://')) {
     final withoutScheme = raw.substring('wss://'.length);
     final host = withoutScheme.split('/').first;
-    return (signalingUrl: raw, signalingHost: host.isEmpty ? null : host);
+    return (
+      signalingUrl: _normalizeSignalingPort(raw),
+      signalingHost: _normalizeHostPort(host),
+    );
   }
 
   if (raw.startsWith('/')) {
@@ -150,6 +153,26 @@ ResolvedSignaling resolveSignaling(CloudMatchResponse response) {
   }
 
   return (signalingUrl: 'wss://$serverIp:443/nvst/', signalingHost: null);
+}
+
+/// NVIDIA's beta CloudMatch sometimes places port `0` in the signaling
+/// resourcePath as a placeholder meaning "use the default port" (443 for wss).
+/// A client can never connect to port 0, so rewrite it to 443.
+String _normalizeSignalingPort(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || !uri.hasPort || uri.port != 0) return url;
+  return uri.replace(port: 443).toString();
+}
+
+/// Strips a trailing `:0` placeholder port from a host string so derived
+/// `signalingServer` values don't carry the unconnectable port.
+String? _normalizeHostPort(String host) {
+  if (host.isEmpty) return null;
+  if (host.endsWith(':0')) {
+    final stripped = host.substring(0, host.length - 2);
+    return stripped.isEmpty ? null : stripped;
+  }
+  return host;
 }
 
 /// Port of resolveMediaConnectionInfo — priority chain:

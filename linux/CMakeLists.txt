@@ -70,6 +70,12 @@ set_target_properties(${BINARY_NAME}
 )
 
 
+# flutter_webrtc bundles libwebrtc headers (rtc_types.h etc.) that use
+# uint32_t/uint8_t without including <stdint.h>, which newer GCC (>= 13,
+# e.g. Arch/CachyOS) rejects with "unknown type name 'uint32_t'".
+# Force-include the header for all plugin targets built below.
+add_compile_options(-include stdint.h)
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)

@@ -26,6 +26,7 @@ class NeonDropdown<T> extends StatelessWidget {
         color: const Color(0x0FFFFFFF),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0x33FFFFFF)),
+        boxShadow: Neon.softShadow(radius: 10),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(
@@ -35,17 +36,19 @@ class NeonDropdown<T> extends StatelessWidget {
           icon: const Icon(Icons.expand_more, color: Neon.accent, size: 18),
           style: const TextStyle(color: Neon.ink, fontSize: 13),
           items: items
-              .map((i) => DropdownMenuItem(
-                    value: i.value,
-                    child: Text(
-                      i.label,
-                      style: const TextStyle(
-                        color: Neon.ink,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
+              .map(
+                (i) => DropdownMenuItem(
+                  value: i.value,
+                  child: Text(
+                    i.label,
+                    style: const TextStyle(
+                      color: Neon.ink,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
-                  ))
+                  ),
+                ),
+              )
               .toList(),
           onChanged: onChanged,
         ),

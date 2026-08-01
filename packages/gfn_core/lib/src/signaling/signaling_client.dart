@@ -59,9 +59,16 @@ class GfnSignalingClient {
     final fallbackHost = signalingServer.contains(':')
         ? signalingServer
         : '$signalingServer:443';
-    final baseUrl = (signalingUrl?.trim().isNotEmpty ?? false)
+    var baseUrl = (signalingUrl?.trim().isNotEmpty ?? false)
         ? signalingUrl!.trim()
         : 'wss://$fallbackHost/nvst/';
+
+    // NVIDIA beta responses sometimes carry port 0 as a placeholder meaning
+    // "use the default port". Port 0 is never connectable — normalize it.
+    final parsed = Uri.tryParse(baseUrl);
+    if (parsed != null && parsed.hasPort && parsed.port == 0) {
+      baseUrl = parsed.replace(port: 443).toString();
+    }
 
     final uri = Uri.parse(baseUrl);
     var path = uri.path;
@@ -111,6 +118,10 @@ class GfnSignalingClient {
     final urlHost = url.replaceFirst(RegExp(r'^wss?://'), '').split('/').first;
     final channel = IOWebSocketChannel.connect(
       Uri.parse(url),
+      // NVIDIA's NVST signaling endpoint requires the
+      // `x-nv-sessionid.<sessionId>` subprotocol (Sec-WebSocket-Protocol);
+      // without it the server rejects the upgrade with HTTP 400.
+      protocols: [protocol],
       headers: {
         'Host': urlHost,
         'Origin': gfnPlayOrigin,
@@ -147,6 +158,25 @@ class GfnSignalingClient {
         ));
       },
     );
+
+    // Wait for the underlying socket before declaring the channel connected.
+    // Awaiting `ready` also gives a failed upgrade a listener, so its error is
+    // delivered to [completer] instead of escaping as an unhandled async
+    // exception (the stream's onError above reports it to the UI as well).
+    try {
+      await channel.ready;
+    } catch (error) {
+      if (!completer.isCompleted) {
+        completer.completeError(error);
+      }
+      return completer.future;
+    }
+    if (!_isCurrentSocket(generation)) {
+      // Disconnected while the socket was coming up; don't leave the caller
+      // awaiting a future that never completes.
+      if (!completer.isCompleted) completer.complete();
+      return completer.future;
+    }
 
     _emit(MainToRendererSignalingEvent(
       type: MainToRendererSignalingEventType.connected,

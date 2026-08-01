@@ -49,8 +49,8 @@ class _SearchPageState extends State<SearchPage> {
   Future<void> _init() async {
     try {
       final token = await widget.services.auth.resolveJwtToken();
-      final definitions =
-          await widget.services.catalog.fetchFilterSortDefinitions(token: token);
+      final definitions = await widget.services.catalog
+          .fetchFilterSortDefinitions(token: token);
       if (!mounted) return;
       setState(() {
         _definitions = definitions;
@@ -127,24 +127,30 @@ class _SearchPageState extends State<SearchPage> {
       SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.only(top: 4, bottom: 14),
-          child: TextField(
-            controller: _query,
-            autofocus: true,
-            onChanged: _onQueryChanged,
-            style: const TextStyle(color: Neon.ink, fontSize: 14),
-            decoration: InputDecoration(
-              hintText: 'Search games…',
-              hintStyle: const TextStyle(color: Neon.inkMuted, fontSize: 13),
-              prefixIcon: const Icon(Icons.search, color: Neon.inkMuted),
-              filled: true,
-              fillColor: Neon.bgC,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide.none,
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: Neon.accent, width: 1.4),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: Neon.softShadow(radius: 14),
+            ),
+            child: TextField(
+              controller: _query,
+              autofocus: true,
+              onChanged: _onQueryChanged,
+              style: const TextStyle(color: Neon.ink, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search games…',
+                hintStyle: const TextStyle(color: Neon.inkMuted, fontSize: 13),
+                prefixIcon: const Icon(Icons.search, color: Neon.inkMuted),
+                filled: true,
+                fillColor: Neon.bgC,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Neon.accent, width: 1.4),
+                ),
               ),
             ),
           ),
@@ -185,7 +191,7 @@ class _SearchPageState extends State<SearchPage> {
             child: Center(
               child: Text(
                 'No games match your search.',
-                style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+                style: TextStyle(color: Neon.inkMuted, fontSize: 13),
               ),
             ),
           ),
@@ -210,25 +216,22 @@ class _SearchPageState extends State<SearchPage> {
               mainAxisSpacing: 26,
               crossAxisSpacing: 16,
             ),
-            delegate: SliverChildBuilderDelegate(
-              (context, i) {
-                final game = _games[i];
-                return CatalogGameCard(
-                  game: game,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => GameDetailsPage(
-                          services: widget.services,
-                          game: game,
-                        ),
+            delegate: SliverChildBuilderDelegate((context, i) {
+              final game = _games[i];
+              return CatalogGameCard(
+                game: game,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => GameDetailsPage(
+                        services: widget.services,
+                        game: game,
                       ),
-                    );
-                  },
-                );
-              },
-              childCount: _games.length,
-            ),
+                    ),
+                  );
+                },
+              );
+            }, childCount: _games.length),
           ),
         ),
       ],

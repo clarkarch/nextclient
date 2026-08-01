@@ -23,11 +23,7 @@ class LauncherDialog extends StatefulWidget {
   final AppServices services;
   final CatalogGame game;
 
-  const LauncherDialog({
-    super.key,
-    required this.services,
-    required this.game,
-  });
+  const LauncherDialog({super.key, required this.services, required this.game});
 
   @override
   State<LauncherDialog> createState() => _LauncherDialogState();
@@ -80,14 +76,14 @@ class _LauncherDialogState extends State<LauncherDialog> {
 
     setState(() => _launching = true);
 
-    var baseUrl = widget.services.settings.selectedRegionUrl ??
-        _defaultStreamingBaseUrl;
+    var baseUrl =
+        widget.services.settings.selectedRegionUrl ?? _defaultStreamingBaseUrl;
 
     // Free tier: pick a community-queue server (printedwaste) first.
     if (_isFreeTier) {
       try {
-        final queue =
-            await widget.services.printedWaste.fetchPrintedWasteQueue();
+        final queue = await widget.services.printedWaste
+            .fetchPrintedWasteQueue();
         var mapping = const PrintedWasteServerMapping(servers: {});
         try {
           mapping = await widget.services.printedWaste
@@ -117,10 +113,9 @@ class _LauncherDialogState extends State<LauncherDialog> {
     }
 
     if (!mounted) return;
-    Navigator.of(context).pop(LaunchPlan(
-      appId: appId,
-      streamingBaseUrl: baseUrl,
-    ));
+    Navigator.of(
+      context,
+    ).pop(LaunchPlan(appId: appId, streamingBaseUrl: baseUrl));
   }
 
   @override
@@ -156,8 +151,7 @@ class _LauncherDialogState extends State<LauncherDialog> {
                       _StoreChip(
                         label: _storeLabel(v),
                         selected: v.id == _selectedVariantId,
-                        onTap: () =>
-                            setState(() => _selectedVariantId = v.id),
+                        onTap: () => setState(() => _selectedVariantId = v.id),
                       ),
                   ],
                 ),
@@ -167,8 +161,9 @@ class _LauncherDialogState extends State<LauncherDialog> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed:
-                        _launching ? null : () => Navigator.of(context).pop(),
+                    onPressed: _launching
+                        ? null
+                        : () => Navigator.of(context).pop(),
                     style: TextButton.styleFrom(
                       foregroundColor: Neon.inkSoft,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -194,12 +189,18 @@ class _LauncherDialogState extends State<LauncherDialog> {
   Widget _header() {
     return Row(
       children: [
-        SizedBox(
-          width: 96,
-          child: GameArt(
-            imageUrl: widget.game.imageUrl,
-            label: widget.game.title,
+        Container(
+          decoration: BoxDecoration(
             borderRadius: const BorderRadius.all(Radius.circular(12)),
+            boxShadow: Neon.softShadow(radius: 14),
+          ),
+          child: SizedBox(
+            width: 96,
+            child: GameArt(
+              imageUrl: widget.game.imageUrl,
+              label: widget.game.title,
+              borderRadius: const BorderRadius.all(Radius.circular(12)),
+            ),
           ),
         ),
         const SizedBox(width: 16),

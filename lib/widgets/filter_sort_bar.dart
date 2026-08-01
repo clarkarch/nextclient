@@ -34,12 +34,13 @@ class _FilterSortBarState extends State<FilterSortBar> {
   int get _activeCount => widget.filterIds.length;
 
   void _openFilters(BuildContext anchor) {
-    final overlay =
-        Overlay.of(anchor).context.findRenderObject() as RenderBox?;
+    final overlay = Overlay.of(anchor).context.findRenderObject() as RenderBox?;
     final box = anchor.findRenderObject() as RenderBox?;
     if (overlay == null || box == null) return;
-    final offset =
-        box.localToGlobal(Offset(0, box.size.height), ancestor: overlay);
+    final offset = box.localToGlobal(
+      Offset(0, box.size.height),
+      ancestor: overlay,
+    );
 
     showDialog<void>(
       context: anchor,
@@ -71,6 +72,7 @@ class _FilterSortBarState extends State<FilterSortBar> {
       decoration: BoxDecoration(
         color: Neon.bgC,
         borderRadius: BorderRadius.circular(14),
+        boxShadow: Neon.softShadow(radius: 14),
       ),
       child: Row(
         children: [

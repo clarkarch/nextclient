@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../main.dart';
 import '../../theme/neon.dart';
@@ -74,12 +75,11 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
 
   Future<void> _refreshQueueOnly() async {
     try {
-      final queue =
-          await widget.services.printedWaste.fetchPrintedWasteQueue();
+      final queue = await widget.services.printedWaste.fetchPrintedWasteQueue();
       var mapping = const PrintedWasteServerMapping(servers: {});
       try {
-        mapping =
-            await widget.services.printedWaste.fetchPrintedWasteServerMapping();
+        mapping = await widget.services.printedWaste
+            .fetchPrintedWasteServerMapping();
       } catch (_) {}
       if (!mounted) return;
       final old = _views;
@@ -110,12 +110,11 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
       _error = null;
     });
     try {
-      final queue =
-          await widget.services.printedWaste.fetchPrintedWasteQueue();
+      final queue = await widget.services.printedWaste.fetchPrintedWasteQueue();
       var mapping = const PrintedWasteServerMapping(servers: {});
       try {
-        mapping =
-            await widget.services.printedWaste.fetchPrintedWasteServerMapping();
+        mapping = await widget.services.printedWaste
+            .fetchPrintedWasteServerMapping();
       } catch (_) {
         // Mapping is optional; without it nothing is nuked.
       }
@@ -173,7 +172,8 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
     });
   }
 
-  List<_ZoneView> get _eligible => _views.values.where((v) => !v.nuked).toList();
+  List<_ZoneView> get _eligible =>
+      _views.values.where((v) => !v.nuked).toList();
 
   /// Auto-selected zone: weighted best ping + queue, with queue prioritized.
   _ZoneView? get _autoZone {
@@ -193,8 +193,9 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
     var bestScore = double.infinity;
     for (final v in pool) {
       final pingScore = maxPing <= 0 ? 0 : (v.pingMs ?? maxPing) / maxPing;
-      final queueScore =
-          maxQueue <= 0 ? 0 : (v.zone.queuePosition ?? maxQueue) / maxQueue;
+      final queueScore = maxQueue <= 0
+          ? 0
+          : (v.zone.queuePosition ?? maxQueue) / maxQueue;
       // Queue is prioritized over ping.
       final score = pingScore * 0.4 + queueScore * 0.6;
       if (score < bestScore) {
@@ -209,8 +210,10 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   _ZoneView? get _lowestQueue {
     final eligible = _eligible;
     if (eligible.isEmpty) return null;
-    eligible.sort((a, b) => (a.zone.queuePosition ?? 999)
-        .compareTo(b.zone.queuePosition ?? 999));
+    eligible.sort(
+      (a, b) =>
+          (a.zone.queuePosition ?? 999).compareTo(b.zone.queuePosition ?? 999),
+    );
     return eligible.first;
   }
 
@@ -241,9 +244,7 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _header(),
-            Flexible(
-              child: _body(),
-            ),
+            Flexible(child: _body()),
             _footer(),
           ],
         ),
@@ -304,7 +305,10 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
       return const Padding(
         padding: EdgeInsets.all(40),
         child: Center(
-          child: CircularProgressIndicator(color: Neon.accent, strokeWidth: 2.5),
+          child: CircularProgressIndicator(
+            color: Neon.accent,
+            strokeWidth: 2.5,
+          ),
         ),
       );
     }
@@ -343,8 +347,9 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
         } else if (b.pingMs != null) {
           return 1;
         }
-        return (a.zone.queuePosition ?? 999)
-            .compareTo(b.zone.queuePosition ?? 999);
+        return (a.zone.queuePosition ?? 999).compareTo(
+          b.zone.queuePosition ?? 999,
+        );
       });
 
     if (eligible.isEmpty) {
@@ -375,8 +380,8 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
                   title: 'Auto',
                   subtitle: 'Ping + queue · queue priority',
                   view: auto,
-                  selected: _selectedZoneId == null ||
-                      _selectedZoneId == auto.zoneId,
+                  selected:
+                      _selectedZoneId == null || _selectedZoneId == auto.zoneId,
                   onTap: () => setState(() => _selectedZoneId = null),
                 ),
               ),
@@ -387,12 +392,14 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
                   title: 'Lowest Queue',
                   subtitle: 'Shortest wait',
                   view: lowestQueue ?? auto,
-                  selected: lowestQueue != null &&
+                  selected:
+                      lowestQueue != null &&
                       _selectedZoneId == lowestQueue.zoneId,
                   onTap: lowestQueue == null
                       ? null
                       : () => setState(
-                          () => _selectedZoneId = lowestQueue.zoneId),
+                          () => _selectedZoneId = lowestQueue.zoneId,
+                        ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -402,12 +409,13 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
                   title: 'Lowest Ping',
                   subtitle: 'Lowest latency to you',
                   view: lowestPing ?? auto,
-                  selected: lowestPing != null &&
+                  selected:
+                      lowestPing != null &&
                       _selectedZoneId == lowestPing.zoneId,
                   onTap: lowestPing == null
                       ? null
-                      : () => setState(
-                          () => _selectedZoneId = lowestPing.zoneId),
+                      : () =>
+                            setState(() => _selectedZoneId = lowestPing.zoneId),
                 ),
               ),
             ],
@@ -424,8 +432,9 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
                 lowestPing != null && view.zoneId == lowestPing.zoneId,
             selected: _selectedZoneId == view.zoneId,
             onTap: () => setState(() {
-              _selectedZoneId =
-                  _selectedZoneId == view.zoneId ? null : view.zoneId;
+              _selectedZoneId = _selectedZoneId == view.zoneId
+                  ? null
+                  : view.zoneId;
             }),
           ),
           const SizedBox(height: 6),
@@ -440,11 +449,29 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          GestureDetector(
-            onTap: () => Navigator.of(context).pop(null),
-            child: const Text(
-              'Powered by PrintedWaste',
-              style: TextStyle(color: Neon.inkMuted, fontSize: 11),
+          InkWell(
+            onTap: () => launchUrl(
+              Uri.parse('https://printedwaste.com/gfn'),
+              mode: LaunchMode.externalApplication,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Powered by PrintedWaste',
+                    style: TextStyle(
+                      color: Neon.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  SizedBox(width: 4),
+                  Icon(Icons.open_in_new, size: 11, color: Neon.accent),
+                ],
+              ),
             ),
           ),
           Row(
@@ -505,13 +532,20 @@ class _RecommendCard extends StatelessWidget {
           border: Border.all(
             color: selected ? Neon.accent : const Color(0x22FFFFFF),
           ),
+          boxShadow: selected
+              ? Neon.glowShadow(radius: 14, alpha: 0.25)
+              : Neon.softShadow(radius: 12),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(icon, color: enabled ? Neon.accent : Neon.inkMuted, size: 15),
+                Icon(
+                  icon,
+                  color: enabled ? Neon.accent : Neon.inkMuted,
+                  size: 15,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(

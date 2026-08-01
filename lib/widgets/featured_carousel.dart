@@ -43,8 +43,7 @@ class FeaturedSlide {
 }
 
 class _FeaturedCarouselState extends State<FeaturedCarousel> {
-  final PageController _controller =
-      PageController(viewportFraction: 0.92);
+  final PageController _controller = PageController(viewportFraction: 0.92);
   int _index = 0;
   Timer? _timer;
 
@@ -164,69 +163,73 @@ class _Slide extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onSelect,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            _CoverImage(url: slide.imageUrl, label: slide.title),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: Neon.scrim,
-              ),
-              child: Align(
-                alignment: Alignment.bottomLeft,
-                child: Padding(
-                  padding: const EdgeInsets.all(22),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (slide.chips != null && slide.chips!.isNotEmpty)
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 6,
-                            children: slide.chips!,
-                          ),
-                        const SizedBox(height: 8),
-                        Text(
-                          slide.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Neon.ink,
-                            fontSize: 24,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 0.3,
-                            shadows: [
-                              Shadow(color: Colors.black, blurRadius: 12),
-                            ],
-                          ),
-                        ),
-                        if (slide.subtitle != null) ...[
-                          const SizedBox(height: 2),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: Neon.softShadow(radius: 26),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _CoverImage(url: slide.imageUrl, label: slide.title),
+              DecoratedBox(
+                decoration: BoxDecoration(gradient: Neon.scrim),
+                child: Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.all(22),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (slide.chips != null && slide.chips!.isNotEmpty)
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: slide.chips!,
+                            ),
+                          const SizedBox(height: 8),
                           Text(
-                            slide.subtitle!,
+                            slide.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: Neon.inkSoft,
-                              fontSize: 13,
+                              color: Neon.ink,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.3,
                               shadows: [
-                                Shadow(color: Colors.black, blurRadius: 8),
+                                Shadow(color: Colors.black, blurRadius: 12),
                               ],
                             ),
                           ),
+                          if (slide.subtitle != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              slide.subtitle!,
+                              style: const TextStyle(
+                                color: Neon.inkSoft,
+                                fontSize: 13,
+                                shadows: [
+                                  Shadow(color: Colors.black, blurRadius: 8),
+                                ],
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                          if (onPlay != null)
+                            NeonButton(label: 'Play', onPressed: onPlay),
                         ],
-                        const SizedBox(height: 12),
-                        if (onPlay != null)
-                          NeonButton(label: 'Play', onPressed: onPlay),
-                      ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

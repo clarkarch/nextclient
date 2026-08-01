@@ -56,12 +56,15 @@ class _HomePageState extends State<HomePage> {
 
       // Load each section independently so one failing panel doesn't blank
       // the whole home page.
-      final featuredFuture =
-          widget.services.catalog.fetchFeaturedGames(token: token);
-      final recentFuture =
-          widget.services.catalog.fetchRecentlyPlayed(token: token);
-      final allFuture =
-          widget.services.catalog.fetchMainGamesUncached(token: token);
+      final featuredFuture = widget.services.catalog.fetchFeaturedGames(
+        token: token,
+      );
+      final recentFuture = widget.services.catalog.fetchRecentlyPlayed(
+        token: token,
+      );
+      final allFuture = widget.services.catalog.fetchMainGamesUncached(
+        token: token,
+      );
 
       final featured = await _guard(featuredFuture);
       final recent = await _guard(recentFuture);
@@ -117,16 +120,15 @@ class _HomePageState extends State<HomePage> {
 
     if (_loading && all == null) {
       return const [
-        SliverToBoxAdapter(child: Padding(
-          padding: EdgeInsets.only(top: 20),
-          child: GameGridSkeleton(),
-        )),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.only(top: 20),
+            child: GameGridSkeleton(),
+          ),
+        ),
       ];
     }
-    if (_error != null &&
-        featured.isEmpty &&
-        recent.isEmpty &&
-        games.isEmpty) {
+    if (_error != null && featured.isEmpty && recent.isEmpty && games.isEmpty) {
       return [
         SliverToBoxAdapter(
           child: Padding(
@@ -146,13 +148,15 @@ class _HomePageState extends State<HomePage> {
         SliverToBoxAdapter(
           child: FeaturedCarousel(
             slides: featured
-                .map((g) => FeaturedSlide(
-                      title: g.title,
-                      subtitle: g.publisherName,
-                      imageUrl: g.marqueeImageUrl,
-                      chips: _slideChips(g),
-                      data: g,
-                    ))
+                .map(
+                  (g) => FeaturedSlide(
+                    title: g.title,
+                    subtitle: g.publisherName,
+                    imageUrl: g.marqueeImageUrl,
+                    chips: _slideChips(g),
+                    data: g,
+                  ),
+                )
                 .toList(),
             onPlay: (s) => _play(s.data as CatalogGame),
             onSelect: (s) => _openDetails(s.data as CatalogGame),
@@ -207,16 +211,13 @@ class _HomePageState extends State<HomePage> {
               mainAxisSpacing: 26,
               crossAxisSpacing: 16,
             ),
-            delegate: SliverChildBuilderDelegate(
-              (context, i) {
-                final game = games[i];
-                return CatalogGameCard(
-                  game: game,
-                  onTap: () => _openDetails(game),
-                );
-              },
-              childCount: games.length,
-            ),
+            delegate: SliverChildBuilderDelegate((context, i) {
+              final game = games[i];
+              return CatalogGameCard(
+                game: game,
+                onTap: () => _openDetails(game),
+              );
+            }, childCount: games.length),
           ),
         ),
       if (games.isEmpty && !_loading)
@@ -226,7 +227,7 @@ class _HomePageState extends State<HomePage> {
             child: Center(
               child: Text(
                 'No games available.',
-                style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+                style: TextStyle(color: Neon.inkMuted, fontSize: 13),
               ),
             ),
           ),
@@ -238,14 +239,16 @@ class _HomePageState extends State<HomePage> {
     final chips = <NeonChip>[];
     final tier = game.minimumMembershipTierLabel;
     if (tier != null) {
-      chips.add(NeonChip(
-        label: tier,
-        tone: tier == 'ULTIMATE'
-            ? NeonChipTone.accent
-            : tier == 'PRIORITY'
-                ? NeonChipTone.violet
-                : NeonChipTone.neutral,
-      ));
+      chips.add(
+        NeonChip(
+          label: tier,
+          tone: tier == 'ULTIMATE'
+              ? NeonChipTone.accent
+              : tier == 'PRIORITY'
+              ? NeonChipTone.violet
+              : NeonChipTone.neutral,
+        ),
+      );
     }
     return chips.isEmpty ? null : chips;
   }
@@ -326,10 +329,8 @@ class _HomeTopBar extends StatelessWidget {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => AccountPage(
-                      services: services,
-                      onSignOut: onSignOut,
-                    ),
+                    builder: (_) =>
+                        AccountPage(services: services, onSignOut: onSignOut),
                   ),
                 );
               },

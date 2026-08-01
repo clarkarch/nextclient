@@ -113,14 +113,39 @@ class _PulseDot extends StatefulWidget {
 
 class _PulseDotState extends State<_PulseDot>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1400),
-  )..repeat(reverse: true);
+  AnimationController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PulseDot oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pulse != widget.pulse) _syncPulse();
+  }
+
+  /// Creates the ticker only while pulsing. A lazily-initialized controller
+  /// accessed in [dispose] would create an `AnimationController(vsync: this)`
+  /// during unmount, which crashes with "Looking up a deactivated widget's
+  /// ancestor is unsafe".
+  void _syncPulse() {
+    if (widget.pulse && _controller == null) {
+      _controller = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 1400),
+      )..repeat(reverse: true);
+    } else if (!widget.pulse && _controller != null) {
+      _controller!.dispose();
+      _controller = null;
+    }
+  }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
@@ -134,7 +159,7 @@ class _PulseDotState extends State<_PulseDot>
       );
     }
     return FadeTransition(
-      opacity: Tween<double>(begin: 0.35, end: 1).animate(_controller),
+      opacity: Tween<double>(begin: 0.35, end: 1).animate(_controller!),
       child: Container(
         width: 8,
         height: 8,

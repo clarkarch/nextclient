@@ -90,7 +90,8 @@ SessionAdState? extractAdState(Map<String, dynamic>? session) {
     return toBool(nested[sub]);
   }
 
-  final sessionAdsRequired = toBool(session['sessionAdsRequired']) ??
+  final sessionAdsRequired =
+      toBool(session['sessionAdsRequired']) ??
       toBool(session['isAdsRequired']) ??
       nestedBool('sessionProgress', 'isAdsRequired') ??
       nestedBool('progressInfo', 'isAdsRequired');
@@ -101,33 +102,38 @@ SessionAdState? extractAdState(Map<String, dynamic>? session) {
     for (var i = 0; i < rawAds.length; i++) {
       final ad = rawAds[i];
       if (ad is! Map) continue;
-      final durationMs = (ad['durationMs'] as num?)?.toInt() ??
+      final durationMs =
+          (ad['durationMs'] as num?)?.toInt() ??
           ((ad['adLengthInSeconds'] as num?)?.toInt() ?? 0) * 1000;
-      ads.add(SessionAdInfo(
-        adId: ad['adId'] as String? ?? 'ad-${i + 1}',
-        state: (ad['state'] as num?)?.toInt(),
-        adUrl: ad['adUrl'] as String?,
-        mediaUrl: ad['mediaUrl'] as String?,
-        clickThroughUrl: ad['clickThroughUrl'] as String?,
-        durationMs: durationMs > 0 ? durationMs : null,
-      ));
+      ads.add(
+        SessionAdInfo(
+          adId: ad['adId'] as String? ?? 'ad-${i + 1}',
+          state: (ad['state'] as num?)?.toInt(),
+          adUrl: ad['adUrl'] as String?,
+          mediaUrl: ad['mediaUrl'] as String?,
+          clickThroughUrl: ad['clickThroughUrl'] as String?,
+          durationMs: durationMs > 0 ? durationMs : null,
+        ),
+      );
     }
   }
 
   final opportunity = session['opportunity'];
   final opp = opportunity is Map ? opportunity : null;
-  final queuePaused = toBool(opp?['queuePaused']) ??
+  final queuePaused =
+      toBool(opp?['queuePaused']) ??
       (opp?['state'] is String
           ? (opp!['state'] as String).toLowerCase() == 'graceperiodstart'
           : null);
   final effectiveIsAdsRequired = sessionAdsRequired ?? ads.isNotEmpty;
-  final message = opp?['message'] as String? ??
+  final message =
+      opp?['message'] as String? ??
       opp?['description'] as String? ??
       (queuePaused == true
           ? 'Resume ads to stay in queue.'
           : effectiveIsAdsRequired == true
-              ? 'Finish ads to stay in queue.'
-              : null);
+          ? 'Finish ads to stay in queue.'
+          : null);
 
   if (effectiveIsAdsRequired != true &&
       ads.isEmpty &&
@@ -137,7 +143,7 @@ SessionAdState? extractAdState(Map<String, dynamic>? session) {
   }
 
   return SessionAdState(
-    isAdsRequired: effectiveIsAdsRequired ?? false,
+    isAdsRequired: effectiveIsAdsRequired,
     sessionAdsRequired: sessionAdsRequired,
     isQueuePaused: queuePaused,
     gracePeriodSeconds: (opp?['gracePeriodSeconds'] as num?)?.toInt(),
@@ -148,18 +154,18 @@ SessionAdState? extractAdState(Map<String, dynamic>? session) {
 }
 
 /// Port of normalizeIceServers
-Future<List<IceServer>> normalizeIceServers(
-  CloudMatchResponse response,
-) async {
+Future<List<IceServer>> normalizeIceServers(CloudMatchResponse response) async {
   final raw = response.session.iceServers;
   final servers = <IceServer>[];
   for (final entry in raw) {
     if (entry.urls.isEmpty) continue;
-    servers.add(IceServer(
-      urls: entry.urls,
-      username: entry.username,
-      credential: entry.credential,
-    ));
+    servers.add(
+      IceServer(
+        urls: entry.urls,
+        username: entry.username,
+        credential: entry.credential,
+      ),
+    );
   }
 
   if (servers.isNotEmpty) {
@@ -187,11 +193,13 @@ Future<List<IceServer>> normalizeIceServers(
           resolvedUrls.add(u);
         }
       }
-      resolved.add(IceServer(
-        urls: resolvedUrls,
-        username: s.username,
-        credential: s.credential,
-      ));
+      resolved.add(
+        IceServer(
+          urls: resolvedUrls,
+          username: s.username,
+          credential: s.credential,
+        ),
+      );
     }
     return resolved;
   }
@@ -224,7 +232,8 @@ bool _isIpLiteral(String host) {
 
 String _bracketIfIpv6(String host) {
   if (host.startsWith('[') && host.endsWith(']')) return host;
-  if (host.contains(':') && !RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host)) {
+  if (host.contains(':') &&
+      !RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host)) {
     return '[$host]';
   }
   return host;
@@ -313,8 +322,12 @@ NegotiatedStreamProfile? _extractNegotiatedStreamProfile(
   final fps = monitor?['framesPerSecond'];
 
   final profile = <String, Object>{};
-  if (width is num && width.isFinite && width > 0 &&
-      height is num && height.isFinite && height > 0) {
+  if (width is num &&
+      width.isFinite &&
+      width > 0 &&
+      height is num &&
+      height.isFinite &&
+      height > 0) {
     profile['resolution'] = '${width.truncate()}x${height.truncate()}';
   }
   if (fps is num && fps.isFinite && fps > 0) {

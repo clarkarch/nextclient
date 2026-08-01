@@ -32,7 +32,10 @@ class _LogViewerPageState extends State<LogViewerPage> {
   void initState() {
     super.initState();
     _refresh();
-    _timer = Timer.periodic(const Duration(milliseconds: 800), (_) => _refresh());
+    _timer = Timer.periodic(
+      const Duration(milliseconds: 800),
+      (_) => _refresh(),
+    );
   }
 
   @override
@@ -58,15 +61,19 @@ class _LogViewerPageState extends State<LogViewerPage> {
   List<LogEntry> get _visible {
     return switch (_filter) {
       _LogFilter.all => _entries,
-      _LogFilter.info => _entries.where((e) => e.level.index >= LogLevel.info.index).toList(),
-      _LogFilter.warn => _entries.where((e) => e.level.index >= LogLevel.warn.index).toList(),
-      _LogFilter.error => _entries.where((e) => e.level == LogLevel.error).toList(),
+      _LogFilter.info =>
+        _entries.where((e) => e.level.index >= LogLevel.info.index).toList(),
+      _LogFilter.warn =>
+        _entries.where((e) => e.level.index >= LogLevel.warn.index).toList(),
+      _LogFilter.error =>
+        _entries.where((e) => e.level == LogLevel.error).toList(),
     };
   }
 
   static String _format(LogEntry e) {
     final t = e.timestamp;
-    final time = '${t.hour.toString().padLeft(2, '0')}:'
+    final time =
+        '${t.hour.toString().padLeft(2, '0')}:'
         '${t.minute.toString().padLeft(2, '0')}:'
         '${t.second.toString().padLeft(2, '0')}.'
         '${t.millisecond.toString().padLeft(3, '0')}';
@@ -99,7 +106,9 @@ class _LogViewerPageState extends State<LogViewerPage> {
         IconButton(
           tooltip: 'Follow scroll',
           icon: Icon(
-            _stickToBottom ? Icons.vertical_align_bottom : Icons.vertical_align_center,
+            _stickToBottom
+                ? Icons.vertical_align_bottom
+                : Icons.vertical_align_center,
             size: 18,
             color: _stickToBottom ? Neon.accent : Neon.inkMuted,
           ),
@@ -140,6 +149,7 @@ class _LogViewerPageState extends State<LogViewerPage> {
             decoration: BoxDecoration(
               color: Neon.bgC,
               borderRadius: BorderRadius.circular(14),
+              boxShadow: Neon.softShadow(radius: 14),
             ),
             padding: const EdgeInsets.all(12),
             child: _visible.isEmpty
@@ -190,7 +200,8 @@ class _LogLineState extends State<_LogLine> {
       LogLevel.error => Neon.error,
     };
     final t = entry.timestamp;
-    final time = '${t.hour.toString().padLeft(2, '0')}:'
+    final time =
+        '${t.hour.toString().padLeft(2, '0')}:'
         '${t.minute.toString().padLeft(2, '0')}:'
         '${t.second.toString().padLeft(2, '0')}.'
         '${t.millisecond.toString().padLeft(3, '0')}';
@@ -248,7 +259,10 @@ class _LogLineState extends State<_LogLine> {
                   ? InkWell(
                       onTap: () {
                         Clipboard.setData(
-                            ClipboardData(text: _LogViewerPageState._format(entry)));
+                          ClipboardData(
+                            text: _LogViewerPageState._format(entry),
+                          ),
+                        );
                         showNeonSnackbar(
                           context,
                           'Log line copied',

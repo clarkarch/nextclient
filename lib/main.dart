@@ -52,7 +52,6 @@ class AppServices {
       final session = await auth.ensureValidSession();
       if (session == null) return null;
       final token = session.tokens.idToken ?? session.tokens.accessToken;
-      if (token == null) return null;
       final info = await subscription.fetchSubscription(
         token: token,
         userId: session.user.userId,

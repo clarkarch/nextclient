@@ -30,7 +30,11 @@ class _LibraryPageState extends State<LibraryPage> {
 
   static const _sortOptions = [
     CatalogSortOption(id: 'title', label: 'Title', orderBy: 'title'),
-    CatalogSortOption(id: 'publisher', label: 'Publisher', orderBy: 'publisher'),
+    CatalogSortOption(
+      id: 'publisher',
+      label: 'Publisher',
+      orderBy: 'publisher',
+    ),
   ];
 
   @override
@@ -47,8 +51,9 @@ class _LibraryPageState extends State<LibraryPage> {
     });
     try {
       final token = await widget.services.auth.resolveJwtToken();
-      final games = await widget.services.catalog
-          .fetchLibraryGamesUncached(token: token);
+      final games = await widget.services.catalog.fetchLibraryGamesUncached(
+        token: token,
+      );
       if (!mounted) return;
       setState(() {
         _games = games;
@@ -114,7 +119,8 @@ class _LibraryPageState extends State<LibraryPage> {
             .toSet();
         final tier = g.minimumMembershipTierLabel;
         final storeMatch =
-            storeIds.isEmpty || storeIds.any((id) => stores.contains(id.substring(6)));
+            storeIds.isEmpty ||
+            storeIds.any((id) => stores.contains(id.substring(6)));
         final tierMatch =
             tierIds.isEmpty || tierIds.any((id) => tier == id.substring(5));
         return storeMatch && tierMatch;
@@ -123,14 +129,17 @@ class _LibraryPageState extends State<LibraryPage> {
     switch (_sortId) {
       case 'title':
         list = [...list]
-          ..sort((a, b) =>
-              a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+          ..sort(
+            (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+          );
         break;
       case 'publisher':
         list = [...list]
-          ..sort((a, b) => (a.publisherName ?? '')
-              .toLowerCase()
-              .compareTo((b.publisherName ?? '').toLowerCase()));
+          ..sort(
+            (a, b) => (a.publisherName ?? '').toLowerCase().compareTo(
+              (b.publisherName ?? '').toLowerCase(),
+            ),
+          );
         break;
     }
     return list;
@@ -139,9 +148,7 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) {
     final games = _games;
-    return NeonPageScaffold(
-      slivers: _slivers(games),
-    );
+    return NeonPageScaffold(slivers: _slivers(games));
   }
 
   List<Widget> _slivers(List<CatalogGame>? games) {
@@ -179,7 +186,11 @@ class _LibraryPageState extends State<LibraryPage> {
                 const SizedBox(width: 8),
                 IconButton(
                   tooltip: 'Refresh library',
-                  icon: const Icon(Icons.refresh, size: 18, color: Neon.inkSoft),
+                  icon: const Icon(
+                    Icons.refresh,
+                    size: 18,
+                    color: Neon.inkSoft,
+                  ),
                   onPressed: _load,
                 ),
               ],
@@ -204,7 +215,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 _filterIds.isNotEmpty
                     ? 'No games match your filters.'
                     : 'Your library is empty.',
-                style: const TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+                style: const TextStyle(color: Neon.inkMuted, fontSize: 13),
               ),
             ),
           ),
@@ -219,25 +230,22 @@ class _LibraryPageState extends State<LibraryPage> {
               mainAxisSpacing: 26,
               crossAxisSpacing: 16,
             ),
-            delegate: SliverChildBuilderDelegate(
-              (context, i) {
-                final game = list[i];
-                return CatalogGameCard(
-                  game: game,
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => GameDetailsPage(
-                          services: widget.services,
-                          game: game,
-                        ),
+            delegate: SliverChildBuilderDelegate((context, i) {
+              final game = list[i];
+              return CatalogGameCard(
+                game: game,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => GameDetailsPage(
+                        services: widget.services,
+                        game: game,
                       ),
-                    );
-                  },
-                );
-              },
-              childCount: list.length,
-            ),
+                    ),
+                  );
+                },
+              );
+            }, childCount: list.length),
           ),
         ),
     ];

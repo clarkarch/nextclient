@@ -19,6 +19,16 @@ class UserSettings extends ChangeNotifier {
   static const _keyAppLaunchMode = 'settings.appLaunchMode';
   static const _keyNativeCloudGsyncMode = 'settings.nativeCloudGsyncMode';
   static const _keyRegionUrl = 'settings.regionUrl';
+  static const _keyAdvancedMode = 'settings.advancedMode';
+  static const _keyStreamGamepad = 'settings.stream.gamepad';
+  static const _keyStreamGamepadScale = 'settings.stream.gamepadScale';
+  static const _keyStreamShowFps = 'settings.stream.showFps';
+  static const _keyWebrtcIceTransport = 'settings.webrtc.iceTransport';
+  static const _keyWebrtcIcePoolSize = 'settings.webrtc.icePoolSize';
+  static const _keyWebrtcBundle = 'settings.webrtc.bundle';
+  static const _keyWebrtcRtcpMux = 'settings.webrtc.rtcpMux';
+  static const _keyWebrtcHwAccel = 'settings.webrtc.hwAccel';
+  static const _keyWebrtcStun = 'settings.webrtc.stun';
 
   String _resolution = '1920x1080';
   int _fps = 60;
@@ -33,6 +43,16 @@ class UserSettings extends ChangeNotifier {
   NativeStreamerFeatureMode _nativeCloudGsyncMode =
       NativeStreamerFeatureMode.auto;
   String? _selectedRegionUrl;
+  bool _advancedMode = false;
+  bool _streamGamepad = false;
+  double _streamGamepadScale = 1.0;
+  bool _streamShowFps = false;
+  WebrtcIceTransportPolicy _webrtcIceTransport = WebrtcIceTransportPolicy.all;
+  int _webrtcIcePoolSize = 0;
+  WebrtcBundlePolicy _webrtcBundle = WebrtcBundlePolicy.balanced;
+  WebrtcRtcpMuxPolicy _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
+  bool _webrtcHwAccel = true;
+  String _webrtcStunServer = '';
 
   UserSettings(this._prefs) {
     _load();
@@ -50,6 +70,16 @@ class UserSettings extends ChangeNotifier {
   AppLaunchMode get appLaunchMode => _appLaunchMode;
   NativeStreamerFeatureMode get nativeCloudGsyncMode => _nativeCloudGsyncMode;
   String? get selectedRegionUrl => _selectedRegionUrl;
+  bool get advancedMode => _advancedMode;
+  bool get streamGamepad => _streamGamepad;
+  double get streamGamepadScale => _streamGamepadScale;
+  bool get streamShowFps => _streamShowFps;
+  WebrtcIceTransportPolicy get webrtcIceTransport => _webrtcIceTransport;
+  int get webrtcIcePoolSize => _webrtcIcePoolSize;
+  WebrtcBundlePolicy get webrtcBundle => _webrtcBundle;
+  WebrtcRtcpMuxPolicy get webrtcRtcpMux => _webrtcRtcpMux;
+  bool get webrtcHwAccel => _webrtcHwAccel;
+  String get webrtcStunServer => _webrtcStunServer;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -142,6 +172,77 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set advancedMode(bool v) {
+    if (_advancedMode == v) return;
+    _advancedMode = v;
+    _save(_keyAdvancedMode, v);
+    notifyListeners();
+  }
+
+  set streamGamepad(bool v) {
+    if (_streamGamepad == v) return;
+    _streamGamepad = v;
+    _save(_keyStreamGamepad, v);
+    notifyListeners();
+  }
+
+  set streamGamepadScale(double v) {
+    final clamped = v.clamp(0.6, 1.4);
+    if (_streamGamepadScale == clamped) return;
+    _streamGamepadScale = clamped;
+    _prefs.setDouble(_keyStreamGamepadScale, clamped);
+    notifyListeners();
+  }
+
+  set streamShowFps(bool v) {
+    if (_streamShowFps == v) return;
+    _streamShowFps = v;
+    _save(_keyStreamShowFps, v);
+    notifyListeners();
+  }
+
+  set webrtcIceTransport(WebrtcIceTransportPolicy v) {
+    if (_webrtcIceTransport == v) return;
+    _webrtcIceTransport = v;
+    _save(_keyWebrtcIceTransport, v.name);
+    notifyListeners();
+  }
+
+  set webrtcIcePoolSize(int v) {
+    if (_webrtcIcePoolSize == v) return;
+    _webrtcIcePoolSize = v;
+    _save(_keyWebrtcIcePoolSize, v);
+    notifyListeners();
+  }
+
+  set webrtcBundle(WebrtcBundlePolicy v) {
+    if (_webrtcBundle == v) return;
+    _webrtcBundle = v;
+    _save(_keyWebrtcBundle, v.name);
+    notifyListeners();
+  }
+
+  set webrtcRtcpMux(WebrtcRtcpMuxPolicy v) {
+    if (_webrtcRtcpMux == v) return;
+    _webrtcRtcpMux = v;
+    _save(_keyWebrtcRtcpMux, v.name);
+    notifyListeners();
+  }
+
+  set webrtcHwAccel(bool v) {
+    if (_webrtcHwAccel == v) return;
+    _webrtcHwAccel = v;
+    _save(_keyWebrtcHwAccel, v);
+    notifyListeners();
+  }
+
+  set webrtcStunServer(String v) {
+    if (_webrtcStunServer == v) return;
+    _webrtcStunServer = v;
+    _save(_keyWebrtcStun, v);
+    notifyListeners();
+  }
+
   StreamSettings buildStreamSettings() {
     return StreamSettings(
       resolution: _resolution,
@@ -179,6 +280,24 @@ class UserSettings extends ChangeNotifier {
             .asNameMap()[_prefs.getString(_keyNativeCloudGsyncMode)] ??
         _nativeCloudGsyncMode;
     _selectedRegionUrl = _prefs.getString(_keyRegionUrl);
+    _advancedMode = _prefs.getBool(_keyAdvancedMode) ?? _advancedMode;
+    _streamGamepad = _prefs.getBool(_keyStreamGamepad) ?? _streamGamepad;
+    _streamGamepadScale =
+        _prefs.getDouble(_keyStreamGamepadScale) ?? _streamGamepadScale;
+    _streamShowFps = _prefs.getBool(_keyStreamShowFps) ?? _streamShowFps;
+    _webrtcIceTransport = WebrtcIceTransportPolicy
+            .values.asNameMap()[_prefs.getString(_keyWebrtcIceTransport)] ??
+        _webrtcIceTransport;
+    _webrtcIcePoolSize =
+        _prefs.getInt(_keyWebrtcIcePoolSize) ?? _webrtcIcePoolSize;
+    _webrtcBundle = WebrtcBundlePolicy.values
+            .asNameMap()[_prefs.getString(_keyWebrtcBundle)] ??
+        _webrtcBundle;
+    _webrtcRtcpMux = WebrtcRtcpMuxPolicy.values
+            .asNameMap()[_prefs.getString(_keyWebrtcRtcpMux)] ??
+        _webrtcRtcpMux;
+    _webrtcHwAccel = _prefs.getBool(_keyWebrtcHwAccel) ?? _webrtcHwAccel;
+    _webrtcStunServer = _prefs.getString(_keyWebrtcStun) ?? _webrtcStunServer;
   }
 
   void _save(String key, Object value) {
@@ -198,3 +317,12 @@ class UserSettings extends ChangeNotifier {
     return ColorQuality(bitDepth: bitDepth, chromaFormat: chroma);
   }
 }
+
+/// WebRTC client-side ICE transport policy (RTCConfiguration).
+enum WebrtcIceTransportPolicy { all, relay }
+
+/// WebRTC bundle policy (RTCConfiguration).
+enum WebrtcBundlePolicy { balanced, maxCompat, maxBundle }
+
+/// WebRTC rtcp-mux policy (RTCConfiguration).
+enum WebrtcRtcpMuxPolicy { require, negotiate }

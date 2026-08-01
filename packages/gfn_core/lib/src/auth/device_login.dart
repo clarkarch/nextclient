@@ -2,8 +2,10 @@ import 'dart:convert' show JsonDecoder;
 
 import 'package:http/http.dart' as http;
 
-import '../models/auth.dart' show AuthDeviceLoginChallenge, AuthTokens, LoginProvider;
-import 'constants.dart' show deviceAuthorizeEndpoint, scopes, steamDeckClientId, tokenEndpoint;
+import '../models/auth.dart'
+    show AuthDeviceLoginChallenge, AuthTokens, LoginProvider;
+import 'constants.dart'
+    show deviceAuthorizeEndpoint, scopes, steamDeckClientId, tokenEndpoint;
 import 'helpers.dart'
     show buildAuthHeadersForClient, generateAuthDeviceId, toExpiresAt;
 import 'oauth_flow.dart' show TokenResponse;
@@ -58,7 +60,7 @@ Future<AuthDeviceLoginChallenge> requestDeviceAuthorization({
     'client_id': steamDeckClientId,
     'scope': scopes,
     'device_id': deviceId,
-    'display_name': 'OpenNOW',
+    'display_name': 'NEXTCLIENT',
     'idp_id': provider.idpId,
   };
 
@@ -90,7 +92,9 @@ Future<AuthDeviceLoginChallenge> requestDeviceAuthorization({
     );
   }
 
-  final payload = DeviceAuthorizationResponse.fromJson(_decodeJson(response.body));
+  final payload = DeviceAuthorizationResponse.fromJson(
+    _decodeJson(response.body),
+  );
   final deviceCode = payload.deviceCode;
   final userCode = payload.userCode;
   final verificationUri = payload.verificationUri;
@@ -99,7 +103,9 @@ Future<AuthDeviceLoginChallenge> requestDeviceAuthorization({
       userCode == null ||
       verificationUri == null ||
       verificationUriComplete == null) {
-    throw StateError('Device authorization response did not include QR login data');
+    throw StateError(
+      'Device authorization response did not include QR login data',
+    );
   }
 
   return AuthDeviceLoginChallenge(
@@ -146,7 +152,8 @@ Future<Object> exchangeDeviceCode({
     return decoded == null
         ? DeviceTokenErrorResponse(
             error: 'device_token_exchange_failed',
-            errorDescription: 'Device token exchange failed (${response.statusCode})',
+            errorDescription:
+                'Device token exchange failed (${response.statusCode})',
           )
         : DeviceTokenErrorResponse(
             error: decoded['error'] as String?,

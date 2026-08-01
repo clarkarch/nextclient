@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
+import '../../theme/neon.dart';
 import '../../widgets/catalog_game_card.dart';
 import '../../widgets/guarded_sliver_grid.dart';
 import '../../widgets/neon_page_scaffold.dart';
@@ -31,7 +32,7 @@ class RecentlyPlayedPage extends StatelessWidget {
                   child: Center(
                     child: Text(
                       'No recently played games yet.',
-                      style: TextStyle(color: Color(0xFF5C6B85), fontSize: 13),
+                      style: TextStyle(color: Neon.inkMuted, fontSize: 13),
                     ),
                   ),
                 ),
@@ -47,25 +48,20 @@ class RecentlyPlayedPage extends StatelessWidget {
                     mainAxisSpacing: 26,
                     crossAxisSpacing: 16,
                   ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, i) {
-                      final game = games[i];
-                      return CatalogGameCard(
-                        game: game,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => GameDetailsPage(
-                                services: services,
-                                game: game,
-                              ),
-                            ),
-                          );
-                        },
-                      );
-                    },
-                    childCount: games.length,
-                  ),
+                  delegate: SliverChildBuilderDelegate((context, i) {
+                    final game = games[i];
+                    return CatalogGameCard(
+                      game: game,
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                GameDetailsPage(services: services, game: game),
+                          ),
+                        );
+                      },
+                    );
+                  }, childCount: games.length),
                 ),
               ),
             ],
