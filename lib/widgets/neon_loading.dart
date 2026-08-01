@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/neon.dart';
+import 'neon_snackbar.dart';
 
 /// Glowing neon spinner with an optional label.
 class NeonSpinner extends StatelessWidget {
@@ -183,8 +184,10 @@ class NeonErrorView extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: message));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Error copied to clipboard')),
+                    showNeonSnackbar(
+                      context,
+                      'Error copied to clipboard',
+                      copyable: false,
                     );
                   },
                   icon: const Icon(Icons.copy, size: 15),

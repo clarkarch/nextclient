@@ -6,6 +6,7 @@ import '../../theme/neon.dart';
 import '../../widgets/game_art.dart';
 import '../../widgets/neon_button.dart';
 import '../../widgets/neon_chip.dart';
+import '../../widgets/neon_snackbar.dart';
 import 'printed_waste_modal.dart';
 
 /// Resolved launch target returned by [LauncherDialog].
@@ -69,8 +70,10 @@ class _LauncherDialogState extends State<LauncherDialog> {
   Future<void> _launch() async {
     final appId = _selectedVariantId ?? widget.game.launchAppId;
     if (appId == null || appId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This game has no launchable app id.')),
+      showNeonSnackbar(
+        context,
+        'This game has no launchable app id.',
+        isError: true,
       );
       return;
     }

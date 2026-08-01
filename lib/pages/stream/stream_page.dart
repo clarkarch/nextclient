@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
@@ -9,6 +10,7 @@ import '../../widgets/neon_button.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
+import '../../widgets/neon_snackbar.dart';
 
 /// Full-screen streaming surface. Drives the [SessionController] lifecycle
 /// (requesting → queued → allocating → ready) then shows the session-ready
@@ -572,7 +574,24 @@ class _ErrorSurface extends StatelessWidget {
             style: const TextStyle(color: Neon.inkSoft, fontSize: 13),
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+        TextButton.icon(
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: message));
+            showNeonSnackbar(
+              context,
+              'Error copied to clipboard',
+              copyable: false,
+            );
+          },
+          icon: const Icon(Icons.copy, size: 14, color: Neon.inkSoft),
+          label: const Text('COPY ERROR'),
+          style: TextButton.styleFrom(
+            foregroundColor: Neon.inkSoft,
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+        const SizedBox(height: 8),
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [

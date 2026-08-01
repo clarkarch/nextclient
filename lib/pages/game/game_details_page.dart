@@ -9,6 +9,7 @@ import '../../widgets/neon_button.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_page_scaffold.dart';
+import '../../widgets/neon_snackbar.dart';
 import '../launcher/play_flow.dart';
 
 /// Rich game detail screen: hero art, metadata, description, screenshots.
@@ -284,8 +285,10 @@ class _InlineError extends StatelessWidget {
             icon: const Icon(Icons.copy, size: 16, color: Neon.error),
             onPressed: () {
               Clipboard.setData(ClipboardData(text: message));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Error copied to clipboard')),
+              showNeonSnackbar(
+                context,
+                'Error copied to clipboard',
+                copyable: false,
               );
             },
           ),
