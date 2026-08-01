@@ -100,7 +100,13 @@ class _LauncherDialogState extends State<LauncherDialog> {
               initialQueue: queue,
             ),
           );
-          if (chosen != null) baseUrl = chosen;
+          if (!mounted) return;
+          // Cancelling the server picker aborts the launch.
+          if (chosen == null) {
+            setState(() => _launching = false);
+            return;
+          }
+          baseUrl = chosen;
         }
       } catch (e) {
         debugPrint('PrintedWaste unavailable, using default routing: $e');
@@ -168,8 +174,8 @@ class _LauncherDialogState extends State<LauncherDialog> {
                   ),
                   const SizedBox(width: 10),
                   NeonButton(
-                    label: 'Launch',
-                    icon: Icons.rocket_launch,
+                    label: _isFreeTier ? 'Select Server' : 'Launch',
+                    icon: _isFreeTier ? Icons.dns : Icons.rocket_launch,
                     busy: _launching,
                     onPressed: _launching ? null : _launch,
                   ),
