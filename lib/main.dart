@@ -1,0 +1,166 @@
+import 'dart:convert' show jsonDecode, jsonEncode;
+import 'dart:io' show Platform;
+import 'dart:math' show Random;
+
+import 'package:flutter/material.dart';
+import 'package:gfn_core/gfn_core.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'app.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const DebugShellApp());
+}
+
+/// App-scoped service container. Built once, held by the root widget.
+class AppServices {
+  final AuthService auth;
+  final CatalogService catalog;
+  final CloudMatchService cloudMatch;
+  final PrintedWasteService printedWaste;
+  final SubscriptionService subscription;
+  final RingBufferLogSink logSink;
+  final SharedPreferences prefs;
+
+  AppServices._({
+    required this.auth,
+    required this.catalog,
+    required this.cloudMatch,
+    required this.printedWaste,
+    required this.subscription,
+    required this.logSink,
+    required this.prefs,
+  });
+
+  static Future<AppServices> create() async {
+    final prefs = await SharedPreferences.getInstance();
+    final logSink = RingBufferLogSink(maxEntries: 500);
+
+    final client = _LoggingHttpClient(logSink: logSink);
+
+    final storage = _PrefsTokenStorage(prefs);
+    final browser = _UrlLauncherBrowser();
+    final clock = _SystemClock();
+    final random = _SecureRandom();
+    final isMac = Platform.isMacOS;
+
+    final auth = AuthService(
+      deps: AuthServiceDeps(
+        httpClient: client,
+        tokenStorage: storage,
+        browserLauncher: browser,
+        clock: clock,
+        random: random,
+        hostname: Platform.localHostname,
+        username: Platform.environment['USER'] ?? 'unknown',
+        isMac: isMac,
+      ),
+    );
+    await auth.initialize();
+
+    final catalog = CatalogService(client: client, isMac: isMac);
+    final cloudMatch = CloudMatchService(
+      client: client,
+      isMac: isMac,
+      stableDeviceId: () => _stableDeviceId(prefs),
+    );
+    final printedWaste = PrintedWasteService(
+      client: client,
+      appVersion: '0.5.3',
+    );
+    final subscription = SubscriptionService(client: client, isMac: isMac);
+
+    return AppServices._(
+      auth: auth,
+      catalog: catalog,
+      cloudMatch: cloudMatch,
+      printedWaste: printedWaste,
+      subscription: subscription,
+      logSink: logSink,
+      prefs: prefs,
+    );
+  }
+
+  static String _stableDeviceId(SharedPreferences prefs) {
+    final persisted = prefs.getString('gfn-device-id');
+    if (persisted != null && persisted.isNotEmpty) return persisted;
+    final generated = generateDeviceId(
+      hostname: Platform.localHostname,
+      username: Platform.environment['USER'] ?? 'unknown',
+    );
+    prefs.setString('gfn-device-id', generated);
+    return generated;
+  }
+}
+
+class _PrefsTokenStorage implements TokenStorage {
+  static const _key = 'gfn_tokens';
+  final SharedPreferences prefs;
+
+  _PrefsTokenStorage(this.prefs);
+
+  @override
+  Future<Map<String, String>?> readTokens() async {
+    final json = prefs.getString(_key);
+    if (json == null) return null;
+    final decoded = jsonDecode(json);
+    if (decoded is! Map<String, dynamic>) return null;
+    return decoded.map((k, v) => MapEntry(k, v.toString()));
+  }
+
+  @override
+  Future<void> writeTokens(Map<String, String> tokens) async {
+    await prefs.setString(_key, jsonEncode(tokens));
+  }
+
+  @override
+  Future<void> clearTokens() async {
+    await prefs.remove(_key);
+  }
+}
+
+class _UrlLauncherBrowser implements BrowserLauncher {
+  @override
+  Future<void> openUrl(String url) async {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+}
+
+class _SystemClock implements Clock {
+  @override
+  int nowMillis() => DateTime.now().millisecondsSinceEpoch;
+}
+
+class _SecureRandom implements RandomSource {
+  final _random = Random.secure();
+
+  @override
+  List<int> nextBytes(int count) {
+    return List<int>.generate(count, (_) => _random.nextInt(256));
+  }
+}
+
+/// HTTP client wrapper that logs requests/responses to the ring buffer.
+class _LoggingHttpClient extends http.BaseClient {
+  final RingBufferLogSink logSink;
+  final _inner = http.Client();
+
+  _LoggingHttpClient({required this.logSink});
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final started = DateTime.now();
+    logSink.log(LogLevel.debug, 'http', '${request.method} ${request.url}');
+    final response = await _inner.send(request);
+    final elapsed = DateTime.now().difference(started).inMilliseconds;
+    logSink.log(
+      LogLevel.info,
+      'http',
+      '${request.method} ${request.url} -> ${response.statusCode} (${elapsed}ms)',
+    );
+    return response;
+  }
+}

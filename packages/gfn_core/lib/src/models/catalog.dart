@@ -1,0 +1,221 @@
+class AppVariant {
+  final String id;
+  final String? shortName;
+  final String? appStore;
+  final List<String> supportedControls;
+  final int? minimumSizeInBytes;
+  final VariantGfn? gfn;
+
+  const AppVariant({
+    required this.id,
+    this.shortName,
+    this.appStore,
+    this.supportedControls = const [],
+    this.minimumSizeInBytes,
+    this.gfn,
+  });
+
+  factory AppVariant.fromJson(Map<String, dynamic> json) {
+    return AppVariant(
+      id: json['id'] as String,
+      shortName: json['shortName'] as String?,
+      appStore: json['appStore'] as String?,
+      supportedControls: (json['supportedControls'] as List<dynamic>? ?? [])
+          .cast<String>(),
+      minimumSizeInBytes: (json['minimumSizeInBytes'] as num?)?.toInt(),
+      gfn: json['gfn'] is Map<String, dynamic>
+          ? VariantGfn.fromJson(json['gfn'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'shortName': shortName,
+      'appStore': appStore,
+      'supportedControls': supportedControls,
+      'minimumSizeInBytes': minimumSizeInBytes,
+      if (gfn != null) 'gfn': gfn!.toJson(),
+    };
+  }
+}
+
+class VariantGfn {
+  final String? status;
+  final String? libraryStatus;
+  final bool? librarySelected;
+  final String? playStatus;
+  final bool? installed;
+  final String? lastPlayedDate;
+
+  const VariantGfn({
+    this.status,
+    this.libraryStatus,
+    this.librarySelected,
+    this.playStatus,
+    this.installed,
+    this.lastPlayedDate,
+  });
+
+  factory VariantGfn.fromJson(Map<String, dynamic> json) {
+    final library = json['library'] as Map<String, dynamic>? ?? {};
+    return VariantGfn(
+      status: json['status'] as String?,
+      libraryStatus: library['status'] as String?,
+      librarySelected: library['selected'] as bool?,
+      playStatus: library['playStatus'] as String?,
+      installed: library['installed'] as bool?,
+      lastPlayedDate: library['lastPlayedDate'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'status': status,
+      'library': {
+        'status': libraryStatus,
+        'selected': librarySelected,
+        'playStatus': playStatus,
+        'installed': installed,
+        'lastPlayedDate': lastPlayedDate,
+      },
+    };
+  }
+}
+
+class CatalogGame {
+  final String id;
+  final String title;
+  final String? shortName;
+  final String? publisherName;
+  final List<AppVariant> variants;
+  final Map<String, dynamic>? images;
+  final String? playabilityState;
+  final String? minimumMembershipTierLabel;
+  final String? playType;
+
+  const CatalogGame({
+    required this.id,
+    required this.title,
+    this.shortName,
+    this.publisherName,
+    this.variants = const [],
+    this.images,
+    this.playabilityState,
+    this.minimumMembershipTierLabel,
+    this.playType,
+  });
+
+  factory CatalogGame.fromJson(Map<String, dynamic> json) {
+    final app = json['app'] as Map<String, dynamic>? ?? json;
+    return CatalogGame(
+      id: app['id'] as String,
+      title: app['title'] as String,
+      shortName: app['shortName'] as String?,
+      publisherName: app['publisherName'] as String?,
+      variants: (app['variants'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((v) => AppVariant.fromJson(v))
+          .toList(),
+      images: app['images'] as Map<String, dynamic>?,
+      playabilityState: (app['gfn'] as Map<String, dynamic>?)?['playabilityState'] as String?,
+      minimumMembershipTierLabel:
+          (app['gfn'] as Map<String, dynamic>?)?['minimumMembershipTierLabel'] as String?,
+      playType: (app['gfn'] as Map<String, dynamic>?)?['playType'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'shortName': shortName,
+      'publisherName': publisherName,
+      'variants': variants.map((v) => v.toJson()).toList(),
+      'images': images,
+      'playabilityState': playabilityState,
+      'minimumMembershipTierLabel': minimumMembershipTierLabel,
+      'playType': playType,
+    };
+  }
+}
+
+class CatalogSection {
+  final String id;
+  final String title;
+  final List<CatalogGame> games;
+
+  const CatalogSection({required this.id, required this.title, required this.games});
+
+  factory CatalogSection.fromJson(Map<String, dynamic> json) {
+    return CatalogSection(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      games: (json['items'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .where((item) => item['__typename'] == 'GameItem')
+          .map((item) => CatalogGame.fromJson(item))
+          .toList(),
+    );
+  }
+}
+
+class CatalogPanel {
+  final String id;
+  final String name;
+  final List<CatalogSection> sections;
+
+  const CatalogPanel({required this.id, required this.name, required this.sections});
+
+  factory CatalogPanel.fromJson(Map<String, dynamic> json) {
+    return CatalogPanel(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String,
+      sections: (json['sections'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((s) => CatalogSection.fromJson(s))
+          .toList(),
+    );
+  }
+}
+
+class CatalogBrowseResult {
+  final List<CatalogGame> games;
+  final bool hasNextPage;
+  final String? endCursor;
+  final int numberReturned;
+  final int numberSupported;
+  final int totalCount;
+
+  const CatalogBrowseResult({
+    required this.games,
+    this.hasNextPage = false,
+    this.endCursor,
+    this.numberReturned = 0,
+    this.numberSupported = 0,
+    this.totalCount = 0,
+  });
+}
+
+class StreamRegion {
+  final String name;
+  final String url;
+  final int? pingMs;
+
+  const StreamRegion({required this.name, required this.url, this.pingMs});
+
+  factory StreamRegion.fromJson(Map<String, dynamic> json) {
+    return StreamRegion(
+      name: json['name'] as String,
+      url: json['url'] as String,
+      pingMs: (json['pingMs'] as num?)?.toInt(),
+    );
+  }
+}
+
+const ownedLibraryStatuses = ['MANUAL', 'PLATFORM_SYNC', 'IN_LIBRARY'];
+
+bool isOwnedLibraryStatus(String? status) {
+  return status != null && ownedLibraryStatuses.contains(status);
+}
