@@ -487,9 +487,8 @@ class CloudMatchService {
       if (statusCode != 1 && statusCode != 2 && statusCode != 3) continue;
 
       final requestData = s['sessionRequestData'];
-      final appId = requestData is Map && requestData['appId'] is num
-          ? (requestData['appId'] as num).toInt()
-          : 0;
+      final rawAppId = requestData is Map ? requestData['appId'] : null;
+      final appId = _asNumericAppId(rawAppId) ?? 0;
       final rawAppLaunchMode = requestData is Map ? requestData['appLaunchMode'] : null;
       final appLaunchMode =
           rawAppLaunchMode is num && rawAppLaunchMode.isFinite
@@ -571,6 +570,16 @@ class CloudMatchService {
       return trimmed;
     }
     return 'https://$zone.cloudmatchbeta.nvidiagrid.net';
+  }
+
+  /// NVIDIA echoes appId as a number or a numeric string. Normalize both.
+  int? _asNumericAppId(Object? value) {
+    if (value is num) return value.toInt();
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+    return null;
   }
 
   String _resolvePollStopBase(String zone, String? provided, String? serverIp) {

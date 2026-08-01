@@ -25,6 +25,9 @@ class _SessionPageState extends State<SessionPage> {
   String? _selectedRegionUrl;
   String? _regionsError;
   bool _loadingRegions = false;
+  List<ActiveSessionInfo>? _activeSessions;
+  bool _loadingActive = false;
+  String? _activeError;
 
   @override
   void initState() {
@@ -33,6 +36,7 @@ class _SessionPageState extends State<SessionPage> {
       text: widget.initialGame?.launchAppId ?? '',
     );
     _loadRegions();
+    _refreshActiveSessions();
   }
 
   Future<void> _loadRegions() async {
@@ -135,6 +139,56 @@ class _SessionPageState extends State<SessionPage> {
     );
   }
 
+  Future<void> _refreshActiveSessions() async {
+    final streamingBaseUrl = _selectedRegionUrl;
+    if (streamingBaseUrl == null || streamingBaseUrl.isEmpty) return;
+    setState(() {
+      _loadingActive = true;
+      _activeError = null;
+    });
+    try {
+      final session = await widget.services.auth.ensureValidSession();
+      final token = session?.tokens.idToken ?? session?.tokens.accessToken;
+      final active = await widget.services.cloudMatch.getActiveSessions(
+        token: token ?? '',
+        streamingBaseUrl: streamingBaseUrl,
+      );
+      if (!mounted) return;
+      setState(() {
+        _activeSessions = active;
+        _loadingActive = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingActive = false;
+        _activeError = 'Could not list active sessions: $e';
+      });
+    }
+  }
+
+  Future<void> _stopActiveSession(ActiveSessionInfo info) async {
+    final streamingBaseUrl = _selectedRegionUrl;
+    if (streamingBaseUrl == null || streamingBaseUrl.isEmpty) {
+      _showError('Select a region first.');
+      return;
+    }
+    try {
+      final session = await widget.services.auth.ensureValidSession();
+      final token = session?.tokens.idToken ?? session?.tokens.accessToken;
+      await widget.services.cloudMatch.stopSession(SessionStopRequest(
+        sessionId: info.sessionId,
+        token: token,
+        streamingBaseUrl: streamingBaseUrl,
+        zone: 'prod',
+      ));
+      _showError('Stopped session ${info.sessionId}');
+      await _refreshActiveSessions();
+    } catch (e) {
+      _showError('Failed to stop session: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final lifecycle = _getLifecycle();
@@ -205,7 +259,11 @@ class _SessionPageState extends State<SessionPage> {
                         child: Text('${r.name} · $r.url'),
                       ))
                   .toList(),
-              onChanged: (v) => setState(() => _selectedRegionUrl = v),
+              onChanged: (v) => setState(() {
+                _selectedRegionUrl = v;
+                _activeSessions = null;
+                _refreshActiveSessions();
+              }),
             ),
           const SizedBox(height: 16),
           Row(
@@ -246,6 +304,14 @@ class _SessionPageState extends State<SessionPage> {
                 title: Text('${_stateLabel(event.from)} -> ${_stateLabel(event.to)}'),
                 subtitle: Text(event.message),
               )),
+          const SizedBox(height: 16),
+          _ActiveSessionsCard(
+            sessions: _activeSessions,
+            loading: _loadingActive,
+            error: _activeError,
+            onRefresh: _refreshActiveSessions,
+            onStop: _stopActiveSession,
+          ),
       ],
     );
   }
@@ -285,6 +351,71 @@ class _StateCard extends StatelessWidget {
             const SizedBox(width: 8),
             Text(state.name.toUpperCase(),
                 style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveSessionsCard extends StatelessWidget {
+  final List<ActiveSessionInfo>? sessions;
+  final bool loading;
+  final String? error;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function(ActiveSessionInfo) onStop;
+
+  const _ActiveSessionsCard({
+    required this.sessions,
+    required this.loading,
+    required this.error,
+    required this.onRefresh,
+    required this.onStop,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('Active sessions',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const Spacer(),
+                if (loading)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                TextButton(onPressed: onRefresh, child: const Text('Refresh')),
+              ],
+            ),
+            if (error != null)
+              Text(error!, style: const TextStyle(color: Colors.orange)),
+            if (sessions == null && !loading && error == null)
+              const Text('Select a region and hit Refresh to list sessions.'),
+            if (sessions != null && sessions!.isEmpty)
+              const Text('No active sessions.'),
+            ...?sessions?.map((s) => ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.play_circle),
+                  title: Text('appId ${s.appId}'),
+                  subtitle: Text(
+                    '${s.gpuType ?? "gpu?"} · status ${s.status} · '
+                    '${s.sessionId}\n'
+                    'queue ${s.queuePosition ?? "-"} · seat ${s.seatSetupStep ?? "-"}',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.stop_circle_outlined),
+                    tooltip: 'Stop session',
+                    onPressed: () => onStop(s),
+                  ),
+                )),
           ],
         ),
       ),

@@ -188,7 +188,7 @@ Future<SessionInfo> toSessionInfo({
 
   return SessionInfo(
     sessionId: payload.session.sessionId,
-    appId: _sessionRequestData(payload)?['appId'] as String? ?? fallbackAppId,
+    appId: _asAppId(_sessionRequestData(payload)?['appId']) ?? fallbackAppId,
     status: payload.session.status,
     queuePosition: queuePosition,
     seatSetupStep: seatSetupStep,
@@ -253,4 +253,13 @@ NegotiatedStreamProfile? _extractNegotiatedStreamProfile(
 
 Map<String, dynamic>? _asMap(Object? value) {
   return value is Map<String, dynamic> ? value : null;
+}
+
+/// NVIDIA echoes appId as either a number or a string depending on the
+/// endpoint/state. Normalize both to a string (matching OpenNOW's loose
+/// `appId?: string` typing, which is a number at runtime on some responses).
+String? _asAppId(Object? value) {
+  if (value is num) return value.toInt().toString();
+  if (value is String && value.trim().isNotEmpty) return value.trim();
+  return null;
 }
