@@ -74,8 +74,19 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
         _loading = false;
         _error = details == null ? (lastError ?? 'No details available') : null;
       });
+      widget.services.logSink.log(
+        LogLevel.info,
+        'details',
+        'Game details loaded for ${widget.game.id} '
+            '(${details?.title ?? 'unavailable'})',
+      );
     } catch (e) {
       debugPrint('[details] unexpected failure for ${widget.game.id}: $e');
+      widget.services.logSink.log(
+        LogLevel.error,
+        'details',
+        'Unexpected failure for ${widget.game.id}: $e',
+      );
       if (!mounted) return;
       setState(() {
         _loading = false;

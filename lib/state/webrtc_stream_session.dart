@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:math' show max, min;
+import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show KeyEvent, KeyDownEvent, KeyUpEvent, KeyRepeatEvent;
 import 'package:flutter/foundation.dart' show ValueChanged;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:gfn_core/gfn_core.dart';
 
+import 'gfn_input_protocol.dart';
+import 'gfn_keyboard_mapping.dart';
 import 'user_settings.dart';
 
 /// Bridges NVIDIA's NVST signaling WebSocket to a local [RTCPeerConnection]
@@ -22,7 +27,7 @@ import 'user_settings.dart';
 class WebRtcStreamSession {
   final SessionInfo session;
   final UserSettings settings;
-  final RingBufferLogSink log;
+  final LogSink log;
 
   final RTCVideoRenderer videoRenderer = RTCVideoRenderer();
 
@@ -45,6 +50,26 @@ class WebRtcStreamSession {
   RTCDataChannel? _reliableInputChannel;
   RTCDataChannel? _partiallyReliableInputChannel;
   _RiInputCapabilities _inputCaps = const _RiInputCapabilities();
+
+  // --- Input transport state ---
+  final GfnInputEncoder _inputEncoder = GfnInputEncoder();
+  bool _inputReady = false;
+  bool _reliableInputOpen = false;
+  bool _partiallyReliableInputOpen = false;
+  Timer? _inputHeartbeatTimer;
+
+  /// Connected-gamepad bitmap: bit i = gamepad i connected, bit (i+8) = the
+  /// device is XInput/xinput-style (port of OpenNOW's `gamepadBitmap`).
+  int _gamepadBitmap = 0x0000;
+
+  // Latest virtual gamepad state, latched so it can be flushed once the input
+  // handshake completes (games detect input by receiving packets).
+  bool _gamepadTouched = false;
+  int _lastGamepadButtons = 0;
+  double _lastLx = 0, _lastLy = 0, _lastRx = 0, _lastRy = 0;
+  double _lastLt = 0, _lastRt = 0;
+
+  final LockKeyState _lockKeys = LockKeyState();
 
   static const int _defaultPartialReliableThresholdMs = 300;
   static const int _partiallyReliableGamepadMaskAll = (1 << 4) - 1;
@@ -112,7 +137,7 @@ class WebRtcStreamSession {
       _log('ICE connection state: ${state.name}');
     };
 
-    _log('Signaling: ${session.signalingServer}');
+    _log('Signaling: [SERVER HOST REDACTED]');
     final signaling = GfnSignalingClient(
       signalingServer: session.signalingServer,
       sessionId: session.sessionId,
@@ -305,13 +330,17 @@ class WebRtcStreamSession {
       );
       reliable.onDataChannelState = (state) {
         if (state == RTCDataChannelState.RTCDataChannelOpen) {
+          _reliableInputOpen = true;
           _log('Reliable input channel open');
         } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
+          _reliableInputOpen = false;
+          _inputReady = false;
+          _inputHeartbeatTimer?.cancel();
           _log('Reliable input channel closed');
         }
       };
       reliable.onMessage = (event) {
-        _log('Input channel message received (${event.isBinary ? 'binary' : 'text'})');
+        if (event.isBinary) _onInputChannelMessage(event.binary);
       };
       _reliableInputChannel = reliable;
 
@@ -323,10 +352,12 @@ class WebRtcStreamSession {
       );
       pr.onDataChannelState = (state) {
         if (state == RTCDataChannelState.RTCDataChannelOpen) {
+          _partiallyReliableInputOpen = true;
           _log(
             'Partially reliable input channel open (maxPacketLifeTime=${_inputCaps.partialReliableThresholdMs} ms)',
           );
         } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
+          _partiallyReliableInputOpen = false;
           _log('Partially reliable input channel closed');
         }
       };
@@ -335,6 +366,226 @@ class WebRtcStreamSession {
       // Data channels are advisory for media; don't fail the handshake over
       // them, but surface it in the log.
       _log('Data channel setup failed (continuing): $e');
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Input transport (port of OpenNOW's onInputHandshakeMessage + heartbeat)
+  // ---------------------------------------------------------------------
+
+  /// Handles the first server message on the reliable channel: the NVST input
+  /// handshake. NVIDIA's streamer sends `[0x020e][version u16 LE]` (or a
+  /// 0x0e-prefixed variant); the browser client does NOT echo it back — it
+  /// just reads the protocol version, resets the session clock, and starts
+  /// sending input.
+  void _onInputChannelMessage(Uint8List bytes) {
+    if (bytes.length < 2) return;
+    if (_inputReady) {
+      // Post-handshake messages are haptics/telemetry — ignore for now.
+      return;
+    }
+
+    final view = ByteData.sublistView(bytes);
+    final firstWord = view.getUint16(0, Endian.little);
+    var version = 2;
+
+    if (firstWord == 526) {
+      // 0x020e — version follows at offset 2 as u16 LE.
+      version = bytes.length >= 4 ? view.getUint16(2, Endian.little) : 2;
+    } else if (bytes[0] == 0x0e) {
+      version = firstWord;
+    } else {
+      return; // Not a handshake.
+    }
+
+    _inputEncoder.clock.start();
+    _inputReady = true;
+    _inputEncoder.setProtocolVersion(version);
+    _log('Input handshake complete (protocol v$version) — starting heartbeat');
+    _startInputHeartbeat();
+
+    // Flush latched gamepad state so the game immediately sees the controller.
+    if (_gamepadTouched) {
+      _sendLatchedGamepadState();
+    }
+  }
+
+  void _startInputHeartbeat() {
+    _inputHeartbeatTimer?.cancel();
+    _inputHeartbeatTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!_inputReady) return;
+      _sendReliable(_inputEncoder.encodeHeartbeat());
+    });
+  }
+
+  // --- Send helpers (port of OpenNOW's channel policy) ---
+
+  void _sendReliable(Uint8List payload) {
+    final channel = _reliableInputChannel;
+    if (channel == null || !_reliableInputOpen) return;
+    unawaited(channel.send(RTCDataChannelMessage.fromBinary(payload)));
+  }
+
+  void _sendPartiallyReliable(Uint8List payload) {
+    final channel = _partiallyReliableInputChannel;
+    if (channel != null && _partiallyReliableInputOpen) {
+      unawaited(channel.send(RTCDataChannelMessage.fromBinary(payload)));
+      return;
+    }
+    _sendReliable(payload);
+  }
+
+  bool _canUsePartiallyReliableGamepad(int controllerId) {
+    final mask = 1 << (controllerId & 0x1f);
+    return _partiallyReliableInputOpen &&
+        (_inputCaps.enablePartiallyReliableTransferGamepad & mask) != 0;
+  }
+
+  bool _canUsePartiallyReliableInput(int inputType) {
+    if (!_partiallyReliableInputOpen) return false;
+    if (inputType != inputMouseRel && inputType != inputMouseAbs) return false;
+    final hidMask = 1 << inputType;
+    if (hidMask == 0 || (_inputCaps.hidDeviceMask & hidMask) == 0) return false;
+    return (_inputCaps.enablePartiallyReliableTransferHid & hidMask) != 0;
+  }
+
+  // --- Public input API (called by the stream surface) ---
+
+  /// Forwards a Flutter [KeyEvent] to the streamer over the reliable channel.
+  void sendKeyEvent(KeyEvent event) {
+    if (!_inputReady) return;
+    if (event is KeyRepeatEvent) return;
+
+    final mapped = mapFlutterKeyEvent(event);
+    if (mapped == null) {
+      // Surface unmapped keys once per key-down so mapping gaps are visible
+      // in the session log instead of silently dropping input.
+      if (event is KeyDownEvent) {
+        // Route through the raw sink (not _log) so the UI status text in
+        // the top chrome isn't clobbered by this diagnostic.
+        log.log(
+          LogLevel.debug,
+          'webrtc',
+          '[input] key not mapped (dropped): hid=0x'
+              '${event.physicalKey.usbHidUsage.toRadixString(16)} '
+              'logical=0x${event.logicalKey.keyId.toRadixString(16)}',
+        );
+      }
+      return;
+    }
+
+    final timestampUs = _inputEncoder.clock.captureTimestampUs();
+    final modifiers = modifierFlagsForKeyEvent(event);
+
+    if (event is KeyUpEvent) {
+      _sendReliable(
+        _inputEncoder.encodeKeyUp(
+          keycode: mapped.keycode,
+          scancode: mapped.scancode,
+          modifiers: modifiers,
+          timestampUs: timestampUs,
+        ),
+      );
+    } else if (event is KeyDownEvent) {
+      _sendReliable(
+        _inputEncoder.encodeKeyDown(
+          keycode: mapped.keycode,
+          scancode: mapped.scancode,
+          modifiers: modifiers,
+          timestampUs: timestampUs,
+        ),
+      );
+    }
+
+    // Lock keys (Caps/Num/Scroll) travel in their own sync packet, toggled
+    // from the events like the official client's `iS()`.
+    if (event is KeyDownEvent && isLockKeyEvent(event)) {
+      if (_lockKeys.toggleFor(event)) {
+        _sendReliable(_inputEncoder.encodeLockKeysSync(_lockKeys.protocolBits));
+      }
+    }
+  }
+
+  /// Sends mouse movement deltas over the best channel for the negotiated
+  /// partially-reliable HID mask (falls back to reliable).
+  void sendMouseMove({required int dx, required int dy}) {
+    if (!_inputReady) return;
+    final payload = _inputEncoder.encodeMouseMove(
+      dx: dx,
+      dy: dy,
+      timestampUs: _inputEncoder.clock.captureTimestampUs(),
+    );
+    if (_canUsePartiallyReliableInput(inputMouseRel)) {
+      _sendPartiallyReliable(payload);
+    } else {
+      _sendReliable(payload);
+    }
+  }
+
+  /// Sends a mouse button press/release (1-based GFN button ids).
+  void sendMouseButton({required bool down, required int button}) {
+    if (!_inputReady) return;
+    final ts = _inputEncoder.clock.captureTimestampUs();
+    final payload = down
+        ? _inputEncoder.encodeMouseButtonDown(button: button, timestampUs: ts)
+        : _inputEncoder.encodeMouseButtonUp(button: button, timestampUs: ts);
+    _sendReliable(payload);
+  }
+
+  /// Sends a vertical mouse wheel delta.
+  void sendMouseWheel({required int delta}) {
+    if (!_inputReady) return;
+    _sendReliable(
+      _inputEncoder.encodeMouseWheel(
+        delta: delta,
+        timestampUs: _inputEncoder.clock.captureTimestampUs(),
+      ),
+    );
+  }
+
+  /// Latches + sends virtual-gamepad state. Sticks/triggers are normalized
+  /// -1..1 / 0..1; the encoder applies deadzone + integer conversion.
+  void sendGamepadState({
+    int controllerId = 0,
+    required int buttons,
+    required double leftStickX,
+    required double leftStickY,
+    required double rightStickX,
+    required double rightStickY,
+    double leftTrigger = 0,
+    double rightTrigger = 0,
+  }) {
+    _gamepadTouched = true;
+    _lastGamepadButtons = buttons;
+    _lastLx = leftStickX;
+    _lastLy = leftStickY;
+    _lastRx = rightStickX;
+    _lastRy = rightStickY;
+    _lastLt = leftTrigger;
+    _lastRt = rightTrigger;
+    _gamepadBitmap |= (1 << controllerId) | (1 << (controllerId + 8));
+    if (!_inputReady) return; // flushed once the handshake completes
+    _sendLatchedGamepadState();
+  }
+
+  void _sendLatchedGamepadState() {
+    final usePr = _canUsePartiallyReliableGamepad(0);
+    final payload = _inputEncoder.encodeGamepadState(
+      controllerId: 0,
+      buttons: _lastGamepadButtons,
+      leftTrigger: normalizeToUint8(_lastLt),
+      rightTrigger: normalizeToUint8(_lastRt),
+      leftStickX: normalizeToInt16(_lastLx),
+      leftStickY: normalizeToInt16(_lastLy),
+      rightStickX: normalizeToInt16(_lastRx),
+      rightStickY: normalizeToInt16(_lastRy),
+      bitmap: _gamepadBitmap,
+      usePartiallyReliable: usePr,
+    );
+    if (usePr) {
+      _sendPartiallyReliable(payload);
+    } else {
+      _sendReliable(payload);
     }
   }
 
@@ -885,6 +1136,10 @@ class WebRtcStreamSession {
     _disposed = true;
     _signaling?.disconnect();
     _signaling = null;
+
+    _inputHeartbeatTimer?.cancel();
+    _inputHeartbeatTimer = null;
+    _inputReady = false;
 
     try {
       _reliableInputChannel?.close();

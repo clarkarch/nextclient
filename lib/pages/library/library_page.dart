@@ -54,6 +54,11 @@ class _LibraryPageState extends State<LibraryPage> {
       final games = await widget.services.catalog.fetchLibraryGamesUncached(
         token: token,
       );
+      widget.services.logSink.log(
+        LogLevel.info,
+        'library',
+        'Library loaded: ${games.length} games',
+      );
       if (!mounted) return;
       setState(() {
         _games = games;
@@ -61,6 +66,7 @@ class _LibraryPageState extends State<LibraryPage> {
       });
     } catch (e) {
       debugPrint('[library] load failed: $e');
+      widget.services.logSink.log(LogLevel.error, 'library', 'Load failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;

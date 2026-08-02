@@ -83,7 +83,7 @@ class GfnSignalingClient {
         'pairing_id': sessionId,
       },
     );
-    log.log(LogLevel.info, 'signaling', 'URL: $url (server: $signalingServer, signalingUrl: $signalingUrl)');
+    log.log(LogLevel.info, 'signaling', 'Sign-in URL built [URL REDACTED]');
     return url.toString();
   }
 
@@ -111,9 +111,9 @@ class GfnSignalingClient {
     final protocol = 'x-nv-sessionid.$sessionId';
     final generation = ++_connectionGeneration;
 
-    log.log(LogLevel.info, 'signaling', 'Connecting to: $url');
-    log.log(LogLevel.info, 'signaling', 'Session ID: $sessionId');
-    log.log(LogLevel.info, 'signaling', 'Protocol: $protocol');
+    log.log(LogLevel.info, 'signaling', 'Connecting to: [SIGNALING URL REDACTED]');
+    log.log(LogLevel.info, 'signaling', 'Session ID: [SESSION ID REDACTED]');
+    log.log(LogLevel.info, 'signaling', 'Protocol: x-nv-sessionid.[SESSION ID REDACTED]');
 
     final urlHost = url.replaceFirst(RegExp(r'^wss?://'), '').split('/').first;
     final channel = IOWebSocketChannel.connect(

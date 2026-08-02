@@ -80,8 +80,15 @@ class _HomePageState extends State<HomePage> {
           _error = 'Could not load the catalog. Check your connection.';
         }
       });
+      widget.services.logSink.log(
+        LogLevel.info,
+        'home',
+        'Catalog loaded: featured=${featured?.length ?? 0}, '
+            'recent=${recent?.length ?? 0}, all=${all?.length ?? 0}',
+      );
     } catch (e) {
       debugPrint('[home] load failed: $e');
+      widget.services.logSink.log(LogLevel.error, 'home', 'Load failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -95,6 +102,11 @@ class _HomePageState extends State<HomePage> {
       return await future;
     } catch (e) {
       debugPrint('[home] section load failed: $e');
+      widget.services.logSink.log(
+        LogLevel.warn,
+        'home',
+        'Section load failed: $e',
+      );
       return null;
     }
   }

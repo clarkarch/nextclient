@@ -11,8 +11,8 @@ import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/neon_switch.dart';
 
-/// Stream quality options sent to the NVIDIA server on launch. Options are
-/// gated by the account's entitled resolutions when the subscription is known.
+/// Stream options sent to the NVIDIA server on launch. Options are gated by
+/// the account's entitled resolutions when the subscription is known.
 class StreamQualityPage extends StatefulWidget {
   final AppServices services;
 
@@ -110,7 +110,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
   @override
   Widget build(BuildContext context) {
     return NeonPageScaffold(
-      title: 'Stream Quality',
+      title: 'Stream',
       showBack: true,
       child: ListenableBuilder(
         listenable: widget.services.settings,

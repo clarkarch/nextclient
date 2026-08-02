@@ -9,11 +9,13 @@ import '../widgets/neon_chip.dart';
 import '../widgets/neon_page_scaffold.dart';
 import '../widgets/neon_snackbar.dart';
 
-/// Live view over the in-memory [RingBufferLogSink].
+/// Live view over the in-memory [RingBufferLogSink] inside a
+/// [CompositeLogSink] (which also fans logs out to the terminal and a file).
 class LogViewerPage extends StatefulWidget {
-  final RingBufferLogSink logSink;
+  final CompositeLogSink logSink;
+  final String? logFilePath;
 
-  const LogViewerPage({super.key, required this.logSink});
+  const LogViewerPage({super.key, required this.logSink, this.logFilePath});
 
   @override
   State<LogViewerPage> createState() => _LogViewerPageState();
@@ -92,6 +94,17 @@ class _LogViewerPageState extends State<LogViewerPage> {
     );
   }
 
+  void _copyPath() {
+    final path = widget.logFilePath;
+    if (path == null) return;
+    Clipboard.setData(ClipboardData(text: path));
+    showNeonSnackbar(
+      context,
+      'Log file path copied',
+      copyable: false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return NeonPageScaffold(
@@ -119,26 +132,104 @@ class _LogViewerPageState extends State<LogViewerPage> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 12),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final f in _LogFilter.values)
-                  GestureDetector(
-                    onTap: () => setState(() => _filter = f),
-                    child: NeonChip(
-                      label: switch (f) {
-                        _LogFilter.all => 'All',
-                        _LogFilter.info => 'Info+',
-                        _LogFilter.warn => 'Warn+',
-                        _LogFilter.error => 'Error',
-                      },
-                      tone: f == _filter
-                          ? NeonChipTone.accent
-                          : NeonChipTone.neutral,
-                      filled: f == _filter,
+                if (widget.logFilePath != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0x0FFFFFFF),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0x22FFFFFF)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.description_outlined,
+                            size: 15, color: Neon.inkSoft),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            widget.logFilePath!,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Neon.inkSoft,
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => _copyPath(),
+                          child: const Icon(Icons.copy,
+                              size: 14, color: Neon.inkMuted),
+                        ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 10),
+                ],
+                if (!widget.logSink.enabled) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Neon.warning.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Neon.warning.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.warning_amber,
+                            size: 15, color: Neon.warning),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Verbose logging is off — enable it in Settings → '
+                            'Performance before reproducing an issue.',
+                            style: TextStyle(
+                              color: Neon.warning,
+                              fontSize: 11.5,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final f in _LogFilter.values)
+                      GestureDetector(
+                        onTap: () => setState(() => _filter = f),
+                        child: NeonChip(
+                          label: switch (f) {
+                            _LogFilter.all => 'All',
+                            _LogFilter.info => 'Info+',
+                            _LogFilter.warn => 'Warn+',
+                            _LogFilter.error => 'Error',
+                          },
+                          tone: f == _filter
+                              ? NeonChipTone.accent
+                              : NeonChipTone.neutral,
+                          filled: f == _filter,
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),

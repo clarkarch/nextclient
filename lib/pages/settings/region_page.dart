@@ -47,9 +47,15 @@ class _RegionPageState extends State<RegionPage> {
         _regions = result.regions;
         _loading = false;
       });
+      widget.services.logSink.log(
+        LogLevel.info,
+        'region',
+        'Loaded ${result.regions.length} regions',
+      );
       await _ping(result.regions);
     } catch (e) {
       debugPrint('[region] load failed: $e');
+      widget.services.logSink.log(LogLevel.error, 'region', 'Load failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;

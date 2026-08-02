@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:gfn_core/gfn_core.dart';
+import 'package:pointer_lock/pointer_lock.dart';
 
 import '../../main.dart';
+import '../../state/gfn_input_protocol.dart';
 import '../../state/session_controller.dart';
 import '../../state/user_settings.dart';
 import '../../state/webrtc_stream_session.dart';
@@ -86,10 +89,25 @@ class _StreamPageState extends State<StreamPage> {
       },
     );
     _webrtc = webrtc;
+    widget.services.logSink.log(
+      LogLevel.info,
+      'stream',
+      'Starting WebRTC session [SESSION ID REDACTED]',
+    );
     try {
       await webrtc.start();
+      widget.services.logSink.log(
+        LogLevel.info,
+        'stream',
+        'WebRTC session started',
+      );
     } catch (e) {
       debugPrint('[stream] webrtc start failed: $e');
+      widget.services.logSink.log(
+        LogLevel.error,
+        'stream',
+        'WebRTC start failed: $e',
+      );
       if (!mounted) return;
       // Tear down so a later retry isn't blocked by the non-null guard.
       await webrtc.dispose();
@@ -124,7 +142,14 @@ class _StreamPageState extends State<StreamPage> {
           ),
         );
         final resumed = widget.services.session.session;
-        if (resumed != null && mounted) await _connectStream(resumed);
+        if (resumed != null && mounted) {
+          widget.services.logSink.log(
+            LogLevel.info,
+            'stream',
+            'Session resumed [SESSION ID REDACTED]',
+          );
+          await _connectStream(resumed);
+        }
         return;
       }
       final request = widget.request;
@@ -144,8 +169,18 @@ class _StreamPageState extends State<StreamPage> {
       );
       await widget.services.session.launch(built);
       final launched = widget.services.session.session;
+      widget.services.logSink.log(
+        LogLevel.info,
+        'stream',
+        'Session launched [SESSION ID REDACTED]',
+      );
       if (launched != null && mounted) await _connectStream(launched);
     } catch (e) {
+      widget.services.logSink.log(
+        LogLevel.error,
+        'stream',
+        'Launch failed: $e',
+      );
       debugPrint('Launch failed: $e');
     }
   }
@@ -153,18 +188,33 @@ class _StreamPageState extends State<StreamPage> {
   Future<void> _stopAndExit() async {
     if (_stopInFlight) return;
     _stopInFlight = true;
-    // Local teardown first, but never let a local failure prevent the
-    // server-side session stop (DELETE /v2/session).
-    try {
-      await _webrtc?.dispose();
-    } catch (e) {
-      debugPrint('[stream] webrtc teardown failed (continuing): $e');
-    } finally {
+    final webrtc = _webrtc;
+    // Drop the video surface out of the widget tree first so the renderer's
+    // native texture is no longer being painted when we dispose it. Tearing
+    // down a still-mounted RTCVideoView's texture crashes the engine on Linux
+    // (SIGSEGV), and a route pop keeps the outgoing subtree alive during its
+    // exit transition.
+    if (mounted) {
+      setState(() => _webrtc = null);
+    } else {
       _webrtc = null;
     }
+    if (mounted) Navigator.of(context).pop();
+    // Local teardown after the video surface is off-screen. Never let a local
+    // failure prevent the server-side session stop (DELETE /v2/session).
+    try {
+      await webrtc?.dispose();
+      widget.services.logSink.log(LogLevel.info, 'stream', 'WebRTC torn down');
+    } catch (e) {
+      debugPrint('[stream] webrtc teardown failed (continuing): $e');
+      widget.services.logSink.log(
+        LogLevel.warn,
+        'stream',
+        'WebRTC teardown failed (continuing): $e',
+      );
+    }
     await _stopServerSession();
-    if (!mounted) return;
-    Navigator.of(context).pop();
+    widget.services.logSink.log(LogLevel.info, 'stream', 'Stream page closed');
   }
 
   /// Stops the CloudMatch session (server-side DELETE) and resets the
@@ -697,8 +747,9 @@ class _InfoRow extends StatelessWidget {
 
 /// Full-bleed streaming surface: video fills the screen, with gradient chrome
 /// overlays (session timer + exit, bottom control bar) and an optional virtual
-/// gamepad overlay. Esc or tapping the video toggles the chrome. Layout
-/// borrows from open_next's stream screen, themed with Neon.
+/// gamepad overlay. A single Esc is forwarded to the game; a quick double-Esc
+/// shows the chrome; tapping the video locks the mouse. Layout borrows from
+/// open_next's stream screen, themed with Neon.
 class _ReadySurface extends StatefulWidget {
   final CatalogGame game;
   final SessionInfo session;
@@ -723,69 +774,310 @@ class _ReadySurface extends StatefulWidget {
 class _ReadySurfaceState extends State<_ReadySurface> {
   bool _chromeVisible = true;
 
-  // Gamepad bitmask + stick state. The input-channel encoder isn't ported
-  // yet, so these just accumulate here ready to be handed to it.
-  int _gamepadButtons = 0;
-  int _leftStickX = 0;
-  int _leftStickY = 0;
-  int _rightStickX = 0;
-  int _rightStickY = 0;
+  /// True while the OS pointer is locked: cursor hidden, raw movement deltas
+  /// stream straight to the game so FPS-style look works without the cursor
+  /// hitting the window edge. The capture click is consumed; a double-Esc
+  /// shows the chrome and releases it (a single Esc goes to the game).
+  bool _mouseLocked = false;
+  StreamSubscription<PointerLockMoveEvent>? _pointerLockSub;
 
-  void _toggleChrome() => setState(() => _chromeVisible = !_chromeVisible);
+  /// In-flight unlock so a re-lock can't race it. Cancelling a Wayland lock
+  /// session is asynchronous (the native `event_stream_cancel` → unlock round
+  /// trip happens on the plugin's own event stream); starting a new session
+  /// before that finishes would let the stale unlock tear down the fresh lock.
+  Future<void>? _pendingUnlock;
+
+  /// Double-Esc detection: a single Esc is always forwarded to the game; a
+  /// second Esc arriving within [_escDoubleWindow] shows the stream UI
+  /// instead (that second press is consumed — the game already saw the first).
+  static const Duration _escDoubleWindow = Duration(milliseconds: 400);
+  Timer? _escTimer;
+  bool _escArmed = false;
+  bool _escDownForwarded = false;
+
+  /// Bitmask of mouse buttons currently pressed on the video surface, used to
+  /// detect which button a down/up event refers to (GFN protocol is 1-based
+  /// single-button events).
+  int _pressedMouseButtons = 0;
+
+  /// True while a click lands with chrome hidden and the mouse unlocked. That
+  /// click is consumed as the "capture click" that enters mouse lock via the
+  /// tap handler (never streamed to the game), matching cloud-gaming
+  /// click-to-capture conventions.
+  bool _consumingClickForLock = false;
+
+  // Gamepad bitmask + stick state (normalized -1..1), streamed over the
+  // input data channel once the NVST handshake completes.
+  int _gamepadButtons = 0;
+  double _leftStickX = 0;
+  double _leftStickY = 0;
+  double _rightStickX = 0;
+  double _rightStickY = 0;
+
+  /// Routes Escape keys: a single press is read by the game; a quick second
+  /// press shows the stream UI instead. The second press (and its release)
+  /// never reaches the game; key-up is only echoed for a down the game saw.
+  void _handleEscKey(KeyEvent event) {
+    if (event is KeyRepeatEvent) return;
+    if (event is KeyUpEvent) {
+      if (_escDownForwarded) widget.webrtc?.sendKeyEvent(event);
+      _escDownForwarded = false;
+      return;
+    }
+    if (event is! KeyDownEvent) return;
+    if (_escArmed) {
+      // Second Esc within the window: show the stream UI. The game already
+      // received the first press, so this one is consumed entirely.
+      _escArmed = false;
+      _escTimer?.cancel();
+      _escTimer = null;
+      if (_mouseLocked) _exitMouseLock();
+      // Double-Esc always shows the stream UI (never hides it).
+      if (!_chromeVisible) setState(() => _chromeVisible = true);
+      return;
+    }
+    // First Esc: forward to the game and arm the double-press window.
+    _escArmed = true;
+    _escDownForwarded = true;
+    widget.webrtc?.sendKeyEvent(event);
+    _escTimer?.cancel();
+    _escTimer = Timer(_escDoubleWindow, () {
+      _escArmed = false;
+      _escTimer = null;
+    });
+  }
+
+  /// True once the native pointer-lock session has actually delivered a delta.
+  /// The plugin's Linux implementation uses the deprecated `gdk_pointer_grab`,
+  /// which fails on Wayland (and swallows the error inside an async onListen,
+  /// so we can't learn about it from an error callback). Instead we optimistically
+  /// attempt the grab and let it take over only once it proves alive: until the
+  /// first plugin delta arrives, Flutter pointer deltas keep flowing (soft lock).
+  bool _nativeGrabLive = false;
+
+  /// Enters in-game mode: hides the chrome and locks the pointer.
+  ///
+  /// The soft lock always engages first (chrome hidden, cursor hidden via
+  /// MouseRegion, deltas streamed from Flutter pointer events), so input works
+  /// even where no OS grab exists — that's the path on native Wayland. On
+  /// X11/Windows/macOS/web we additionally request a real grab for unbounded
+  /// deltas; it only starts driving input after its first event.
+  Future<void> _enterMouseLock() async {
+    if (_mouseLocked) return;
+    // Wait for any pending unlock to land before creating a new session, so
+    // its native unlock doesn't tear down the lock we're about to acquire.
+    final pending = _pendingUnlock;
+    _pendingUnlock = null;
+    if (pending != null) await pending;
+    if (!mounted) return;
+    if (_mouseLocked) return;
+    setState(() {
+      _mouseLocked = true;
+      _chromeVisible = false;
+    });
+    if (_pointerLockSub != null) return;
+    try {
+      final stream = pointerLock.createSession(
+        cursor: PointerLockCursor.hidden,
+      );
+      _pointerLockSub = stream.listen(
+        (event) {
+          _nativeGrabLive = true;
+          _sendMouseDelta(event.delta);
+        },
+        onDone: _onPointerLockReleased,
+        onError: (Object error) {
+          debugPrint('[stream] pointer lock error: $error');
+          _onPointerLockReleased();
+        },
+      );
+    } catch (e) {
+      // Grab unavailable (e.g. native Wayland) — the soft lock is already
+      // active, keep going.
+      debugPrint('[stream] pointer lock unavailable (soft lock active): $e');
+    }
+  }
+
+  void _exitMouseLock() {
+    final sub = _pointerLockSub;
+    _pointerLockSub = null;
+    _nativeGrabLive = false;
+    _mouseLocked = false;
+    if (sub != null) _pendingUnlock = sub.cancel();
+  }
+
+  /// Fired when the platform releases the pointer on its own (e.g. the
+  /// browser exits pointer lock on Esc during web builds).
+  void _onPointerLockReleased() {
+    _pendingUnlock = null;
+    if (!mounted) return;
+    setState(() {
+      _pointerLockSub = null;
+      _nativeGrabLive = false;
+      _mouseLocked = false;
+      _chromeVisible = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    _pointerLockSub?.cancel();
+    _pendingUnlock = null;
+    _escTimer?.cancel();
+    super.dispose();
+  }
+
+  // --- Mouse → stream (only when the chrome is hidden, i.e. in-game) -------
+
+  int? _gfnButtonForBit(int bit) => switch (bit) {
+        kPrimaryMouseButton => mouseLeft,
+        kSecondaryMouseButton => mouseRight,
+        kMiddleMouseButton => mouseMiddle,
+        kBackMouseButton => mouseBack,
+        kForwardMouseButton => mouseForward,
+        _ => null,
+      };
+
+  void _sendMouseDelta(Offset delta) {
+    final dx = delta.dx.round().clamp(-32767, 32767);
+    final dy = delta.dy.round().clamp(-32767, 32767);
+    if (dx == 0 && dy == 0) return;
+    widget.webrtc?.sendMouseMove(dx: dx, dy: dy);
+  }
+
+  void _onVideoPointerDown(PointerDownEvent event) {
+    if (_chromeVisible) return; // chrome consumes; tap will hide it
+    if (!_mouseLocked) {
+      // First click after hiding the UI is the capture click: consume it and
+      // let the tap below enter mouse lock (consistent with the chrome-visible
+      // path, where the click is consumed too).
+      _consumingClickForLock = true;
+      return;
+    }
+    final newly = event.buttons & ~_pressedMouseButtons;
+    _pressedMouseButtons = event.buttons;
+    for (var bit = 1; bit <= kForwardMouseButton; bit <<= 1) {
+      if ((newly & bit) == 0) continue;
+      final button = _gfnButtonForBit(bit);
+      if (button != null) {
+        widget.webrtc?.sendMouseButton(down: true, button: button);
+      }
+    }
+  }
+
+  void _onVideoPointerUp(PointerUpEvent event) {
+    if (_chromeVisible) return;
+    if (_consumingClickForLock) {
+      _consumingClickForLock = false;
+      return;
+    }
+    final released = _pressedMouseButtons & ~event.buttons;
+    _pressedMouseButtons = event.buttons;
+    for (var bit = 1; bit <= kForwardMouseButton; bit <<= 1) {
+      if ((released & bit) == 0) continue;
+      final button = _gfnButtonForBit(bit);
+      if (button != null) {
+        widget.webrtc?.sendMouseButton(down: false, button: button);
+      }
+    }
+  }
+
+  // Deltas stream straight from Flutter pointer events whenever the chrome is
+  // hidden (in-game). A native grab session only takes over once it has proven
+  // alive (_nativeGrabLive) — until then Flutter deltas keep flowing, which is
+  // what keeps the mouse working on native Wayland where the grab can't exist.
+  void _onVideoPointerMove(PointerEvent event) {
+    if (_pointerLockSub != null && _nativeGrabLive) return;
+    if (!_chromeVisible && event is PointerMoveEvent) {
+      _sendMouseDelta(event.delta);
+    }
+  }
+
+  void _onVideoPointerHover(PointerHoverEvent event) {
+    if (_pointerLockSub != null && _nativeGrabLive) return;
+    if (!_chromeVisible) _sendMouseDelta(event.delta);
+  }
+
+  void _onVideoPointerCancel(PointerCancelEvent event) {
+    if (_chromeVisible) return;
+    _consumingClickForLock = false;
+    // Pointer lock can inject cancel/add pairs (Windows capture, gdk grab);
+    // release only the buttons we think are held so the game never sees a
+    // stuck button — and no spurious ups for buttons that were never down.
+    final wasDown = _pressedMouseButtons;
+    _pressedMouseButtons = 0;
+    for (var bit = 1; bit <= kForwardMouseButton; bit <<= 1) {
+      if ((wasDown & bit) == 0) continue;
+      final button = _gfnButtonForBit(bit);
+      if (button != null) {
+        widget.webrtc?.sendMouseButton(down: false, button: button);
+      }
+    }
+  }
+
+  void _onVideoPointerSignal(PointerSignalEvent event) {
+    if (_chromeVisible || event is! PointerScrollEvent) return;
+    final dy = event.scrollDelta.dy.round();
+    if (dy != 0) widget.webrtc?.sendMouseWheel(delta: dy);
+  }
 
   void _sendGamepadState() {
-    // TODO(input): encode + send over input_channel_v1 once ported.
-    debugPrint(
-      '[gamepad] buttons=0x${_gamepadButtons.toRadixString(16)} '
-      'l=($_leftStickX,$_leftStickY) r=($_rightStickX,$_rightStickY)',
+    widget.webrtc?.sendGamepadState(
+      buttons: _gamepadButtons,
+      leftStickX: _leftStickX,
+      leftStickY: _leftStickY,
+      rightStickX: _rightStickX,
+      rightStickY: _rightStickY,
     );
   }
 
   void _onLeftStickDrag(Offset offset) {
-    _leftStickX = (offset.dx * 127).round().clamp(-127, 127);
-    _leftStickY = (offset.dy * 127).round().clamp(-127, 127);
+    _leftStickX = offset.dx;
+    _leftStickY = offset.dy;
     _sendGamepadState();
   }
 
   void _onRightStickDrag(Offset offset) {
-    _rightStickX = (offset.dx * 127).round().clamp(-127, 127);
-    _rightStickY = (offset.dy * 127).round().clamp(-127, 127);
+    _rightStickX = offset.dx;
+    _rightStickY = offset.dy;
     _sendGamepadState();
   }
 
+  // XInput button flags — must match the protocol constants in
+  // gfn_input_protocol.dart (A=0x1000…, DPAD_UP=0x0001…).
   void _onFaceButtonPressed(FaceButtonLabel button) {
     _gamepadButtons |= switch (button) {
-      FaceButtonLabel.a => 0x0001,
-      FaceButtonLabel.b => 0x0002,
-      FaceButtonLabel.x => 0x0004,
-      FaceButtonLabel.y => 0x0008,
+      FaceButtonLabel.a => 0x1000,
+      FaceButtonLabel.b => 0x2000,
+      FaceButtonLabel.x => 0x4000,
+      FaceButtonLabel.y => 0x8000,
     };
     _sendGamepadState();
   }
 
   void _onFaceButtonReleased(FaceButtonLabel button) {
     _gamepadButtons &= ~switch (button) {
-      FaceButtonLabel.a => 0x0001,
-      FaceButtonLabel.b => 0x0002,
-      FaceButtonLabel.x => 0x0004,
-      FaceButtonLabel.y => 0x0008,
+      FaceButtonLabel.a => 0x1000,
+      FaceButtonLabel.b => 0x2000,
+      FaceButtonLabel.x => 0x4000,
+      FaceButtonLabel.y => 0x8000,
     };
     _sendGamepadState();
   }
 
   void _onDpadPressed(DPadDirection direction) {
     _gamepadButtons |= switch (direction) {
-      DPadDirection.up => 0x1000,
-      DPadDirection.down => 0x2000,
-      DPadDirection.left => 0x4000,
-      DPadDirection.right => 0x8000,
+      DPadDirection.up => 0x0001,
+      DPadDirection.down => 0x0002,
+      DPadDirection.left => 0x0004,
+      DPadDirection.right => 0x0008,
       DPadDirection.none => 0,
     };
     _sendGamepadState();
   }
 
   void _onDpadReleased() {
-    _gamepadButtons &= ~(0x1000 | 0x2000 | 0x4000 | 0x8000);
+    _gamepadButtons &= ~(0x0001 | 0x0002 | 0x0004 | 0x0008);
     _sendGamepadState();
   }
 
@@ -795,12 +1087,15 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
-        if (event is KeyDownEvent &&
-            event.logicalKey == LogicalKeyboardKey.escape) {
-          _toggleChrome();
+        // Escape: a single press is read by the game; a quick second press
+        // within the double-press window shows the stream UI instead.
+        if (event.logicalKey == LogicalKeyboardKey.escape) {
+          _handleEscKey(event);
           return KeyEventResult.handled;
         }
-        return KeyEventResult.ignored;
+        // Everything else goes to the stream over the input channel.
+        widget.webrtc?.sendKeyEvent(event);
+        return KeyEventResult.handled;
       },
       // Rebuild when stream settings change (gamepad/stats toggles in the
       // bottom chrome mutate UserSettings, a ChangeNotifier).
@@ -809,22 +1104,49 @@ class _ReadySurfaceState extends State<_ReadySurface> {
         builder: (context, _) => Stack(
           fit: StackFit.expand,
           children: [
-          // Video fills the screen. Tap toggles the chrome — but only this
-          // layer owns the tap, so touching the gamepad below never flips it.
+          // Video fills the screen. When the chrome is visible, tapping hides
+          // it (UI mode). When hidden (in-game), all mouse input — deltas,
+          // buttons, wheel — streams to the game. Raw Listeners below the
+          // chrome/gamepad overlays mean those still win hit-testing.
           Positioned.fill(
-            child: GestureDetector(
+            child: Listener(
               behavior: HitTestBehavior.opaque,
-              onTap: _toggleChrome,
-              child: Container(
-                color: Colors.black,
-                child: renderer != null
-                    ? RTCVideoView(
-                        renderer,
-                        objectFit:
-                            RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                        placeholderBuilder: (_) => _backdropArt(),
-                      )
-                    : _backdropArt(),
+              onPointerDown: _onVideoPointerDown,
+              onPointerUp: _onVideoPointerUp,
+              onPointerMove: _onVideoPointerMove,
+              onPointerHover: _onVideoPointerHover,
+              onPointerSignal: _onVideoPointerSignal,
+              onPointerCancel: _onVideoPointerCancel,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  // Tapping the stream surface captures the pointer: the first
+                  // click (chrome visible, or unlocked-but-hidden) is consumed
+                  // by _onVideoPointerDown/_Up and enters mouse lock; further
+                  // clicks play. Double-Esc releases.
+                  if (_chromeVisible || !_mouseLocked) {
+                    _enterMouseLock();
+                  }
+                },
+                child: MouseRegion(
+                  // Soft lock: hide the OS cursor while in-game. This is what
+                  // actually hides it on Linux/Wayland, where no native grab
+                  // exists.
+                  cursor: _mouseLocked
+                      ? SystemMouseCursors.none
+                      : SystemMouseCursors.basic,
+                  child: Container(
+                    color: Colors.black,
+                    child: renderer != null
+                        ? RTCVideoView(
+                            renderer,
+                            objectFit:
+                                RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                            placeholderBuilder: (_) => _backdropArt(),
+                          )
+                        : _backdropArt(),
+                  ),
+                ),
               ),
             ),
           ),
@@ -853,6 +1175,19 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                 ),
               ),
 
+            // Hint pill: mouse-lock + double-Esc gestures.
+            if (_chromeVisible)
+              Positioned(
+                top: 88,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: _HintPill(),
+                  ),
+                ),
+              ),
+
             // Bottom chrome: control bar.
             if (_chromeVisible)
               Positioned(
@@ -861,14 +1196,16 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                 bottom: 0,
                 child: _BottomChrome(
                   settings: widget.settings,
-                  onStop: widget.onStop,
+                  onFullscreen: _enterMouseLock,
                 ),
               ),
 
             // Virtual gamepad overlay (independent of chrome visibility). The
             // no-op tap on the wrapper swallows taps so using the gamepad
             // never toggles the chrome (raw Listeners don't join the arena).
-            if (widget.settings.streamGamepad)
+            // Hidden while the pointer is locked — the OS grab makes stick
+            // drags dead UI.
+            if (widget.settings.streamGamepad && !_mouseLocked)
               Positioned(
                 left: 0,
                 right: 0,
@@ -1030,14 +1367,14 @@ class _TopChrome extends StatelessWidget {
   }
 }
 
-/// Bottom gradient chrome: gamepad / stats toggles + exit.
+/// Bottom gradient chrome: gamepad / stats toggles + fullscreen mouse lock.
 class _BottomChrome extends StatelessWidget {
   final UserSettings settings;
-  final VoidCallback onStop;
+  final VoidCallback onFullscreen;
 
   const _BottomChrome({
     required this.settings,
-    required this.onStop,
+    required this.onFullscreen,
   });
 
   @override
@@ -1080,9 +1417,9 @@ class _BottomChrome extends StatelessWidget {
           ),
           const SizedBox(width: 40),
           _ChromeButton(
-            icon: Icons.close,
-            label: 'Exit',
-            onTap: onStop,
+            icon: Icons.fullscreen,
+            label: 'Fullscreen',
+            onTap: onFullscreen,
           ),
         ],
       ),
@@ -1128,13 +1465,41 @@ class _ChromeButton extends StatelessWidget {
   }
 }
 
+/// Subtle hint pill explaining the gestures (single Esc reaches the game,
+/// double-Esc opens the UI, click locks the mouse).
+class _HintPill extends StatelessWidget {
+  const _HintPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.keyboard, size: 13, color: Neon.inkSoft),
+          SizedBox(width: 7),
+          Text(
+            'click to lock mouse · Esc goes to the game · Esc Esc opens UI',
+            style: TextStyle(color: Neon.inkSoft, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Minimal stats chip showing the live webrtc status (real stream stats via
 /// getStats can slot in here later).
 class _FpsOverlay extends StatelessWidget {
   final String? webrtcStatus;
 
   const _FpsOverlay({this.webrtcStatus});
-
   @override
   Widget build(BuildContext context) {
     return Container(

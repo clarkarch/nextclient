@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
@@ -7,6 +9,7 @@ import 'pages/library/library_page.dart';
 import 'pages/login/login_page.dart';
 import 'pages/settings/settings_page.dart';
 import 'pages/stream/stream_page.dart';
+import 'state/title_bar_controller.dart';
 import 'theme/neon.dart';
 import 'widgets/neon_sidebar.dart';
 import 'widgets/neon_snackbar.dart';
@@ -18,13 +21,36 @@ class DebugShellApp extends StatefulWidget {
   State<DebugShellApp> createState() => _DebugShellAppState();
 }
 
-class _DebugShellAppState extends State<DebugShellApp> {
+class _DebugShellAppState extends State<DebugShellApp>
+    with WidgetsBindingObserver {
   Future<AppServices>? _servicesFuture;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _servicesFuture = AppServices.create();
+  }
+
+  void _onServicesReady(AppServices services) {
+    // Apply the persisted "Hide title bar" UI setting to the native window.
+    unawaited(TitleBarController.apply(services.settings));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Flush the disk log when the app is being torn down so the tail of the
+    // session is persisted even if the process exits before the periodic
+    // auto-flush fires.
+    if (state == AppLifecycleState.detached) {
+      _servicesFuture?.then((services) => services.flushLogs());
+    }
   }
 
   @override
@@ -59,7 +85,9 @@ class _DebugShellAppState extends State<DebugShellApp> {
               ),
             );
           }
-          return AuthGate(services: snapshot.data!);
+          final services = snapshot.data!;
+          _onServicesReady(services);
+          return AuthGate(services: services);
         },
       ),
     );
@@ -86,8 +114,16 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   void _refresh() {
+    final session = widget.services.auth.getSession();
+    widget.services.logSink.log(
+      LogLevel.info,
+      'auth',
+      session == null
+          ? 'Signed out — returning to login'
+          : 'Authenticated as [USER ID REDACTED]',
+    );
     setState(() {
-      _session = widget.services.auth.getSession();
+      _session = session;
     });
   }
 
@@ -114,6 +150,10 @@ class _ShellState extends State<Shell> {
   int _index = 0;
   bool _sidebarExpanded = true;
 
+  /// How long the resume prompt stays on screen. Long enough to actually
+  /// tap Resume (the default 3s is too easy to miss on app load).
+  static const Duration _resumePromptDuration = Duration(seconds: 15);
+
   @override
   void initState() {
     super.initState();
@@ -129,17 +169,30 @@ class _ShellState extends State<Shell> {
       final token = session.tokens.idToken ?? session.tokens.accessToken;
       final active = await widget.services.cloudMatch.getActiveSessions(
         token: token,
-        streamingBaseUrl: 'https://prod.cloudmatchbeta.nvidiagrid.net/',
+        streamingBaseUrl: defaultStreamingBaseUrl,
       );
       if (!mounted || active.isEmpty) return;
       final first = active.first;
-      showNeonSnackbar(
-        context,
-        'Active session found (appId ${first.appId}). Resume it?',
-        actionLabel: 'Resume',
-        copyable: false,
-        onAction: () => _resumeActiveSession(first),
+      widget.services.logSink.log(
+        LogLevel.info,
+        'app',
+        'Found ${active.length} active session(s); offering resume '
+            '(appId ${first.appId})',
       );
+      // Defer past the shell's first build frame: showing a snackbar while
+      // the Scaffold is still mounting can drop it. Keep it on screen long
+      // enough to actually tap Resume (the default 3s is too easy to miss).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        showNeonSnackbar(
+          context,
+          'Active session found (appId ${first.appId}). Resume it?',
+          actionLabel: 'Resume',
+          copyable: false,
+          duration: _resumePromptDuration,
+          onAction: () => _resumeActiveSession(first),
+        );
+      });
     } catch (e) {
       debugPrint('[resume] check failed: $e');
     }

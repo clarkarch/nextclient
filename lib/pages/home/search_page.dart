@@ -51,6 +51,12 @@ class _SearchPageState extends State<SearchPage> {
       final token = await widget.services.auth.resolveJwtToken();
       final definitions = await widget.services.catalog
           .fetchFilterSortDefinitions(token: token);
+      widget.services.logSink.log(
+        LogLevel.info,
+        'search',
+        'Filter/sort definitions loaded '
+            '(${definitions.sortOptions.length} sorts)',
+      );
       if (!mounted) return;
       setState(() {
         _definitions = definitions;
@@ -58,6 +64,11 @@ class _SearchPageState extends State<SearchPage> {
       });
     } catch (e) {
       debugPrint('[search] definitions failed: $e');
+      widget.services.logSink.log(
+        LogLevel.warn,
+        'search',
+        'Definitions failed: $e',
+      );
     }
     await _browse();
   }
@@ -75,6 +86,11 @@ class _SearchPageState extends State<SearchPage> {
         sortId: _sortId,
         filterIds: _filterIds.toList(),
       );
+      widget.services.logSink.log(
+        LogLevel.info,
+        'search',
+        'Browse returned ${result.games.length} games (total ${result.totalCount})',
+      );
       if (!mounted) return;
       setState(() {
         _games = result.games;
@@ -83,6 +99,7 @@ class _SearchPageState extends State<SearchPage> {
       });
     } catch (e) {
       debugPrint('[search] browse failed: $e');
+      widget.services.logSink.log(LogLevel.error, 'search', 'Browse failed: $e');
       if (!mounted) return;
       setState(() {
         _loading = false;

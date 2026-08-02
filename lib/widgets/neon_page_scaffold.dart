@@ -19,6 +19,11 @@ class NeonPageScaffold extends StatefulWidget {
   final ScrollController? scrollController;
   final Color? background;
 
+  /// Overrides the background style. Defaults to the user's selected style via
+  /// [BackgroundGlow]; pages that build from [UserSettings] pass the selected
+  /// style explicitly if they need to override it.
+  final BackgroundStyle? style;
+
   const NeonPageScaffold({
     super.key,
     this.title,
@@ -31,6 +36,7 @@ class NeonPageScaffold extends StatefulWidget {
     this.sliverPadding = const EdgeInsets.symmetric(horizontal: 28),
     this.scrollController,
     this.background,
+    this.style,
   }) : assert(child == null || slivers == null,
             'Provide either child or slivers, not both.');
 
@@ -55,18 +61,28 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
 
   @override
   Widget build(BuildContext context) {
+    final explicit = widget.style;
+    Widget body;
+    if (explicit != null) {
+      body = _decorated(explicit);
+    } else {
+      body = ValueListenableBuilder<BackgroundStyle>(
+        valueListenable: BackgroundGlow.current,
+        builder: (context, style, _) => _decorated(style),
+      );
+    }
     return Scaffold(
       backgroundColor: widget.background ?? Neon.bgA,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.topLeft,
-            radius: 1.4,
-            colors: [Color(0x0F00D9FF), Color(0x00000000)],
-            stops: [0, 0.5],
-          ),
-        ),
-        child: Column(
+      body: body,
+    );
+  }
+
+  Widget _decorated(BackgroundStyle style) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        NeonBackground(style: style),
+        Column(
           children: [
             if (widget.header != null)
               widget.header!
@@ -87,7 +103,7 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 

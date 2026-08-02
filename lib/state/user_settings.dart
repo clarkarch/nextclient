@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../theme/neon.dart';
+
 /// Launch preferences that are sent to the NVIDIA server in the
 /// `SessionCreateRequest`. Persisted locally so launches reuse the last choice.
 class UserSettings extends ChangeNotifier {
@@ -29,6 +31,9 @@ class UserSettings extends ChangeNotifier {
   static const _keyWebrtcRtcpMux = 'settings.webrtc.rtcpMux';
   static const _keyWebrtcHwAccel = 'settings.webrtc.hwAccel';
   static const _keyWebrtcStun = 'settings.webrtc.stun';
+  static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
+  static const _keyLogsEnabled = 'settings.perf.logsEnabled';
+  static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
 
   String _resolution = '1920x1080';
   int _fps = 60;
@@ -53,6 +58,9 @@ class UserSettings extends ChangeNotifier {
   WebrtcRtcpMuxPolicy _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
   bool _webrtcHwAccel = true;
   String _webrtcStunServer = '';
+  BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
+  bool _logsEnabled = true;
+  bool _hideTitleBar = false;
 
   UserSettings(this._prefs) {
     _load();
@@ -80,6 +88,9 @@ class UserSettings extends ChangeNotifier {
   WebrtcRtcpMuxPolicy get webrtcRtcpMux => _webrtcRtcpMux;
   bool get webrtcHwAccel => _webrtcHwAccel;
   String get webrtcStunServer => _webrtcStunServer;
+  BackgroundStyle get backgroundStyle => _backgroundStyle;
+  bool get logsEnabled => _logsEnabled;
+  bool get hideTitleBar => _hideTitleBar;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -243,6 +254,28 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set backgroundStyle(BackgroundStyle v) {
+    if (_backgroundStyle == v) return;
+    _backgroundStyle = v;
+    _save(_keyBackgroundStyle, v.name);
+    BackgroundGlow.current.value = v;
+    notifyListeners();
+  }
+
+  set logsEnabled(bool v) {
+    if (_logsEnabled == v) return;
+    _logsEnabled = v;
+    _save(_keyLogsEnabled, v);
+    notifyListeners();
+  }
+
+  set hideTitleBar(bool v) {
+    if (_hideTitleBar == v) return;
+    _hideTitleBar = v;
+    _save(_keyHideTitleBar, v);
+    notifyListeners();
+  }
+
   StreamSettings buildStreamSettings() {
     return StreamSettings(
       resolution: _resolution,
@@ -298,6 +331,12 @@ class UserSettings extends ChangeNotifier {
         _webrtcRtcpMux;
     _webrtcHwAccel = _prefs.getBool(_keyWebrtcHwAccel) ?? _webrtcHwAccel;
     _webrtcStunServer = _prefs.getString(_keyWebrtcStun) ?? _webrtcStunServer;
+    _backgroundStyle = BackgroundStyle.values.asNameMap()[
+            _prefs.getString(_keyBackgroundStyle)] ??
+        _backgroundStyle;
+    _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
+    _hideTitleBar = _prefs.getBool(_keyHideTitleBar) ?? _hideTitleBar;
+    BackgroundGlow.current.value = _backgroundStyle;
   }
 
   void _save(String key, Object value) {

@@ -76,33 +76,31 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Neon.bgA,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.topLeft,
-            radius: 1.6,
-            colors: [Color(0x1F00D9FF), Color(0x00000000)],
-            stops: [0, 0.6],
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          ValueListenableBuilder<BackgroundStyle>(
+            valueListenable: BackgroundGlow.current,
+            builder: (context, style, _) => NeonBackground(style: style),
           ),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 380),
-              child: NeonCard(
-                padding: const EdgeInsets.all(32),
-                glow: true,
-                radius: 24,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Brand(),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'GE FORCE NOW, but with neon',
-                      textAlign: TextAlign.center,
+          Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: NeonCard(
+                  padding: const EdgeInsets.all(32),
+                  glow: true,
+                  radius: 24,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _Brand(),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'GE FORCE NOW, but with neon',
+                        textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Neon.inkMuted,
                         fontSize: 12.5,
@@ -151,6 +149,7 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ),
         ),
+      ],
       ),
     );
   }

@@ -281,6 +281,21 @@ class CloudMatchService {
     final settings = input.settings;
 
     var effectiveServerIp = input.serverIp;
+    if (effectiveServerIp.isEmpty) {
+      // The active-session listing may omit a direct server IP (no usage-14
+      // connection info). Fall back to the host of the streaming base URL the
+      // session was discovered on — a zone LB hostname, which the prefetch
+      // below resolves to the real server IP.
+      final fallbackBase = Uri.tryParse(input.streamingBaseUrl ?? '');
+      if (fallbackBase != null && fallbackBase.host.isNotEmpty) {
+        effectiveServerIp = fallbackBase.host;
+      }
+    }
+    if (effectiveServerIp.isEmpty) {
+      throw StateError(
+        'Missing server IP / streaming base URL for session claim',
+      );
+    }
     if (isZoneHostname(effectiveServerIp)) {
       final zoneBase = 'https://$effectiveServerIp';
       final prefetchUrl = '$zoneBase/v2/session/${input.sessionId}';

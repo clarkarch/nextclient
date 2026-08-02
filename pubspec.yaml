@@ -37,10 +37,20 @@ dependencies:
   gfn_core:
     path: packages/gfn_core
   http: ^1.2.0
+  path_provider: ^2.1.6
   shared_preferences: ^2.3.0
   url_launcher: ^6.3.0
+  window_manager: ^0.5.2
   qr_flutter: ^4.1.0
   flutter_webrtc: ^1.5.2
+  # Locks the OS pointer while streaming so FPS-style mouse look works without
+  # the cursor hitting the window edge. Supports Windows/macOS/Linux-X11, web
+  # experimental. Not published to pub.dev, so a git dependency is required.
+  # Vendored fork with native Wayland pointer lock (zwp_pointer_constraints +
+  # relative pointer) so the mouse can't escape at the window edge on
+  # Wayland/Hyprland. The gdk_pointer_grab X11 path is preserved.
+  pointer_lock:
+    path: packages/pointer_lock
 
 dev_dependencies:
   flutter_test:

@@ -1,4 +1,156 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+
+/// App background styles selectable from the UI settings. All keep the
+/// electric-blue accent (the original layered glow) — they differ in the
+/// *algorithm* used to paint it: how strong the glow is, where it sits, and
+/// whether it animates. [NeonBackground] renders each style.
+enum BackgroundStyle {
+  subtle('Subtle', animated: false),
+  glow('Bold glow', animated: false),
+  beams('Beams', animated: false),
+  pulse('Pulse', animated: true),
+  aurora('Aurora', animated: true);
+
+  const BackgroundStyle(this.label, {required this.animated});
+
+  final String label;
+
+  /// Whether the style breathes/drifts over time.
+  final bool animated;
+}
+
+/// Global holder for the user-selected background style. Pages read it via
+/// [NeonPageScaffold] so a change in settings applies everywhere without
+/// threading the style through every page's constructor.
+class BackgroundGlow {
+  BackgroundGlow._();
+
+  /// The currently selected background style.
+  static final ValueNotifier<BackgroundStyle> current =
+      ValueNotifier(BackgroundStyle.beams);
+}
+
+/// The electric-blue accent used by every background style. The hue never
+/// changes; only how the glow is painted does.
+const _electricBlue = Color(0xFF00D9FF);
+const _glowTransparent = Color(0x00000000);
+
+/// Paints the app's background layer for a [BackgroundStyle]. Static styles are
+/// a single painted gradient; animated styles breathe/drift on an internal
+/// repeating controller (paused when off-screen styles swap in).
+class NeonBackground extends StatefulWidget {
+  final BackgroundStyle style;
+
+  const NeonBackground({super.key, required this.style});
+
+  @override
+  State<NeonBackground> createState() => _NeonBackgroundState();
+}
+
+class _NeonBackgroundState extends State<NeonBackground>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late bool _wasAnimated;
+
+  @override
+  void initState() {
+    super.initState();
+    _wasAnimated = widget.style.animated;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    );
+    if (_wasAnimated) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(NeonBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.style.animated != _wasAnimated) {
+      _wasAnimated = widget.style.animated;
+      if (_wasAnimated) {
+        _controller.repeat();
+      } else {
+        _controller.stop();
+        _controller.value = 0;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) => DecoratedBox(
+        decoration: BoxDecoration(gradient: _gradient(_controller.value)),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+
+  /// Builds the gradient for the given style. [t] is 0..1 and only animates
+  /// the pulsing/drifting styles; static styles ignore it.
+  Gradient _gradient(double t) {
+    return switch (widget.style) {
+      BackgroundStyle.subtle => const RadialGradient(
+          center: Alignment.topLeft,
+          radius: 1.4,
+          colors: [Color(0x0F00D9FF), _glowTransparent],
+          stops: [0, 0.5],
+        ),
+      BackgroundStyle.glow => RadialGradient(
+          center: Alignment.topLeft,
+          radius: 1.2,
+          colors: [_electricBlue.withValues(alpha: 0.22), _glowTransparent],
+          stops: const [0, 0.55],
+        ),
+      BackgroundStyle.beams => LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            _electricBlue.withValues(alpha: 0.14),
+            _glowTransparent,
+            _electricBlue.withValues(alpha: 0.08),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.35, 0.6, 1],
+        ),
+      BackgroundStyle.pulse => RadialGradient(
+          center: Alignment.topLeft,
+          radius: 1.2,
+          colors: [
+            _electricBlue.withValues(alpha: 0.10 + 0.12 * _wave(t)),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.55],
+        ),
+      BackgroundStyle.aurora => RadialGradient(
+          center: Alignment(-0.9 + 0.4 * _drift(t), -1.0 + 0.3 * _drift(t + 0.5)),
+          radius: 1.6,
+          colors: [
+            _electricBlue.withValues(alpha: 0.16),
+            _electricBlue.withValues(alpha: 0.04),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.5, 1],
+        ),
+    };
+  }
+
+  /// Slow breathing wave (0..1), two cycles over the animation period.
+  double _wave(double t) => 0.5 + 0.5 * math.sin(t * 2 * math.pi * 2);
+
+  /// Slow sinusoidal drift (-1..1) for the aurora style.
+  double _drift(double t) => math.sin(t * 2 * math.pi);
+}
 
 /// Neon Night palette — electric blue accent on layered obsidian.
 class Neon {

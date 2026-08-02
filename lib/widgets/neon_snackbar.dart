@@ -13,13 +13,14 @@ void showNeonSnackbar(
   bool copyable = true,
   String? actionLabel,
   VoidCallback? onAction,
+  Duration? duration,
 }) {
   final messenger = ScaffoldMessenger.of(context);
   messenger.hideCurrentSnackBar();
   messenger.showSnackBar(
     SnackBar(
       behavior: SnackBarBehavior.floating,
-      duration: Duration(seconds: isError ? 6 : 3),
+      duration: duration ?? Duration(seconds: isError ? 6 : 3),
       backgroundColor: isError
           ? Neon.error.withValues(alpha: 0.16)
           : Neon.bgC,
