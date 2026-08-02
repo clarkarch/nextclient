@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../main.dart';
 import '../../state/user_settings.dart';
 import '../../theme/neon.dart';
+import '../../widgets/neon_button.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_dropdown.dart';
 import '../../widgets/neon_option_chip.dart';
@@ -32,6 +34,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
       _ResOption('1920x1080', '1080p', OptionTier.free, 1920, 1080),
       _ResOption('2560x1440', '1440p', OptionTier.priority, 2560, 1440),
       _ResOption('3840x2160', '4K', OptionTier.ultimate, 3840, 2160),
+      _ResOption('5120x2880', '5K', OptionTier.ultimate, 5120, 2880),
     ],
     '16:10': [
       _ResOption('1680x1050', 'WSXGA', OptionTier.free, 1680, 1050),
@@ -73,7 +76,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
   ];
 
   static const _bitrateMin = 10;
-  static const _bitrateMax = 75;
+  static const _bitrateMax = 200;
 
   bool get _isFreeTier {
     final tier = widget.services.auth.getSession()?.user.membershipTier;
@@ -107,6 +110,102 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
     return !_isFreeTier || tier == OptionTier.free;
   }
 
+  /// Resolution options derived from the account's entitled resolutions,
+  /// grouped by aspect ratio. When the subscription is known this is the
+  /// authoritative list — it can contain more (or fewer) options than the
+  /// hardcoded defaults, so we only ever offer server-approved combinations.
+  Map<String, List<_ResOption>> get _resolutionGroups {
+    final entitled = _subscription?.entitledResolutions ?? const [];
+    if (entitled.isEmpty) return _resolutions;
+
+    final groups = <String, List<_ResOption>>{};
+    final seen = <String>{};
+    for (final r in entitled) {
+      final key = '${r.width}x${r.height}';
+      if (!seen.add(key)) continue;
+      final ratio = _aspectRatio(r.width, r.height);
+      (groups[ratio] ??= []).add(
+        _ResOption(
+          key,
+          _resolutionLabel(r.width, r.height),
+          OptionTier.free,
+          r.width,
+          r.height,
+        ),
+      );
+    }
+    return groups;
+  }
+
+  /// FPS options derived from the account's entitled resolutions, gated to the
+  /// currently-selected resolution when the subscription is known (entitlement
+  /// is per resolution+fps combo, so offering a global fps list could let a
+  /// user pick a combo the server rejects). Sorted ascending. Falls back to the
+  /// hardcoded list when the subscription is unknown.
+  List<int> _entitledFpsOptions(UserSettings s) {
+    final entitled = _subscription?.entitledResolutions ?? const [];
+    if (entitled.isEmpty) return _fpsOptions.map((e) => e.$1).toList();
+
+    final parts = s.resolution.split('x');
+    final width = int.tryParse(parts.isNotEmpty ? parts.first : '');
+    final height = int.tryParse(parts.length > 1 ? parts[1] : '');
+    final fpsSet = <int>{
+      for (final r in entitled)
+        if (r.width == width && r.height == height) r.fps,
+    };
+    if (fpsSet.isEmpty) {
+      // Selected resolution isn't in the entitled list (e.g. stale saved
+      // value) — fall back to any entitled fps so the user can still proceed.
+      fpsSet.addAll({for (final r in entitled) r.fps});
+    }
+    return fpsSet.toList()..sort();
+  }
+
+  static String _aspectRatio(int width, int height) {
+    // Label by the conventional ratio (16:9, 16:10, 21:9, 32:9) — a pure GCD
+    // fraction would render 1920x1200 as "8:5" which is inconsistent with the
+    // rest of the app's grouping.
+    const canonical = [
+      (w: 16, h: 9),
+      (w: 16, h: 10),
+      (w: 21, h: 9),
+      (w: 32, h: 9),
+      (w: 4, h: 3),
+      (w: 5, h: 4),
+      (w: 3, h: 2),
+    ];
+    final ratio = width / height;
+    for (final c in canonical) {
+      if ((c.w / c.h - ratio).abs() < 0.08) return '${c.w}:${c.h}';
+    }
+    // Fall back to a reduced fraction.
+    var a = width;
+    var b = height;
+    while (b != 0) {
+      final t = a % b;
+      a = b;
+      b = t;
+    }
+    return '${width ~/ a}:${height ~/ a}';
+  }
+
+  static String _resolutionLabel(int width, int height) {
+    const common = {
+      '1280x720': '720p',
+      '1920x1080': '1080p',
+      '2560x1440': '1440p',
+      '3840x2160': '4K',
+      '1680x1050': 'WSXGA',
+      '1920x1200': '1200p',
+      '2560x1600': '1600p',
+      '3840x2400': '4K',
+      '2560x1080': 'Ultrawide 1080p',
+      '3440x1440': 'Ultrawide 1440p',
+      '5120x1440': 'Super Ultrawide',
+    };
+    return common['${width}x$height'] ?? '${width}x$height';
+  }
+
   @override
   Widget build(BuildContext context) {
     return NeonPageScaffold(
@@ -116,74 +215,132 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
         listenable: widget.services.settings,
         builder: (context, _) {
           final s = widget.services.settings;
-          return NeonCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _SectionLabel(label: 'Resolution'),
-                const SizedBox(height: 10),
-                _resolutionSelector(s),
-                const SizedBox(height: 22),
-                _SectionLabel(label: 'Frame rate'),
-                const SizedBox(height: 10),
-                _fpsSelector(s),
-                const SizedBox(height: 22),
-                _SectionLabel(label: 'Max bitrate'),
-                const SizedBox(height: 10),
-                _bitrateSlider(s),
-                const SizedBox(height: 22),
-                const _SectionLabel(label: 'Codec'),
-                const SizedBox(height: 10),
-                _codecDropdown(s),
-                const SizedBox(height: 22),
-                const _SectionLabel(label: 'Color quality'),
-                const SizedBox(height: 10),
-                _colorDropdown(s),
-                const SizedBox(height: 22),
-                _SectionLabel(label: 'Launch mode'),
-                const SizedBox(height: 10),
-                _appLaunchModeDropdown(s),
-                const SizedBox(height: 22),
-                _SectionLabel(label: 'Features'),
-                const SizedBox(height: 6),
-                _toggleRow(
-                  icon: Icons.bolt,
-                  title: 'L4S',
-                  subtitle: 'Low-latency networking',
-                  value: s.enableL4S,
-                  onChanged: (v) => s.enableL4S = v,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              NeonCard(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SectionLabel(label: 'Resolution'),
+                    const SizedBox(height: 10),
+                    _resolutionSelector(s),
+                    const SizedBox(height: 22),
+                    _SectionLabel(label: 'Frame rate'),
+                    const SizedBox(height: 10),
+                    _fpsSelector(s),
+                    const SizedBox(height: 22),
+                    _SectionLabel(label: 'Max bitrate'),
+                    const SizedBox(height: 10),
+                    _bitrateSlider(s),
+                    const SizedBox(height: 22),
+                    const _SectionLabel(label: 'Codec'),
+                    const SizedBox(height: 10),
+                    _codecDropdown(s),
+                    const SizedBox(height: 22),
+                    const _SectionLabel(label: 'Color quality'),
+                    const SizedBox(height: 10),
+                    _colorDropdown(s),
+                    const SizedBox(height: 22),
+                    _SectionLabel(label: 'Launch mode'),
+                    const SizedBox(height: 10),
+                    _appLaunchModeDropdown(s),
+                    const SizedBox(height: 22),
+                    _SectionLabel(label: 'Features'),
+                    const SizedBox(height: 6),
+                    _toggleRow(
+                      icon: Icons.bolt,
+                      title: 'L4S',
+                      subtitle: 'Low-latency networking',
+                      value: s.enableL4S,
+                      onChanged: (v) => s.enableL4S = v,
+                    ),
+                    _toggleRow(
+                      icon: Icons.monitor_heart_outlined,
+                      title: 'Cloud G-SYNC',
+                      subtitle: 'Reflex-compatible VRR',
+                      value: s.enableCloudGsync,
+                      onChanged: (v) => s.enableCloudGsync = v,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4, top: 8),
+                      child: _SectionLabel(label: 'Native Cloud G-SYNC mode'),
+                    ),
+                    const SizedBox(height: 8),
+                    _nativeCloudGsyncDropdown(s),
+                  ],
                 ),
-                _toggleRow(
-                  icon: Icons.monitor_heart_outlined,
-                  title: 'Cloud G-SYNC',
-                  subtitle: 'Reflex-compatible VRR',
-                  value: s.enableCloudGsync,
-                  onChanged: (v) => s.enableCloudGsync = v,
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, top: 8),
-                  child: _SectionLabel(label: 'Native Cloud G-SYNC mode'),
-                ),
-                const SizedBox(height: 8),
-                _nativeCloudGsyncDropdown(s),
+              ),
+              if (_isFreeTier) ...[
+                const SizedBox(height: 14),
+                _buildFreeTierUpgradeCard(),
               ],
-            ),
+            ],
           );
         },
       ),
     );
   }
 
+  /// Upgrade CTA shown to free-tier accounts: some options here are locked by
+  /// membership tier, so point users at NVIDIA's premium memberships page.
+  static const _upgradeUrl =
+      'https://www.nvidia.com/en-us/geforce-now/premium-memberships/';
+
+  Widget _buildFreeTierUpgradeCard() {
+    return NeonCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.workspace_premium, size: 20, color: Neon.accent),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'UNLOCK MORE',
+                  style: TextStyle(
+                    color: Neon.accent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Some resolutions, frame rates, and features require a '
+            'GeForce NOW premium membership.',
+            style: TextStyle(color: Neon.inkSoft, fontSize: 12.5, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          NeonButton(
+            label: 'View premium memberships',
+            icon: Icons.open_in_new,
+            onPressed: () => launchUrl(
+              Uri.parse(_upgradeUrl),
+              mode: LaunchMode.externalApplication,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _resolutionSelector(UserSettings s) {
-    var currentRatio = '16:9';
-    for (final entry in _resolutions.entries) {
+    final groups = _resolutionGroups;
+    var currentRatio = groups.keys.first;
+    for (final entry in groups.entries) {
       if (entry.value.any((r) => r.resolution == s.resolution)) {
         currentRatio = entry.key;
         break;
       }
     }
-    final options = _resolutions[currentRatio]!;
+    final options = groups[currentRatio] ?? const <_ResOption>[];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -192,16 +349,16 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            for (final ratio in _resolutions.keys)
+            for (final ratio in groups.keys)
               NeonOptionChip(
                 label: ratio,
                 selected: ratio == currentRatio,
                 onTap: () {
-                  final inRatio = _resolutions[ratio]!.any(
+                  final inRatio = groups[ratio]!.any(
                     (r) => r.resolution == s.resolution,
                   );
                   if (!inRatio) {
-                    s.resolution = _resolutions[ratio]!.first.resolution;
+                    s.resolution = groups[ratio]!.first.resolution;
                   }
                 },
               ),
@@ -231,6 +388,24 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
   }
 
   Widget _fpsSelector(UserSettings s) {
+    final hasSubscription =
+        (_subscription?.entitledResolutions.isNotEmpty ?? false);
+    if (hasSubscription) {
+      final fpsOptions = _entitledFpsOptions(s);
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final fps in fpsOptions)
+            NeonOptionChip(
+              label: '$fps fps',
+              selected: s.fps == fps,
+              onTap: () => s.fps = fps,
+            ),
+        ],
+      );
+    }
+    // Subscription unknown: show the hardcoded tier-gated list.
     return Wrap(
       spacing: 8,
       runSpacing: 8,

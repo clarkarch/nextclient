@@ -129,6 +129,35 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                 ),
               ),
               const Divider(height: 1),
+              NeonSettingTile(
+                icon: Icons.network_check,
+                title: 'DSCP marking (QoS)',
+                subtitle: 'Mark RTP packets for network prioritization',
+                trailing: NeonSwitch(
+                  value: s.webrtcEnableDscp,
+                  onChanged: (v) => s.webrtcEnableDscp = v,
+                ),
+              ),
+              const Divider(height: 1),
+              NeonSettingTile(
+                icon: Icons.dns_outlined,
+                title: 'Max IPv6 networks',
+                subtitle: 'Limit IPv6 candidate networks gathered',
+                trailing: NeonDropdown<int>(
+                  value: s.webrtcMaxIpv6Networks,
+                  width: 92,
+                  onChanged: (v) {
+                    if (v != null) s.webrtcMaxIpv6Networks = v;
+                  },
+                  items: const [
+                    NeonDropdownItem<int>(8, '8'),
+                    NeonDropdownItem<int>(16, '16'),
+                    NeonDropdownItem<int>(32, '32'),
+                    NeonDropdownItem<int>(64, '64'),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
                 child: Column(

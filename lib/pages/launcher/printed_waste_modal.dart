@@ -530,7 +530,7 @@ class _RecommendCard extends StatelessWidget {
           color: selected ? null : Neon.bgC,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected ? Neon.accent : const Color(0x22FFFFFF),
+            color: selected ? Neon.accent : Neon.outline,
           ),
           boxShadow: selected
               ? Neon.glowShadow(radius: 14, alpha: 0.25)
@@ -717,7 +717,7 @@ class _ZoneRow extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: selected ? Neon.accent : Colors.transparent,
                 border: Border.all(
-                  color: selected ? Neon.accent : const Color(0x44FFFFFF),
+                  color: selected ? Neon.accent : Neon.outline,
                 ),
               ),
             ),

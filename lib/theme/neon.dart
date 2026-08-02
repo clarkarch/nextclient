@@ -163,6 +163,14 @@ class Neon {
   static const cardHover = Color(0xFF181826);
   static const surfaceGlass = Color(0x66FFFFFF);
 
+  /// Subtle dark outline for cards, chips, and controls — a slate-blue hairline
+  /// that sits naturally on the obsidian surfaces instead of a washed-out
+  /// white-alpha border.
+  static const outline = Color(0xFF252C3F);
+
+  /// Fainter outline for hairline separators (dividers, bars, panel edges).
+  static const outlineSoft = Color(0xFF1A2131);
+
   static const ink = Color(0xFFF2F7FF);
   static const inkSoft = Color(0xFF9FB0C9);
   static const inkMuted = Color(0xFF5C6B85);
@@ -325,7 +333,7 @@ ThemeData buildNeonTheme() {
       ),
     ),
     dividerTheme: const DividerThemeData(
-      color: Color(0x22FFFFFF),
+      color: Neon.outlineSoft,
       thickness: 1,
       space: 1,
     ),

@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
+import '../../state/title_bar_controller.dart';
 import '../../theme/neon.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
+import '../../widgets/neon_snackbar.dart';
 import '../../widgets/neon_switch.dart';
 import '../../widgets/section_header.dart';
 import '../log_viewer_page.dart';
 import 'account_page.dart';
+import 'experimental_settings_page.dart';
 import 'language_page.dart';
 import 'performance_settings_page.dart';
 import 'region_page.dart';
@@ -139,12 +143,69 @@ class SettingsPage extends StatelessWidget {
             ),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.restart_alt,
+            title: 'Reset settings',
+            subtitle: 'Restore all defaults (keeps account)',
+            onTap: () => _confirmReset(context),
+            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+          ),
         ],
       ),
     );
   }
 
-  /// Client-side categories: WebRTC, UI, and performance.
+  Future<void> _confirmReset(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Neon.bgB,
+        surfaceTintColor: Colors.transparent,
+        title: const Text(
+          'Reset all settings?',
+          style: TextStyle(color: Neon.ink, fontSize: 16),
+        ),
+        content: const Text(
+          'This restores every setting to its default value. Your account '
+          'stays signed in. This cannot be undone.',
+          style: TextStyle(color: Neon.inkSoft, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: Neon.inkSoft)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Reset',
+              style: TextStyle(color: Neon.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await services.settings.resetToDefaults();
+    // Re-sync side effects that are applied outside the settings object:
+    // verbose logging gates all sinks, and the title bar style touches the
+    // native window.
+    services.logSink.setEnabledForAll(services.settings.logsEnabled);
+    await TitleBarController.apply(services.settings);
+    services.logSink.log(
+      LogLevel.info,
+      'settings',
+      'Settings reset to defaults',
+    );
+    if (context.mounted) {
+      showNeonSnackbar(
+        context,
+        'Settings reset to defaults',
+        copyable: false,
+      );
+    }
+  }
   Widget _clientCard(BuildContext context) {
     return NeonCard(
       padding: EdgeInsets.zero,
@@ -182,6 +243,17 @@ class SettingsPage extends StatelessWidget {
             ),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.science_outlined,
+            title: 'Experimental',
+            subtitle: _experimentalSummary(),
+            onTap: () => _open(
+              context,
+              ExperimentalSettingsPage(services: services),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+          ),
         ],
       ),
     );
@@ -199,6 +271,11 @@ class SettingsPage extends StatelessWidget {
 
   String _perfSummary() {
     return 'Verbose logs: ${services.settings.logsEnabled ? 'on' : 'off'}';
+  }
+
+  String _experimentalSummary() {
+    final p = services.settings.streamPriority;
+    return 'Stream priority: ${p.name.toUpperCase()}';
   }
 }
 

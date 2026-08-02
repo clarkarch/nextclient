@@ -25,7 +25,7 @@ class NeonDropdown<T> extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0x0FFFFFFF),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0x33FFFFFF)),
+        border: Border.all(color: Neon.outline),
         boxShadow: Neon.softShadow(radius: 10),
       ),
       child: DropdownButtonHideUnderline(

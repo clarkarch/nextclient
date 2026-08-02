@@ -26,7 +26,7 @@ class NeonSidenavButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0x0FFFFFFF),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0x22FFFFFF)),
+            border: Border.all(color: Neon.outline),
             boxShadow: Neon.softShadow(radius: 10),
           ),
           child: AnimatedSwitcher(

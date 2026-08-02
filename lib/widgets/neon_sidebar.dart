@@ -44,7 +44,7 @@ class NeonSidebar extends StatelessWidget {
       width: expanded ? 250 : 84,
       decoration: BoxDecoration(
         color: Neon.bgB,
-        border: const Border(right: BorderSide(color: Color(0x1FFFFFFF))),
+        border: const Border(right: BorderSide(color: Neon.outlineSoft)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.4),

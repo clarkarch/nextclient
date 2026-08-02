@@ -128,7 +128,7 @@ class _FilterButton extends StatelessWidget {
           color: count > 0 ? Neon.accent.withValues(alpha: 0.14) : null,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: count > 0 ? Neon.accent : const Color(0x22FFFFFF),
+            color: count > 0 ? Neon.accent : Neon.outline,
           ),
         ),
         child: Row(
@@ -301,7 +301,7 @@ class _ToggleChip extends StatelessWidget {
           color: selected ? null : const Color(0x0FFFFFFF),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: selected ? Neon.accent : const Color(0x22FFFFFF),
+            color: selected ? Neon.accent : Neon.outline,
           ),
         ),
         child: Row(

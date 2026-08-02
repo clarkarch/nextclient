@@ -143,6 +143,8 @@ class _LoginPageState extends State<LoginPage> {
                         Expanded(child: Divider()),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    const _ThirdPartyDisclaimer(),
                   ],
                 ),
               ),
@@ -332,5 +334,42 @@ class _QrLoginPageState extends State<_QrLoginPage> {
       AuthDeviceLoginPollStatus.error => 'Error: ${_error ?? ""}',
       null => 'Waiting...',
     };
+  }
+}
+
+/// Disclaimer shown at the bottom of the login screen. This is a
+/// community-built client, not an official NVIDIA product.
+class _ThirdPartyDisclaimer extends StatelessWidget {
+  const _ThirdPartyDisclaimer();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Neon.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Neon.warning.withValues(alpha: 0.25)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, size: 15, color: Neon.warning),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Unofficial third-party client. Not created by, affiliated '
+              'with, or endorsed by NVIDIA. GeForce NOW is a trademark of '
+              'NVIDIA Corporation. Use at your own risk.',
+              style: TextStyle(
+                color: Neon.inkSoft,
+                fontSize: 10.5,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

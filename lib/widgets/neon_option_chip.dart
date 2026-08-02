@@ -40,7 +40,7 @@ class NeonOptionChip extends StatelessWidget {
             border: Border.all(
               color: selected && interactive
                   ? Neon.accent
-                  : const Color(0x22FFFFFF),
+                  : Neon.outline,
             ),
             boxShadow: selected && interactive
                 ? Neon.glowShadow(radius: 14, alpha: 0.3)

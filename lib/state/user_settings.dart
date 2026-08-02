@@ -31,6 +31,9 @@ class UserSettings extends ChangeNotifier {
   static const _keyWebrtcRtcpMux = 'settings.webrtc.rtcpMux';
   static const _keyWebrtcHwAccel = 'settings.webrtc.hwAccel';
   static const _keyWebrtcStun = 'settings.webrtc.stun';
+  static const _keyWebrtcDscp = 'settings.webrtc.dscp';
+  static const _keyWebrtcMaxIpv6Networks = 'settings.webrtc.maxIpv6Networks';
+  static const _keyStreamPriority = 'settings.experimental.streamPriority';
   static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
@@ -58,6 +61,9 @@ class UserSettings extends ChangeNotifier {
   WebrtcRtcpMuxPolicy _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
   bool _webrtcHwAccel = true;
   String _webrtcStunServer = '';
+  bool _webrtcEnableDscp = false;
+  int _webrtcMaxIpv6Networks = 64;
+  StreamPriority _streamPriority = StreamPriority.quality;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
   bool _logsEnabled = true;
   bool _hideTitleBar = false;
@@ -88,6 +94,9 @@ class UserSettings extends ChangeNotifier {
   WebrtcRtcpMuxPolicy get webrtcRtcpMux => _webrtcRtcpMux;
   bool get webrtcHwAccel => _webrtcHwAccel;
   String get webrtcStunServer => _webrtcStunServer;
+  bool get webrtcEnableDscp => _webrtcEnableDscp;
+  int get webrtcMaxIpv6Networks => _webrtcMaxIpv6Networks;
+  StreamPriority get streamPriority => _streamPriority;
   BackgroundStyle get backgroundStyle => _backgroundStyle;
   bool get logsEnabled => _logsEnabled;
   bool get hideTitleBar => _hideTitleBar;
@@ -254,6 +263,27 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set webrtcEnableDscp(bool v) {
+    if (_webrtcEnableDscp == v) return;
+    _webrtcEnableDscp = v;
+    _save(_keyWebrtcDscp, v);
+    notifyListeners();
+  }
+
+  set webrtcMaxIpv6Networks(int v) {
+    if (_webrtcMaxIpv6Networks == v) return;
+    _webrtcMaxIpv6Networks = v;
+    _save(_keyWebrtcMaxIpv6Networks, v);
+    notifyListeners();
+  }
+
+  set streamPriority(StreamPriority v) {
+    if (_streamPriority == v) return;
+    _streamPriority = v;
+    _save(_keyStreamPriority, v.name);
+    notifyListeners();
+  }
+
   set backgroundStyle(BackgroundStyle v) {
     if (_backgroundStyle == v) return;
     _backgroundStyle = v;
@@ -331,6 +361,13 @@ class UserSettings extends ChangeNotifier {
         _webrtcRtcpMux;
     _webrtcHwAccel = _prefs.getBool(_keyWebrtcHwAccel) ?? _webrtcHwAccel;
     _webrtcStunServer = _prefs.getString(_keyWebrtcStun) ?? _webrtcStunServer;
+    _webrtcEnableDscp =
+        _prefs.getBool(_keyWebrtcDscp) ?? _webrtcEnableDscp;
+    _webrtcMaxIpv6Networks =
+        _prefs.getInt(_keyWebrtcMaxIpv6Networks) ?? _webrtcMaxIpv6Networks;
+    _streamPriority = StreamPriority.values.asNameMap()[
+            _prefs.getString(_keyStreamPriority)] ??
+        _streamPriority;
     _backgroundStyle = BackgroundStyle.values.asNameMap()[
             _prefs.getString(_keyBackgroundStyle)] ??
         _backgroundStyle;
@@ -355,6 +392,75 @@ class UserSettings extends ChangeNotifier {
     final chroma = raw.endsWith('444') ? 1 : 0;
     return ColorQuality(bitDepth: bitDepth, chromaFormat: chroma);
   }
+
+  /// Resets every setting back to its factory default and clears the persisted
+  /// values. Leaves the saved auth session intact (account stays signed in).
+  Future<void> resetToDefaults() async {
+    for (final key in _allKeys) {
+      await _prefs.remove(key);
+    }
+    _resolution = '1920x1080';
+    _fps = 60;
+    _maxBitrateMbps = 50;
+    _codec = VideoCodec.h264;
+    _colorQuality = const ColorQuality(bitDepth: 0, chromaFormat: 0);
+    _keyboardLayout = KeyboardLayout.enUs;
+    _gameLanguage = GameLanguage.enUS;
+    _enableL4S = false;
+    _enableCloudGsync = false;
+    _appLaunchMode = AppLaunchMode.default_;
+    _nativeCloudGsyncMode = NativeStreamerFeatureMode.auto;
+    _selectedRegionUrl = null;
+    _advancedMode = false;
+    _streamGamepad = false;
+    _streamGamepadScale = 1.0;
+    _streamShowFps = false;
+    _webrtcIceTransport = WebrtcIceTransportPolicy.all;
+    _webrtcIcePoolSize = 0;
+    _webrtcBundle = WebrtcBundlePolicy.balanced;
+    _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
+    _webrtcHwAccel = true;
+    _webrtcStunServer = '';
+    _webrtcEnableDscp = false;
+    _webrtcMaxIpv6Networks = 64;
+    _streamPriority = StreamPriority.quality;
+    _backgroundStyle = BackgroundStyle.beams;
+    _logsEnabled = true;
+    _hideTitleBar = false;
+    BackgroundGlow.current.value = _backgroundStyle;
+    notifyListeners();
+  }
+
+  static final List<String> _allKeys = [
+    _keyResolution,
+    _keyFps,
+    _keyBitrate,
+    _keyCodec,
+    _keyColorQuality,
+    _keyKeyboardLayout,
+    _keyGameLanguage,
+    _keyL4S,
+    _keyCloudGsync,
+    _keyAppLaunchMode,
+    _keyNativeCloudGsyncMode,
+    _keyRegionUrl,
+    _keyAdvancedMode,
+    _keyStreamGamepad,
+    _keyStreamGamepadScale,
+    _keyStreamShowFps,
+    _keyWebrtcIceTransport,
+    _keyWebrtcIcePoolSize,
+    _keyWebrtcBundle,
+    _keyWebrtcRtcpMux,
+    _keyWebrtcHwAccel,
+    _keyWebrtcStun,
+    _keyWebrtcDscp,
+    _keyWebrtcMaxIpv6Networks,
+    _keyStreamPriority,
+    _keyBackgroundStyle,
+    _keyLogsEnabled,
+    _keyHideTitleBar,
+  ];
 }
 
 /// WebRTC client-side ICE transport policy (RTCConfiguration).
@@ -365,3 +471,18 @@ enum WebrtcBundlePolicy { balanced, maxCompat, maxBundle }
 
 /// WebRTC rtcp-mux policy (RTCConfiguration).
 enum WebrtcRtcpMuxPolicy { require, negotiate }
+
+/// Experimental: how the NVIDIA server should adapt resolution/FPS under load,
+/// expressed via the nvstSdp vqos policy lines. Unverified against the live
+/// server — may be ignored, and changing it only affects new sessions.
+enum StreamPriority {
+  /// Prefer full resolution and bitrate; allow the server to drop decode FPS
+  /// under load before touching resolution.
+  quality,
+
+  /// Balance resolution and FPS.
+  balanced,
+
+  /// Prefer holding frame rate; allow resolution to scale down first.
+  fps,
+}

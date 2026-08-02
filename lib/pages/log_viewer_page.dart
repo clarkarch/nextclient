@@ -145,7 +145,7 @@ class _LogViewerPageState extends State<LogViewerPage> {
                     decoration: BoxDecoration(
                       color: const Color(0x0FFFFFFF),
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0x22FFFFFF)),
+                      border: Border.all(color: Neon.outline),
                     ),
                     child: Row(
                       children: [

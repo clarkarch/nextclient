@@ -133,7 +133,7 @@ class _StyleOption extends StatelessWidget {
           color: Neon.bgB,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: selected ? Neon.accent : const Color(0x22FFFFFF),
+            color: selected ? Neon.accent : Neon.outline,
             width: selected ? 1.6 : 1,
           ),
           boxShadow: selected ? Neon.glowShadow(radius: 12, alpha: 0.3) : null,

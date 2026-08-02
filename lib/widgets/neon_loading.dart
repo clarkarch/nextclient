@@ -194,7 +194,7 @@ class NeonErrorView extends StatelessWidget {
                   label: const Text('COPY'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Neon.inkSoft,
-                    side: const BorderSide(color: Color(0x44FFFFFF)),
+                    side: const BorderSide(color: Neon.outline),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),

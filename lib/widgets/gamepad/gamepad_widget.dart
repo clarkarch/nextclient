@@ -122,7 +122,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(28),
         color: widget.backgroundColor,
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        border: Border.all(color: Neon.outlineSoft),
       ),
       child: Padding(
         padding: widget.padding,
@@ -315,7 +315,7 @@ class _MenuButtonState extends State<_MenuButton> {
           border: Border.all(
             color: widget.isHome
                 ? Neon.accent.withValues(alpha: 0.3)
-                : Colors.white.withValues(alpha: 0.08),
+                : Neon.outline,
             width: 1,
           ),
           boxShadow: [
@@ -390,7 +390,7 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
         decoration: BoxDecoration(
           color: _isPressed ? Neon.cardHover : Neon.bgC,
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1),
+          border: Border.all(color: Neon.outline, width: 1),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: _isPressed ? 0.2 : 0.35),
@@ -462,7 +462,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
             bottomLeft: Radius.circular(4),
             bottomRight: Radius.circular(4),
           ),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.1), width: 1),
+          border: Border.all(color: Neon.outline, width: 1),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: _isPressed ? 0.2 : 0.35),

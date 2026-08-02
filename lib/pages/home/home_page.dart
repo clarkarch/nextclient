@@ -299,7 +299,7 @@ class _HomeTopBar extends StatelessWidget {
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 24),
       decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0x12FFFFFF))),
+        border: Border(bottom: BorderSide(color: Neon.outlineSoft)),
       ),
       child: Row(
         children: [
@@ -399,7 +399,7 @@ class _TopIconButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: const Color(0x0FFFFFFF),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0x22FFFFFF)),
+            border: Border.all(color: Neon.outline),
           ),
           child: Icon(icon, size: 20, color: Neon.inkSoft),
         ),

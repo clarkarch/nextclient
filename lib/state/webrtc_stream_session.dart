@@ -276,6 +276,7 @@ class WebRtcStreamSession {
         colorQuality: streamSettings.colorQuality.wireValue,
         credentials: credentials,
         caps: _inputCaps,
+        priority: settings.streamPriority,
       );
 
       await _signaling?.sendAnswer(
@@ -630,6 +631,8 @@ class WebRtcStreamSession {
         WebrtcRtcpMuxPolicy.require => 'require',
         WebrtcRtcpMuxPolicy.negotiate => 'negotiate',
       },
+      'enableDscp': settings.webrtcEnableDscp,
+      'maxIPv6Networks': settings.webrtcMaxIpv6Networks,
       'enableHardwareAcceleration': settings.webrtcHwAccel,
       'sdpSemantics': 'unified-plan',
     };
@@ -882,6 +885,7 @@ class WebRtcStreamSession {
     required String colorQuality,
     required _IceCredentials credentials,
     required _RiInputCapabilities caps,
+    StreamPriority priority = StreamPriority.quality,
   }) {
     final maxBitrate = max(_officialMinBitrateKbps, maxBitrateKbps.floor());
     final startupBitrate = max(
@@ -909,6 +913,22 @@ class WebRtcStreamSession {
     final enablePartiallyReliableTransferHid =
         caps.enablePartiallyReliableTransferHid;
 
+    // Experimental server-side adaptation policy. The official profile locks
+    // resolution (dynamicStreamingMode:0, minResolutionPercent:100, CPM off)
+    // and only drops decode FPS on high-FPS sessions. The alternative presets
+    // ask the server to adapt differently under load — unverified against the
+    // live server, so they only affect new sessions and may be ignored.
+    final allowResolutionScaling =
+        priority == StreamPriority.balanced || priority == StreamPriority.fps;
+    final fpsFirst = priority == StreamPriority.fps;
+    final minResolutionPercent = switch (priority) {
+      StreamPriority.quality => 100,
+      StreamPriority.balanced => 60,
+      StreamPriority.fps => 40,
+    };
+    final dfcEnable =
+        isHighFps || priority != StreamPriority.quality;
+
     final lines = <String>[
       'v=0',
       'o=SdpTest test_id_13 14 IN IPv4 127.0.0.1',
@@ -929,21 +949,21 @@ class WebRtcStreamSession {
       'a=vqos.fec.repairPercent:5',
       'a=vqos.fec.repairMaxPercent:35',
       // Official dynamicStreamingMode=0 path disables server resolution/FPS
-      // switching.
-      'a=vqos.dynamicStreamingMode:0',
+      // switching. The experimental presets re-enable resolution adaptation.
+      'a=vqos.dynamicStreamingMode:${allowResolutionScaling ? 1 : 0}',
       'a=vqos.drc.enable:0',
       'a=vqos.calculateAvgVideoStreamingBitrate:1',
     ];
 
-    if (isHighFps) {
+    if (dfcEnable) {
       lines.addAll([
         'a=vqos.dfc.enable:1',
-        'a=vqos.dfc.decodeFpsAdjPercent:85',
+        'a=vqos.dfc.decodeFpsAdjPercent:${fpsFirst ? 95 : 85}',
         'a=vqos.dfc.targetDownCooldownMs:250',
         'a=vqos.dfc.dfcAlgoVersion:${is120Fps || is240Fps ? 2 : 1}',
         'a=vqos.dfc.minTargetFps:${is120Fps || is240Fps ? 100 : 60}',
         'a=vqos.resControl.dfc.useClientFpsPerf:0',
-        'a=vqos.dfc.adjustResAndFps:0',
+        'a=vqos.dfc.adjustResAndFps:${allowResolutionScaling ? 1 : 0}',
       ]);
     } else {
       lines.addAll([
@@ -1023,13 +1043,15 @@ class WebRtcStreamSession {
       'a=vqos.adjustStreamingFpsDuringOutOfFocus:1',
       'a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1',
       'a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1',
-      // Disable CPM-based resolution changes (prevents SSRC switches).
-      'a=vqos.resControl.cpmRtc.featureMask:0',
-      'a=vqos.resControl.cpmRtc.enable:0',
-      // Never scale down resolution.
-      'a=vqos.resControl.cpmRtc.minResolutionPercent:100',
-      // Infinite cooldown to prevent resolution changes.
-      'a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:999999',
+      // Experimental: disable CPM resolution changes (prevents SSRC switches)
+      // unless a scaling preset is active.
+      'a=vqos.resControl.cpmRtc.featureMask:${allowResolutionScaling ? 1 : 0}',
+      'a=vqos.resControl.cpmRtc.enable:${allowResolutionScaling ? 1 : 0}',
+      // Never scale down resolution on the default quality profile.
+      'a=vqos.resControl.cpmRtc.minResolutionPercent:$minResolutionPercent',
+      // Infinite cooldown on quality (prevents resolution changes); shorter on
+      // scaling presets.
+      'a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:${allowResolutionScaling ? 5000 : 999999}',
     ]);
 
     lines.addAll([

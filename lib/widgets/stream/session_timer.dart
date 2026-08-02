@@ -49,7 +49,7 @@ class _SessionTimerState extends State<SessionTimer> {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        border: Border.all(color: Neon.outline),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
