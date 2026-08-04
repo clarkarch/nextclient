@@ -38,11 +38,16 @@ dependencies:
     path: packages/gfn_core
   http: ^1.2.0
   path_provider: ^2.1.6
+  ffi: ^2.2.0
   shared_preferences: ^2.3.0
   url_launcher: ^6.3.0
   window_manager: ^0.5.2
   qr_flutter: ^4.1.0
-  flutter_webrtc: ^1.5.2
+  # Local checkout of flutter_webrtc (v1.5.2) so the plugin C++ (texture
+  # renderer / render path) can be patched and so it links the custom VAAPI
+  # libwebrtc.so from packages/flutter_webrtc/third_party/libwebrtc.
+  flutter_webrtc:
+    path: packages/flutter_webrtc
   # Locks the OS pointer while streaming so FPS-style mouse look works without
   # the cursor hitting the window edge. Supports Windows/macOS/Linux-X11, web
   # experimental. Not published to pub.dev, so a git dependency is required.

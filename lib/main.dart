@@ -17,12 +17,20 @@ import 'state/user_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Restores the OS cursor after a hot restart during development (pointer
-  // lock plugin requirement).
-  await pointerLock.ensureInitialized();
-  // Desktop window management (hide title bar). No-op on unsupported
-  // platforms.
-  await windowManager.ensureInitialized();
+  // Desktop-only plugins (pointer lock, window management). Guarded so the
+  // app boots on mobile/web where the plugins have no implementation — an
+  // unguarded await throws MissingPluginException before runApp and the app
+  // never renders.
+  final isDesktop =
+      Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+  if (isDesktop) {
+    // Restores the OS cursor after a hot restart during development (pointer
+    // lock plugin requirement).
+    await pointerLock.ensureInitialized();
+    // Desktop window management (hide title bar). No-op on unsupported
+    // platforms.
+    await windowManager.ensureInitialized();
+  }
   runApp(const DebugShellApp());
 }
 

@@ -3,12 +3,16 @@ import 'dart:math' show max, min;
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show KeyEvent, KeyDownEvent, KeyUpEvent, KeyRepeatEvent;
-import 'package:flutter/foundation.dart' show ValueChanged;
+import 'package:flutter/foundation.dart' show ValueChanged, ValueNotifier;
+import 'package:flutter/widgets.dart' show Widget;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:gfn_core/gfn_core.dart';
 
 import 'gfn_input_protocol.dart';
 import 'gfn_keyboard_mapping.dart';
+import 'process_env.dart' show applyDecoderBackend, applyRendererBackend;
+import 'stream_stats.dart';
+import 'stream_transport.dart';
 import 'user_settings.dart';
 
 /// Bridges NVIDIA's NVST signaling WebSocket to a local [RTCPeerConnection]
@@ -24,7 +28,7 @@ import 'user_settings.dart';
 /// `nvstSdp` capability blob (built from the local ICE credentials) is sent
 /// alongside the answer. Local ICE candidates are queued until the answer is
 /// on the wire, then flushed (OpenNOW's trickle order).
-class WebRtcStreamSession {
+class WebRtcStreamSession implements StreamTransport {
   final SessionInfo session;
   final UserSettings settings;
   final LogSink log;
@@ -42,6 +46,35 @@ class WebRtcStreamSession {
   /// Mirrors OpenNOW's `hasConfirmedRemoteIce` + ICE-state tracking: a
   /// signaling socket close after this point is expected, not an error.
   bool _established = false;
+
+  /// Latest parsed getStats() snapshot (client + stream side), refreshed every
+  /// [_statsPollInterval] while the peer connection is alive. Mirrors
+  /// OpenNOW's `setupStatsPolling()`. Null until the first successful poll.
+  @override
+  final ValueNotifier<StreamStatsSnapshot?> stats = ValueNotifier(null);
+
+  // --- StreamTransport (video surface + dims for the stats overlay) --------
+
+  @override
+  int? get videoWidth => videoRenderer.videoWidth;
+
+  @override
+  int? get videoHeight => videoRenderer.videoHeight;
+
+  @override
+  bool get rendererHasVideo => videoRenderer.value.renderVideo;
+
+  @override
+  Widget buildVideoView({required Widget placeholder}) {
+    return RTCVideoView(
+      videoRenderer,
+      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+      placeholderBuilder: (_) => placeholder,
+    );
+  }
+  Timer? _statsTimer;
+  bool _statsPollInFlight = false;
+  static const Duration _statsPollInterval = Duration(milliseconds: 500);
 
   // --- NVST handshake state (mirrors OpenNOW's handleOffer) ---
   bool _answerOnWire = false;
@@ -93,8 +126,20 @@ class WebRtcStreamSession {
     onStatus?.call(message);
   }
 
+  @override
   Future<void> start() async {
     if (_disposed) return;
+
+    // Apply the selected decoder backend (VAAPI vs FFmpeg) and renderer
+    // backend (CPU ConvertToARGB vs GPU shader) to the process env BEFORE the
+    // renderer texture is created. The Linux plugin reads OPENNOW_RENDERER in
+    // CreateVideoRendererTexture (triggered by videoRenderer.initialize()
+    // below) and the custom libwebrtc decoder factory reads OPENNOW_DECODER at
+    // decoder instantiation, so setting both first cleanly flips the
+    // decode/render path for this session (A/B testing).
+    applyDecoderBackend(settings.decoderBackend);
+    applyRendererBackend(settings.rendererBackend);
+
     await videoRenderer.initialize();
     _rendererInitialized = true;
     if (_disposed) return;
@@ -134,8 +179,11 @@ class WebRtcStreamSession {
     };
 
     pc.onConnectionState = (state) {
+      _lastConnectionState = state.name;
       _log('ICE connection state: ${state.name}');
     };
+
+    _startStatsPolling();
 
     _log('Signaling: [SERVER HOST REDACTED]');
     final signaling = GfnSignalingClient(
@@ -276,7 +324,18 @@ class WebRtcStreamSession {
         colorQuality: streamSettings.colorQuality.wireValue,
         credentials: credentials,
         caps: _inputCaps,
-        priority: settings.streamPriority,
+        // Experimental presets are off by default; only apply them when the
+        // user explicitly enables the toggle, otherwise keep the safe
+        // OpenNOW-matching quality profile.
+        priority: settings.streamPriorityEnabled
+            ? settings.streamPriority
+            : StreamPriority.quality,
+        // Experimental optimizations (all optional, default = safe profile).
+        lowLatencyMode: settings.optLowLatencyMode,
+        recoveryProfile: settings.optRecoveryProfile,
+        minBitrateKbps: settings.optMinBitrateKbps,
+        enableNack: settings.optEnableNack,
+        enableFec: settings.optEnableFec,
       );
 
       await _signaling?.sendAnswer(
@@ -371,6 +430,44 @@ class WebRtcStreamSession {
   }
 
   // ---------------------------------------------------------------------
+  // Live stats polling (port of OpenNOW's setupStatsPolling + collectStats)
+  // ---------------------------------------------------------------------
+
+  void _startStatsPolling() {
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(_statsPollInterval, (_) {
+      unawaited(_pollStats());
+    });
+  }
+
+  Future<void> _pollStats() async {
+    final pc = _pc;
+    if (pc == null || _disposed || _statsPollInFlight) return;
+    _statsPollInFlight = true;
+    try {
+      final reports = await pc.getStats();
+      if (_disposed) return;
+      final rendererValue = videoRenderer.value;
+      stats.value = StreamStatsSnapshot.fromStats(
+        reports,
+        prev: stats.value,
+        timestamp: DateTime.now(),
+        connectionState: _lastConnectionState,
+        inputReady: _inputReady,
+        reliableInputOpen: _reliableInputOpen,
+        partiallyReliableInputOpen: _partiallyReliableInputOpen,
+        rendererHasVideo: rendererValue.renderVideo,
+      );
+    } catch (e) {
+      log.log(LogLevel.debug, 'webrtc', 'getStats failed: $e');
+    } finally {
+      _statsPollInFlight = false;
+    }
+  }
+
+  String? _lastConnectionState;
+
+  // ---------------------------------------------------------------------
   // Input transport (port of OpenNOW's onInputHandshakeMessage + heartbeat)
   // ---------------------------------------------------------------------
 
@@ -453,6 +550,7 @@ class WebRtcStreamSession {
   // --- Public input API (called by the stream surface) ---
 
   /// Forwards a Flutter [KeyEvent] to the streamer over the reliable channel.
+  @override
   void sendKeyEvent(KeyEvent event) {
     if (!_inputReady) return;
     if (event is KeyRepeatEvent) return;
@@ -509,6 +607,7 @@ class WebRtcStreamSession {
 
   /// Sends mouse movement deltas over the best channel for the negotiated
   /// partially-reliable HID mask (falls back to reliable).
+  @override
   void sendMouseMove({required int dx, required int dy}) {
     if (!_inputReady) return;
     final payload = _inputEncoder.encodeMouseMove(
@@ -523,7 +622,17 @@ class WebRtcStreamSession {
     }
   }
 
+  /// Sends raw text (soft-keyboard / paste) over the reliable channel.
+  @override
+  void sendText(String text) {
+    if (!_inputReady || text.isEmpty) return;
+    for (final chunk in _inputEncoder.encodeTextInput(text)) {
+      _sendReliable(chunk);
+    }
+  }
+
   /// Sends a mouse button press/release (1-based GFN button ids).
+  @override
   void sendMouseButton({required bool down, required int button}) {
     if (!_inputReady) return;
     final ts = _inputEncoder.clock.captureTimestampUs();
@@ -534,6 +643,7 @@ class WebRtcStreamSession {
   }
 
   /// Sends a vertical mouse wheel delta.
+  @override
   void sendMouseWheel({required int delta}) {
     if (!_inputReady) return;
     _sendReliable(
@@ -546,6 +656,7 @@ class WebRtcStreamSession {
 
   /// Latches + sends virtual-gamepad state. Sticks/triggers are normalized
   /// -1..1 / 0..1; the encoder applies deadzone + integer conversion.
+  @override
   void sendGamepadState({
     int controllerId = 0,
     required int buttons,
@@ -886,6 +997,11 @@ class WebRtcStreamSession {
     required _IceCredentials credentials,
     required _RiInputCapabilities caps,
     StreamPriority priority = StreamPriority.quality,
+    bool lowLatencyMode = false,
+    StreamRecoveryProfile recoveryProfile = StreamRecoveryProfile.smooth,
+    int minBitrateKbps = 4000,
+    bool enableNack = true,
+    bool enableFec = true,
   }) {
     final maxBitrate = max(_officialMinBitrateKbps, maxBitrateKbps.floor());
     final startupBitrate = max(
@@ -905,8 +1021,17 @@ class WebRtcStreamSession {
         supportsHighBitDepth && colorQuality.startsWith('10bit') ? 10 : 8;
     final minTargetFrameTimeUs = max(
       1000,
-      (1000000 * 95 ~/ (max(1, fps) * 100)),
+      // Low-latency mode tightens the server's target frame time (95% -> 60%)
+      // so the encoder/sender holds less buffered video ahead of the display.
+      (1000000 * (lowLatencyMode ? 60 : 95) ~/ (max(1, fps) * 100)),
     );
+    final (nackQueueLength, nackQueueMaxPackets, nackMaxPacketCount) =
+        switch (recoveryProfile) {
+      StreamRecoveryProfile.smooth => (1024, 512, 25),
+      StreamRecoveryProfile.balanced => (512, 256, 16),
+      StreamRecoveryProfile.latency => (256, 128, 8),
+    };
+    final preemptiveIdr = recoveryProfile == StreamRecoveryProfile.latency;
     final hidDeviceMask = caps.hidDeviceMask;
     final enablePartiallyReliableTransferGamepad =
         caps.enablePartiallyReliableTransferGamepad;
@@ -939,21 +1064,26 @@ class WebRtcStreamSession {
       'a=general.dtlsFingerprint:${credentials.fingerprint}',
       'm=video 0 RTP/AVP',
       'a=msid:fbc-video-0',
-      // Match the stable Android-native recovery profile. Large FEC/NACK
-      // bursts amplify congestion after packet loss instead of letting BWE
-      // recover.
-      'a=vqos.fec.rateDropWindow:10',
-      'a=vqos.fec.minRequiredFecPackets:2',
-      'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
-      'a=vqos.fec.repairMinPercent:5',
-      'a=vqos.fec.repairPercent:5',
-      'a=vqos.fec.repairMaxPercent:35',
       // Official dynamicStreamingMode=0 path disables server resolution/FPS
       // switching. The experimental presets re-enable resolution adaptation.
       'a=vqos.dynamicStreamingMode:${allowResolutionScaling ? 1 : 0}',
       'a=vqos.drc.enable:0',
       'a=vqos.calculateAvgVideoStreamingBitrate:1',
     ];
+
+    if (enableFec) {
+      lines.addAll([
+        // Match the stable Android-native recovery profile. Large FEC/NACK
+        // bursts amplify congestion after packet loss instead of letting BWE
+        // recover.
+        'a=vqos.fec.rateDropWindow:10',
+        'a=vqos.fec.minRequiredFecPackets:2',
+        'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
+        'a=vqos.fec.repairMinPercent:5',
+        'a=vqos.fec.repairPercent:5',
+        'a=vqos.fec.repairMaxPercent:35',
+      ]);
+    }
 
     if (dfcEnable) {
       lines.addAll([
@@ -988,8 +1118,8 @@ class WebRtcStreamSession {
       'a=video.framePacing.mode:2',
       'a=video.framePacing.pid.minTargetFrameTimeUs:$minTargetFrameTimeUs',
       'a=bwe.useOwdCongestionControl:1',
-      'a=video.enableRtpNack:1',
-      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:200',
+      'a=video.enableRtpNack:${enableNack ? 1 : 0}',
+      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:${lowLatencyMode ? 100 : 200}',
       'a=vqos.drc.bitrateIirFilterFactor:18',
       'a=video.packetSize:1140',
       // Official packet pacing profile (Nvsc dumps + DESCRIBE enableAccurateSleep).
@@ -1056,12 +1186,22 @@ class WebRtcStreamSession {
 
     lines.addAll([
       'a=packetPacing.numGroups:${is120Fps ? 3 : 5}',
-      'a=packetPacing.maxDelayUs:1000',
+      'a=packetPacing.maxDelayUs:${lowLatencyMode ? 500 : 1000}',
       'a=packetPacing.minNumPacketsFrame:10',
-      'a=video.rtpNackQueueLength:1024',
-      'a=video.rtpNackQueueMaxPackets:512',
-      'a=video.rtpNackMaxPacketCount:25',
+      'a=video.rtpNackQueueLength:$nackQueueLength',
+      'a=video.rtpNackQueueMaxPackets:$nackQueueMaxPackets',
+      'a=video.rtpNackMaxPacketCount:$nackMaxPacketCount',
     ]);
+
+    // Latency recovery profile asks for a fresh keyframe as soon as a burst of
+    // loss hits instead of waiting on slow deep retransmits. Skipped on 240 FPS
+    // where the high-FPS block already pins the preemptive-IDR thresholds.
+    if (preemptiveIdr && !is240Fps) {
+      lines.addAll([
+        'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:1',
+        'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:1000',
+      ]);
+    }
 
     if (useHighThroughputPacing) {
       lines.add('a=vqos.drc.iirFilterFactor:100');
@@ -1107,7 +1247,7 @@ class WebRtcStreamSession {
       'a=video.initialBitrateKbps:$startupBitrate',
       'a=video.initialPeakBitrateKbps:$startupBitrate',
       'a=vqos.bw.maximumBitrateKbps:$maxBitrate',
-      'a=vqos.bw.minimumBitrateKbps:$_officialMinBitrateKbps',
+      'a=vqos.bw.minimumBitrateKbps:$minBitrateKbps',
       'a=vqos.bw.peakBitrateKbps:$maxBitrate',
       'a=vqos.bw.serverPeakBitrateKbps:$maxBitrate',
       'a=vqos.bw.enableBandwidthEstimation:1',
@@ -1153,11 +1293,17 @@ class WebRtcStreamSession {
   /// throws: on desktop the native side releases remote streams when the peer
   /// connection closes, so a second `MediaStream.dispose()` throws
   /// `MediaStreamDisposeFailed` — that is caught and treated as done.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
     _signaling?.disconnect();
     _signaling = null;
+
+    _statsTimer?.cancel();
+    _statsTimer = null;
+    stats.value = null;
+    stats.dispose();
 
     _inputHeartbeatTimer?.cancel();
     _inputHeartbeatTimer = null;

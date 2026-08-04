@@ -1,8 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- WebRTC (flutter_webrtc) needs these: it queries ConnectivityManager /
+         WifiManager on its network-monitor thread and treats a SecurityException
+         as a fatal CHECK failure (SIGABRT). Missing ACCESS_NETWORK_STATE crashes
+         the stream at connection time. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
     <application
         android:label="NEXTCLIENT"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

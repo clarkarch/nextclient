@@ -1,3 +1,4 @@
+import 'dart:convert' show utf8;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -58,6 +59,10 @@ const int gamepadMaxControllers = 4;
 const int gamepadPacketSize = 38;
 const double gamepadDeadzone = 0.15;
 
+/// INPUT_TEXT chunking (port of OpenNOW's packetEncoding.ts).
+const int textInputHeaderBytes = 5; // [0x22][u32 LE type]
+const int textInputChunkMaxBytes = 1016;
+
 /// Partially-reliable routing masks (port of OpenNOW's
 /// `PARTIALLY_RELIABLE_*` constants).
 const int partiallyReliableGamepadMaskAll = (1 << gamepadMaxControllers) - 1;
@@ -65,20 +70,23 @@ const int partiallyReliableHidDeviceMaskAll = 0xFFFFFFFF;
 
 /// Session-relative input clock (port of `inputSessionClock.ts`). Reset when
 /// the input handshake completes; all event timestamps are relative to it.
+///
+/// Uses a monotonic [Stopwatch] rather than wall-clock time so NTP syncs or
+/// manual clock changes can't jump the session timeline backwards (which the
+/// server would read as malformed input ordering).
 class InputSessionClock {
-  int _startedAtMs = 0;
+  final Stopwatch _stopwatch = Stopwatch();
 
   void start([int? nowMs]) {
-    _startedAtMs = nowMs ?? _nowMs();
+    _stopwatch
+      ..reset()
+      ..start();
   }
 
   /// Session-relative capture timestamp in microseconds.
   int captureTimestampUs([int? sourceMs]) {
-    final base = sourceMs ?? _nowMs();
-    return ((base - _startedAtMs).clamp(0, 1 << 62)) * 1000;
+    return _stopwatch.elapsedMicroseconds.clamp(0, 1 << 62);
   }
-
-  static int _nowMs() => DateTime.now().millisecondsSinceEpoch;
 }
 
 /// Port of OpenNOW's `InputEncoder` (packetEncoding.ts).
@@ -235,6 +243,41 @@ class GfnInputEncoder {
       return _wrapGamepadPr(bytes, controllerId, seq);
     }
     return _wrapGamepadReliable(bytes);
+  }
+
+  /// Port of OpenNOW's `encodeTextInput()` — [INPUT_TEXT] raw UTF-8 chunks.
+  /// [0x22][u32 LE INPUT_TEXT][utf8 text], split at UTF-8 boundaries so a
+  /// multi-byte rune never straddles two packets.
+  List<Uint8List> encodeTextInput(String text) {
+    final utf8Bytes = utf8.encode(text);
+    final chunks = <Uint8List>[];
+
+    for (var offset = 0; offset < utf8Bytes.length;) {
+      final chunkLength = _textInputChunkLength(utf8Bytes, offset);
+      if (chunkLength <= 0) break;
+
+      final out = Uint8List(textInputHeaderBytes + chunkLength);
+      final view = ByteData.sublistView(out);
+      out[0] = wrapperSingleInput;
+      view.setUint32(1, inputText, Endian.little);
+      out.setRange(textInputHeaderBytes, out.length, utf8Bytes, offset);
+      chunks.add(out);
+      offset += chunkLength;
+    }
+
+    return chunks;
+  }
+
+  int _textInputChunkLength(Uint8List bytes, int offset) {
+    final remaining = bytes.length - offset;
+    if (remaining <= textInputChunkMaxBytes) return remaining;
+
+    var end = offset + textInputChunkMaxBytes;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      if ((bytes[end] & 0xc0) != 0x80) return end - offset;
+      end--;
+    }
+    return 0;
   }
 
   // --- Private encoders -------------------------------------------------------

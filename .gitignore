@@ -46,3 +46,10 @@ app.*.map.json
 
 # Local cache databases
 .freebuff/
+
+# Vendored WebRTC source + build tree (15 GB chromium checkout) — external
+# dependencies, not part of this repo. The runtime artifact that matters is
+# packages/flutter_webrtc/third_party/libwebrtc/lib/libwebrtc.so.
+/native/libwebrtc_build/
+/native/libwebrtc-vaapi/
+/native/depot_tools/

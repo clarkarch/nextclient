@@ -84,7 +84,7 @@ class VirtualGamepad extends StatefulWidget {
     this.onRightBumperPressed,
     this.onLeftTriggerPressed,
     this.onRightTriggerPressed,
-    this.backgroundColor = const Color(0x6608080D),
+    this.backgroundColor = Colors.transparent,
     this.padding = const EdgeInsets.all(16.0),
     this.scale = 1.0,
   });

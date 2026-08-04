@@ -2,16 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:pointer_lock/pointer_lock.dart';
 
 import '../../main.dart';
 import '../../state/gfn_input_protocol.dart';
 import '../../state/session_controller.dart';
+import '../../state/stream_stats.dart';
+import '../../state/stream_transport.dart';
 import '../../state/user_settings.dart';
-import '../../state/webrtc_stream_session.dart';
 import '../../theme/neon.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/game_art.dart';
@@ -49,9 +50,13 @@ class StreamPage extends StatefulWidget {
 
 class _StreamPageState extends State<StreamPage> {
   bool _launchStarted = false;
-  WebRtcStreamSession? _webrtc;
+  StreamTransport? _transport;
   String? _webrtcStatus;
   bool _stopInFlight = false;
+
+  /// Lets the outer PopScope ask the live stream surface how to handle the
+  /// Android system back button (show chrome / close keyboard / exit).
+  final GlobalKey<_ReadySurfaceState> _readyKey = GlobalKey();
 
   @override
   void initState() {
@@ -61,11 +66,11 @@ class _StreamPageState extends State<StreamPage> {
 
   @override
   void dispose() {
-    final webrtc = _webrtc;
-    _webrtc = null;
+    final transport = _transport;
+    _transport = null;
     // Fire-and-forget local teardown; dispose() never throws.
-    if (webrtc != null) {
-      webrtc.dispose();
+    if (transport != null) {
+      transport.dispose();
     }
     // Safety net: if the route was popped without going through
     // _stopAndExit (e.g. window closed / navigator reset), still ask the
@@ -76,11 +81,13 @@ class _StreamPageState extends State<StreamPage> {
     super.dispose();
   }
 
-  /// Once CloudMatch reports the session ready, spin up the WebRTC
-  /// connection and attach the incoming video to a renderer.
+  /// Once CloudMatch reports the session ready, spin up the selected
+  /// transport (libwebrtc or GStreamer webrtcbin) and attach the incoming
+  /// video to its surface.
   Future<void> _connectStream(SessionInfo session) async {
-    if (_webrtc != null) return;
-    final webrtc = WebRtcStreamSession(
+    if (_transport != null) return;
+    final transport = createStreamTransport(
+      kind: widget.services.settings.streamTransport,
       session: session,
       settings: widget.services.settings,
       log: widget.services.logSink,
@@ -88,34 +95,37 @@ class _StreamPageState extends State<StreamPage> {
         if (mounted) setState(() => _webrtcStatus = msg);
       },
     );
-    _webrtc = webrtc;
+    _transport = transport;
     widget.services.logSink.log(
       LogLevel.info,
       'stream',
-      'Starting WebRTC session [SESSION ID REDACTED]',
+      'Starting stream session [SESSION ID REDACTED] '
+          '(${widget.services.settings.streamTransport.name})',
     );
     try {
-      await webrtc.start();
+      await transport.start();
       widget.services.logSink.log(
         LogLevel.info,
         'stream',
-        'WebRTC session started',
+        'Stream session started',
       );
     } catch (e) {
-      debugPrint('[stream] webrtc start failed: $e');
+      debugPrint('[stream] transport start failed: $e');
       widget.services.logSink.log(
         LogLevel.error,
         'stream',
-        'WebRTC start failed: $e',
+        'Transport start failed: $e',
       );
       if (!mounted) return;
-      // Tear down so a later retry isn't blocked by the non-null guard.
-      await webrtc.dispose();
-      if (!mounted) return;
+      // Drop the transport reference (unsubscribing the stats overlay from its
+      // ValueNotifier) BEFORE disposing, so no widget is still listening when
+      // the notifier is torn down — same ordering as _stopAndExit.
       setState(() {
-        _webrtc = null;
+        _transport = null;
         _webrtcStatus = 'Stream connection failed: $e';
       });
+      // Tear down so a later retry isn't blocked by the non-null guard.
+      await transport.dispose();
     }
   }
 
@@ -188,29 +198,29 @@ class _StreamPageState extends State<StreamPage> {
   Future<void> _stopAndExit() async {
     if (_stopInFlight) return;
     _stopInFlight = true;
-    final webrtc = _webrtc;
-    // Drop the video surface out of the widget tree first so the renderer's
+    final transport = _transport;
+    // Drop the video surface out of the widget tree first so the transport's
     // native texture is no longer being painted when we dispose it. Tearing
     // down a still-mounted RTCVideoView's texture crashes the engine on Linux
     // (SIGSEGV), and a route pop keeps the outgoing subtree alive during its
     // exit transition.
     if (mounted) {
-      setState(() => _webrtc = null);
+      setState(() => _transport = null);
     } else {
-      _webrtc = null;
+      _transport = null;
     }
     if (mounted) Navigator.of(context).pop();
     // Local teardown after the video surface is off-screen. Never let a local
     // failure prevent the server-side session stop (DELETE /v2/session).
     try {
-      await webrtc?.dispose();
-      widget.services.logSink.log(LogLevel.info, 'stream', 'WebRTC torn down');
+      await transport?.dispose();
+      widget.services.logSink.log(LogLevel.info, 'stream', 'Stream torn down');
     } catch (e) {
-      debugPrint('[stream] webrtc teardown failed (continuing): $e');
+      debugPrint('[stream] transport teardown failed (continuing): $e');
       widget.services.logSink.log(
         LogLevel.warn,
         'stream',
-        'WebRTC teardown failed (continuing): $e',
+        'Stream teardown failed (continuing): $e',
       );
     }
     await _stopServerSession();
@@ -235,6 +245,11 @@ class _StreamPageState extends State<StreamPage> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
+        // When the stream surface is live, the Android back button shows the
+        // stream UI (chrome) or dismisses the soft keyboard first; it only
+        // exits once the chrome is already visible.
+        final ready = _readyKey.currentState;
+        if (ready != null && ready.handleSystemBack()) return;
         _stopAndExit();
       },
       child: Scaffold(
@@ -258,9 +273,10 @@ class _StreamPageState extends State<StreamPage> {
               if (ready) {
                 // Full-bleed immersive streaming surface.
                 return _ReadySurface(
+                  key: _readyKey,
                   game: widget.game,
                   session: controller.session!,
-                  webrtc: _webrtc,
+                  transport: _transport,
                   webrtcStatus: _webrtcStatus,
                   settings: widget.services.settings,
                   onStop: _stopAndExit,
@@ -753,15 +769,16 @@ class _InfoRow extends StatelessWidget {
 class _ReadySurface extends StatefulWidget {
   final CatalogGame game;
   final SessionInfo session;
-  final WebRtcStreamSession? webrtc;
+  final StreamTransport? transport;
   final String? webrtcStatus;
   final UserSettings settings;
   final VoidCallback onStop;
 
   const _ReadySurface({
+    super.key,
     required this.game,
     required this.session,
-    this.webrtc,
+    this.transport,
     this.webrtcStatus,
     required this.settings,
     required this.onStop,
@@ -795,6 +812,14 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   bool _escArmed = false;
   bool _escDownForwarded = false;
 
+  /// Soft-keyboard overlay state. When enabled a bottom text bar autofocuses a
+  /// hidden [TextField] so the OS keyboard shows; typed text is forwarded to
+  /// the stream as INPUT_TEXT (backspace/enter become key events).
+  bool _keyboardOpen = false;
+  final TextEditingController _keyboardController = TextEditingController();
+  final FocusNode _keyboardFocus = FocusNode();
+  String _lastKeyboardText = '';
+
   /// Bitmask of mouse buttons currently pressed on the video surface, used to
   /// detect which button a down/up event refers to (GFN protocol is 1-based
   /// single-button events).
@@ -820,7 +845,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   void _handleEscKey(KeyEvent event) {
     if (event is KeyRepeatEvent) return;
     if (event is KeyUpEvent) {
-      if (_escDownForwarded) widget.webrtc?.sendKeyEvent(event);
+      if (_escDownForwarded) widget.transport?.sendKeyEvent(event);
       _escDownForwarded = false;
       return;
     }
@@ -839,7 +864,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     // First Esc: forward to the game and arm the double-press window.
     _escArmed = true;
     _escDownForwarded = true;
-    widget.webrtc?.sendKeyEvent(event);
+    widget.transport?.sendKeyEvent(event);
     _escTimer?.cancel();
     _escTimer = Timer(_escDoubleWindow, () {
       _escArmed = false;
@@ -874,6 +899,12 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     setState(() {
       _mouseLocked = true;
       _chromeVisible = false;
+      // Entering in-game mode dismisses the soft keyboard (its focus would
+      // otherwise fight the pointer-lock tap).
+      if (_keyboardOpen) {
+        _keyboardOpen = false;
+        _keyboardFocus.unfocus();
+      }
     });
     if (_pointerLockSub != null) return;
     try {
@@ -924,6 +955,8 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     _pointerLockSub?.cancel();
     _pendingUnlock = null;
     _escTimer?.cancel();
+    _keyboardController.dispose();
+    _keyboardFocus.dispose();
     super.dispose();
   }
 
@@ -942,11 +975,18 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     final dx = delta.dx.round().clamp(-32767, 32767);
     final dy = delta.dy.round().clamp(-32767, 32767);
     if (dx == 0 && dy == 0) return;
-    widget.webrtc?.sendMouseMove(dx: dx, dy: dy);
+    widget.transport?.sendMouseMove(dx: dx, dy: dy);
   }
 
   void _onVideoPointerDown(PointerDownEvent event) {
     if (_chromeVisible) return; // chrome consumes; tap will hide it
+    // Touch: a finger is the primary mouse button. No capture-click for
+    // touch — every tap while in-game is a real click.
+    if (event.kind == PointerDeviceKind.touch) {
+      _pressedMouseButtons |= kPrimaryMouseButton;
+      widget.transport?.sendMouseButton(down: true, button: mouseLeft);
+      return;
+    }
     if (!_mouseLocked) {
       // First click after hiding the UI is the capture click: consume it and
       // let the tap below enter mouse lock (consistent with the chrome-visible
@@ -960,13 +1000,18 @@ class _ReadySurfaceState extends State<_ReadySurface> {
       if ((newly & bit) == 0) continue;
       final button = _gfnButtonForBit(bit);
       if (button != null) {
-        widget.webrtc?.sendMouseButton(down: true, button: button);
+        widget.transport?.sendMouseButton(down: true, button: button);
       }
     }
   }
 
   void _onVideoPointerUp(PointerUpEvent event) {
     if (_chromeVisible) return;
+    if (event.kind == PointerDeviceKind.touch) {
+      _pressedMouseButtons &= ~kPrimaryMouseButton;
+      widget.transport?.sendMouseButton(down: false, button: mouseLeft);
+      return;
+    }
     if (_consumingClickForLock) {
       _consumingClickForLock = false;
       return;
@@ -977,7 +1022,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
       if ((released & bit) == 0) continue;
       final button = _gfnButtonForBit(bit);
       if (button != null) {
-        widget.webrtc?.sendMouseButton(down: false, button: button);
+        widget.transport?.sendMouseButton(down: false, button: button);
       }
     }
   }
@@ -1010,7 +1055,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
       if ((wasDown & bit) == 0) continue;
       final button = _gfnButtonForBit(bit);
       if (button != null) {
-        widget.webrtc?.sendMouseButton(down: false, button: button);
+        widget.transport?.sendMouseButton(down: false, button: button);
       }
     }
   }
@@ -1018,11 +1063,11 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   void _onVideoPointerSignal(PointerSignalEvent event) {
     if (_chromeVisible || event is! PointerScrollEvent) return;
     final dy = event.scrollDelta.dy.round();
-    if (dy != 0) widget.webrtc?.sendMouseWheel(delta: dy);
+    if (dy != 0) widget.transport?.sendMouseWheel(delta: dy);
   }
 
   void _sendGamepadState() {
-    widget.webrtc?.sendGamepadState(
+    widget.transport?.sendGamepadState(
       buttons: _gamepadButtons,
       leftStickX: _leftStickX,
       leftStickY: _leftStickY,
@@ -1081,9 +1126,94 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     _sendGamepadState();
   }
 
+  // --- Soft keyboard (mobile touch input) -----------------------------------
+
+  void _toggleKeyboard() {
+    setState(() {
+      _keyboardOpen = !_keyboardOpen;
+      if (_keyboardOpen) {
+        _lastKeyboardText = '';
+        _keyboardController.clear();
+      } else {
+        _keyboardFocus.unfocus();
+      }
+    });
+    if (_keyboardOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _keyboardFocus.requestFocus();
+      });
+    }
+  }
+
+  void _onKeyboardChanged(String text) {
+    final previous = _lastKeyboardText;
+    _lastKeyboardText = text;
+    final transport = widget.transport;
+    if (transport == null) return;
+
+    // Backspace for every character removed from the tail.
+    var removed = 0;
+    while (removed < previous.length &&
+        (removed >= text.length ||
+            previous.codeUnitAt(previous.length - 1 - removed) !=
+                text.codeUnitAt(text.length - 1 - removed))) {
+      removed++;
+    }
+    for (var i = 0; i < removed; i++) {
+      _sendSyntheticKey(LogicalKeyboardKey.backspace,
+          PhysicalKeyboardKey.backspace);
+    }
+
+    // Forward the newly typed characters as text input.
+    final added = text.length > previous.length
+        ? text.substring(previous.length)
+        : '';
+    if (added.isNotEmpty) transport.sendText(added);
+  }
+
+  void _onKeyboardSubmitted(String text) {
+    if (text.isNotEmpty) {
+      widget.transport?.sendText(text);
+      _lastKeyboardText = '';
+      _keyboardController.clear();
+    }
+    _sendSyntheticKey(LogicalKeyboardKey.enter, PhysicalKeyboardKey.enter);
+  }
+
+  void _sendSyntheticKey(
+      LogicalKeyboardKey logical, PhysicalKeyboardKey physical) {
+    final now = Duration(milliseconds: DateTime.now().millisecondsSinceEpoch);
+    widget.transport?.sendKeyEvent(KeyDownEvent(
+      physicalKey: physical,
+      logicalKey: logical,
+      timeStamp: now,
+      synthesized: true,
+    ));
+    widget.transport?.sendKeyEvent(KeyUpEvent(
+      physicalKey: physical,
+      logicalKey: logical,
+      timeStamp: now,
+      synthesized: true,
+    ));
+  }
+
+  /// Android system back: if the soft keyboard is open, close it; otherwise
+  /// show the stream UI (chrome). Returns true when consumed.
+  bool handleSystemBack() {
+    if (_keyboardOpen) {
+      _toggleKeyboard();
+      return true;
+    }
+    if (!_chromeVisible) {
+      setState(() => _chromeVisible = true);
+      return true;
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final renderer = widget.webrtc?.videoRenderer;
+    final transport = widget.transport;
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
@@ -1093,17 +1223,17 @@ class _ReadySurfaceState extends State<_ReadySurface> {
           _handleEscKey(event);
           return KeyEventResult.handled;
         }
-        // Everything else goes to the stream over the input channel.
-        widget.webrtc?.sendKeyEvent(event);
-        return KeyEventResult.handled;
-      },
-      // Rebuild when stream settings change (gamepad/stats toggles in the
-      // bottom chrome mutate UserSettings, a ChangeNotifier).
-      child: ListenableBuilder(
-        listenable: widget.settings,
-        builder: (context, _) => Stack(
-          fit: StackFit.expand,
-          children: [
+          // Everything else goes to the stream over the input channel.
+          widget.transport?.sendKeyEvent(event);
+          return KeyEventResult.handled;
+        },
+        // Rebuild when stream settings change (gamepad/stats toggles in the
+        // bottom chrome mutate UserSettings, a ChangeNotifier).
+        child: ListenableBuilder(
+          listenable: widget.settings,
+          builder: (context, _) => Stack(
+            fit: StackFit.expand,
+            children: [
           // Video fills the screen. When the chrome is visible, tapping hides
           // it (UI mode). When hidden (in-game), all mouse input — deltas,
           // buttons, wheel — streams to the game. Raw Listeners below the
@@ -1137,12 +1267,9 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                       : SystemMouseCursors.basic,
                   child: Container(
                     color: Colors.black,
-                    child: renderer != null
-                        ? RTCVideoView(
-                            renderer,
-                            objectFit:
-                                RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                            placeholderBuilder: (_) => _backdropArt(),
+                    child: transport != null
+                        ? transport.buildVideoView(
+                            placeholder: _backdropArt(),
                           )
                         : _backdropArt(),
                   ),
@@ -1165,14 +1292,13 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                 ),
               ),
 
-            // Stats overlay (right side under the chrome).
-            if (_chromeVisible && widget.settings.streamShowFps)
+            // Stats overlay (right side under the chrome). Stays visible when
+            // the stream UI hides so stats remain readable in-game.
+            if (widget.settings.streamShowFps)
               Positioned(
                 top: 96,
                 right: 16,
-                child: _FpsOverlay(
-                  webrtcStatus: widget.webrtcStatus,
-                ),
+                child: _StatsOverlay(transport: widget.transport),
               ),
 
             // Hint pill: mouse-lock + double-Esc gestures.
@@ -1196,6 +1322,8 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                 bottom: 0,
                 child: _BottomChrome(
                   settings: widget.settings,
+                  keyboardOpen: _keyboardOpen,
+                  onKeyboard: _toggleKeyboard,
                   onFullscreen: _enterMouseLock,
                 ),
               ),
@@ -1203,9 +1331,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
             // Virtual gamepad overlay (independent of chrome visibility). The
             // no-op tap on the wrapper swallows taps so using the gamepad
             // never toggles the chrome (raw Listeners don't join the arena).
-            // Hidden while the pointer is locked — the OS grab makes stick
-            // drags dead UI.
-            if (widget.settings.streamGamepad && !_mouseLocked)
+            if (widget.settings.streamGamepad)
               Positioned(
                 left: 0,
                 right: 0,
@@ -1245,6 +1371,126 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                       onFaceButtonPressed: _onFaceButtonPressed,
                       onFaceButtonReleased: _onFaceButtonReleased,
                     ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Soft keyboard overlay (touch devices). The focused text field
+            // summons the OS keyboard; typed text goes to the game, and the
+            // close button (or the Android back button) dismisses it.
+            if (_keyboardOpen)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                child: SafeArea(
+                  top: false,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Neon.bgC.withValues(alpha: 0.92),
+                        border: const Border(
+                          top: BorderSide(color: Neon.outlineSoft),
+                        ),
+                        boxShadow: Neon.softShadow(radius: 12),
+                      ),
+                      child: Row(
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(right: 8),
+                            child: Icon(
+                              Icons.keyboard,
+                              size: 18,
+                              color: Neon.inkMuted,
+                            ),
+                          ),
+                          Expanded(
+                            child: TextField(
+                              controller: _keyboardController,
+                              focusNode: _keyboardFocus,
+                              onChanged: _onKeyboardChanged,
+                              onSubmitted: _onKeyboardSubmitted,
+                              textInputAction: TextInputAction.go,
+                              keyboardType: TextInputType.text,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              style: const TextStyle(
+                                color: Neon.ink,
+                                fontSize: 14,
+                              ),
+                              cursorColor: Neon.accent,
+                              decoration: InputDecoration(
+                                hintText: 'Type to the game…',
+                                hintStyle: const TextStyle(
+                                  color: Neon.inkMuted,
+                                  fontSize: 14,
+                                ),
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                filled: true,
+                                fillColor: Neon.bgB,
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                    color: Neon.outlineSoft,
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                    color: Neon.accent,
+                                    width: 1.2,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: _toggleKeyboard,
+                            behavior: HitTestBehavior.opaque,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Neon.bgB,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Neon.outline),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.close,
+                                    size: 16,
+                                    color: Neon.inkMuted,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Done',
+                                    style: TextStyle(
+                                      color: Neon.ink,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1367,13 +1613,17 @@ class _TopChrome extends StatelessWidget {
   }
 }
 
-/// Bottom gradient chrome: gamepad / stats toggles + fullscreen mouse lock.
+/// Bottom gradient chrome: gamepad / stats toggles + keyboard + fullscreen.
 class _BottomChrome extends StatelessWidget {
   final UserSettings settings;
+  final bool keyboardOpen;
+  final VoidCallback onKeyboard;
   final VoidCallback onFullscreen;
 
   const _BottomChrome({
     required this.settings,
+    required this.keyboardOpen,
+    required this.onKeyboard,
     required this.onFullscreen,
   });
 
@@ -1414,6 +1664,13 @@ class _BottomChrome extends StatelessWidget {
             label: 'Stats',
             active: settings.streamShowFps,
             onTap: () => settings.streamShowFps = !settings.streamShowFps,
+          ),
+          const SizedBox(width: 40),
+          _ChromeButton(
+            icon: Icons.keyboard,
+            label: 'Keyboard',
+            active: keyboardOpen,
+            onTap: onKeyboard,
           ),
           const SizedBox(width: 40),
           _ChromeButton(
@@ -1494,29 +1751,220 @@ class _HintPill extends StatelessWidget {
   }
 }
 
-/// Minimal stats chip showing the live webrtc status (real stream stats via
-/// getStats can slot in here later).
-class _FpsOverlay extends StatelessWidget {
-  final String? webrtcStatus;
+/// Verbose live stats overlay: real getStats() data (bitrate, FPS, jitter,
+/// RTT, loss, decode time, backlog) plus client-side plumbing (UI FPS via a
+/// Ticker, connection/ICE state, input channels, renderer). Ports the spirit
+/// of OpenNOW's stream diagnostics panel.
+class _StatsOverlay extends StatefulWidget {
+  final StreamTransport? transport;
 
-  const _FpsOverlay({this.webrtcStatus});
+  const _StatsOverlay({this.transport});
+
+  @override
+  State<_StatsOverlay> createState() => _StatsOverlayState();
+}
+
+class _StatsOverlayState extends State<_StatsOverlay>
+    with SingleTickerProviderStateMixin {
+  late final Ticker _ticker;
+  int _uiFrames = 0;
+  double _uiFps = 0;
+  Duration _windowStart = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    // Measure the Flutter UI's own frame rate (client-side render health),
+    // independent of the stream's decode FPS.
+    _ticker = createTicker((elapsed) {
+      _uiFrames++;
+      final windowMs = elapsed - _windowStart;
+      if (windowMs.inMilliseconds >= 500 && windowMs.inMilliseconds > 0) {
+        setState(() {
+          _uiFps = _uiFrames * 1000 / windowMs.inMilliseconds;
+          _uiFrames = 0;
+          _windowStart = elapsed;
+        });
+      }
+    });
+    _ticker.start();
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    final transport = widget.transport;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 340, maxHeight: 560),
+      child: Container(
+        width: 340,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          boxShadow: Neon.softShadow(radius: 14),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _StatsHeader(),
+              if (transport == null) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'transport not started',
+                  style: TextStyle(color: Neon.inkMuted, fontSize: 11),
+                ),
+              ] else
+                ValueListenableBuilder<StreamStatsSnapshot?>(
+                  valueListenable: transport.stats,
+                  builder: (context, snap, _) {
+                    if (snap == null) {
+                      return const Padding(
+                        padding: EdgeInsets.only(top: 10),
+                        child: Text(
+                          'collecting stats…',
+                          style: TextStyle(color: Neon.inkMuted, fontSize: 11),
+                        ),
+                      );
+                    }
+                    return _StatsBody(
+                      snap: snap,
+                      uiFps: _uiFps,
+                      transport: transport,
+                    );
+                  },
+                ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+}
+
+class _StatsHeader extends StatelessWidget {
+  const _StatsHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      children: [
+        Icon(Icons.speed, size: 14, color: Neon.accent),
+        SizedBox(width: 6),
+        Text(
+          'LIVE STATS',
+          style: TextStyle(
+            color: Neon.ink,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.4,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatsBody extends StatelessWidget {
+  final StreamStatsSnapshot snap;
+  final double uiFps;
+  final StreamTransport transport;
+
+  const _StatsBody({
+    required this.snap,
+    required this.uiFps,
+    required this.transport,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 8),
+        _section('CLIENT'),
+        _row('UI FPS', uiFps.toStringAsFixed(1)),
+        _row('Connection', snap.connectionState ?? '—'),
+        _row('Input', snap.inputReady ? 'ready' : 'idle'),
+        _row('Reliable ch', snap.reliableInputOpen ? 'open' : 'closed'),
+        _row('Partial ch', snap.partiallyReliableInputOpen ? 'open' : 'closed'),
+        _row(
+          'Renderer',
+          '${transport.videoWidth ?? '?'}x${transport.videoHeight ?? '?'}'
+              '${snap.rendererHasVideo ? ' · active' : ' · waiting'}',
+        ),
+        const SizedBox(height: 6),
+        _section('STREAM · VIDEO'),
+        _row('Codec', snap.codecMime?.replaceFirst('video/', '') ?? '—'),
+        _row('Decoder', snap.decoderImplementation ?? '—'),
+        _row('Resolution',
+            '${snap.videoWidth ?? '?'}x${snap.videoHeight ?? '?'}'),
+        _row('Bitrate', fmtKbps(snap.videoBitrateKbps)),
+        _row('Decode FPS', fmtFps(snap.decodeFps)),
+        _row('Receive FPS', fmtFps(snap.receivedFps)),
+        _row('Backlog', '${snap.backlogFrames} frames'),
+        _row('Frames',
+            '${snap.framesDecoded} dec / ${snap.framesReceived} recv'),
+        _row('Dropped', '${snap.framesDropped} (${snap.keyFramesDecoded} key)'),
+        _row('Jitter', '${snap.jitterMs.toStringAsFixed(1)} ms'),
+        _row('JB delay', '${snap.jitterBufferDelayMs.toStringAsFixed(1)} ms'),
+        _row('Decode/frame', '${snap.decodeTimePerFrameMs.toStringAsFixed(2)} ms'),
+        const SizedBox(height: 6),
+        _section('STREAM · AUDIO'),
+        _row('Bitrate', fmtKbps(snap.audioBitrateKbps)),
+        _row('Jitter', '${snap.audioJitterMs.toStringAsFixed(1)} ms'),
+        _row('Packets lost', '${snap.audioPacketsLost}'),
+        const SizedBox(height: 6),
+        _section('NETWORK'),
+        _row('RTT', '${snap.rttMs.toStringAsFixed(1)} ms'),
+        _row(
+          'Loss',
+          '${snap.packetLossPercent.toStringAsFixed(2)}% '
+              '(${snap.packetsLost}/${snap.packetsReceived})',
+        ),
+        _row('NACK', '${snap.nackCount}'),
+        _row('In avail', fmtKbps(snap.availableIncomingBitrateKbps)),
+        _row('Out avail', fmtKbps(snap.availableOutgoingBitrateKbps)),
+      ],
+    );
+  }
+
+  Widget _section(String label) {
+    return Text(
+      label,
+      style: const TextStyle(
+        color: Neon.accent,
+        fontSize: 9.5,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.2,
+      ),
+    );
+  }
+
+  Widget _row(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.speed, size: 14, color: Neon.accent),
-          const SizedBox(width: 6),
           Text(
-            webrtcStatus ?? 'connecting…',
-            style: const TextStyle(color: Neon.ink, fontSize: 11.5),
+            label,
+            style: const TextStyle(color: Neon.inkMuted, fontSize: 10.5),
+          ),
+          const Spacer(),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Neon.ink,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ],
       ),

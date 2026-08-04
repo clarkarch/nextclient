@@ -11,6 +11,7 @@ import 'pages/settings/settings_page.dart';
 import 'pages/stream/stream_page.dart';
 import 'state/title_bar_controller.dart';
 import 'theme/neon.dart';
+import 'widgets/neon_bottom_nav.dart';
 import 'widgets/neon_sidebar.dart';
 import 'widgets/neon_snackbar.dart';
 
@@ -242,15 +243,33 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
+    // Portrait (phones, or a narrow/tall desktop window): bottom navigation.
+    // Landscape (PC, tablets): the sidebar rail, pushed content layout.
+    final isPortrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
+
     final pages = <Widget>[
       HomePage(
         services: widget.services,
         onSignOut: widget.onSignOut,
-        showBrand: !_sidebarExpanded,
+        // No sidebar in portrait — always show the brand in the top bar.
+        showBrand: isPortrait || !_sidebarExpanded,
       ),
       LibraryPage(services: widget.services),
       SettingsPage(services: widget.services, onSignOut: widget.onSignOut),
     ];
+
+    if (isPortrait) {
+      return Scaffold(
+        backgroundColor: Neon.bgA,
+        body: IndexedStack(index: _index, children: pages),
+        bottomNavigationBar: NeonBottomNav(
+          destinations: _destinations,
+          selectedIndex: _index,
+          onSelect: (i) => setState(() => _index = i),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: Neon.bgA,

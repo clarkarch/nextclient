@@ -3,6 +3,7 @@ import 'package:gfn_core/gfn_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../theme/neon.dart';
+import 'stream_transport.dart' show StreamTransportKind;
 
 /// Launch preferences that are sent to the NVIDIA server in the
 /// `SessionCreateRequest`. Persisted locally so launches reuse the last choice.
@@ -34,9 +35,21 @@ class UserSettings extends ChangeNotifier {
   static const _keyWebrtcDscp = 'settings.webrtc.dscp';
   static const _keyWebrtcMaxIpv6Networks = 'settings.webrtc.maxIpv6Networks';
   static const _keyStreamPriority = 'settings.experimental.streamPriority';
+  static const _keyStreamPriorityEnabled =
+      'settings.experimental.streamPriorityEnabled';
+  static const _keyStreamTransport = 'settings.experimental.streamTransport';
+  static const _keyDecoderBackend = 'settings.experimental.decoderBackend';
+  static const _keyRendererBackend = 'settings.experimental.rendererBackend';
   static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
+  // --- Experimental stream optimizations --------------------------------
+  static const _keyOptLowLatency = 'settings.experimental.opt.lowLatency';
+  static const _keyOptRecovery =
+      'settings.experimental.opt.recoveryProfile';
+  static const _keyOptMinBitrate = 'settings.experimental.opt.minBitrate';
+  static const _keyOptNack = 'settings.experimental.opt.enableNack';
+  static const _keyOptFec = 'settings.experimental.opt.enableFec';
 
   String _resolution = '1920x1080';
   int _fps = 60;
@@ -64,9 +77,19 @@ class UserSettings extends ChangeNotifier {
   bool _webrtcEnableDscp = false;
   int _webrtcMaxIpv6Networks = 64;
   StreamPriority _streamPriority = StreamPriority.quality;
+  bool _streamPriorityEnabled = false;
+  StreamTransportKind _streamTransport = StreamTransportKind.flutterWebrtc;
+  DecoderBackend _decoderBackend = DecoderBackend.vaapi;
+  RendererBackend _rendererBackend = RendererBackend.cpu;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
   bool _logsEnabled = true;
   bool _hideTitleBar = false;
+  // --- Experimental stream optimizations (all default to the safe profile) --
+  bool _optLowLatencyMode = false;
+  StreamRecoveryProfile _optRecoveryProfile = StreamRecoveryProfile.smooth;
+  int _optMinBitrateKbps = 4000;
+  bool _optEnableNack = true;
+  bool _optEnableFec = true;
 
   UserSettings(this._prefs) {
     _load();
@@ -97,9 +120,18 @@ class UserSettings extends ChangeNotifier {
   bool get webrtcEnableDscp => _webrtcEnableDscp;
   int get webrtcMaxIpv6Networks => _webrtcMaxIpv6Networks;
   StreamPriority get streamPriority => _streamPriority;
+  bool get streamPriorityEnabled => _streamPriorityEnabled;
+  StreamTransportKind get streamTransport => _streamTransport;
+  DecoderBackend get decoderBackend => _decoderBackend;
+  RendererBackend get rendererBackend => _rendererBackend;
   BackgroundStyle get backgroundStyle => _backgroundStyle;
   bool get logsEnabled => _logsEnabled;
   bool get hideTitleBar => _hideTitleBar;
+  bool get optLowLatencyMode => _optLowLatencyMode;
+  StreamRecoveryProfile get optRecoveryProfile => _optRecoveryProfile;
+  int get optMinBitrateKbps => _optMinBitrateKbps;
+  bool get optEnableNack => _optEnableNack;
+  bool get optEnableFec => _optEnableFec;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -284,6 +316,53 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Master switch for the experimental server-adaptation presets. When off,
+  /// the stream always uses the OpenNOW-matching `quality` profile regardless
+  /// of [streamPriority] (the server-adaptation lines stay at their safe
+  /// defaults).
+  set streamPriorityEnabled(bool v) {
+    if (_streamPriorityEnabled == v) return;
+    _streamPriorityEnabled = v;
+    _save(_keyStreamPriorityEnabled, v);
+    notifyListeners();
+  }
+
+  /// Which transport renders + carries the stream. Defaults to the stock
+  /// libwebrtc path; the GStreamer webrtcbin FFI bridge is the experimental
+  /// hardware-decode option.
+  set streamTransport(StreamTransportKind v) {
+    if (_streamTransport == v) return;
+    _streamTransport = v;
+    _save(_keyStreamTransport, v.name);
+    notifyListeners();
+  }
+
+  /// Which decode backend the custom libwebrtc uses for the next session:
+  /// [DecoderBackend.vaapi] (GStreamer VAAPI-first with FFmpeg fallback) or
+  /// [DecoderBackend.ffmpeg] (forced software). Applied just before the peer
+  /// connection is created by setting the `OPENNOW_DECODER` env var that the
+  /// libwebrtc decoder factory reads at decoder instantiation.
+  set decoderBackend(DecoderBackend v) {
+    if (_decoderBackend == v) return;
+    _decoderBackend = v;
+    _save(_keyDecoderBackend, v.name);
+    notifyListeners();
+  }
+
+  /// How the Linux libwebrtc renderer delivers decoded frames to Flutter:
+  /// [RendererBackend.cpu] (stock libyuv ConvertToARGB into a pixel buffer)
+  /// or [RendererBackend.gl] (Y/U/V planes uploaded as GL textures, YUV→RGB
+  /// in a fragment shader, composited by the engine with no CPU readback).
+  /// Applied via the `OPENNOW_RENDERER` env var read by the plugin when the
+  /// video texture is created. Defaults to [RendererBackend.cpu] until the
+  /// GL path is verified.
+  set rendererBackend(RendererBackend v) {
+    if (_rendererBackend == v) return;
+    _rendererBackend = v;
+    _save(_keyRendererBackend, v.name);
+    notifyListeners();
+  }
+
   set backgroundStyle(BackgroundStyle v) {
     if (_backgroundStyle == v) return;
     _backgroundStyle = v;
@@ -303,6 +382,42 @@ class UserSettings extends ChangeNotifier {
     if (_hideTitleBar == v) return;
     _hideTitleBar = v;
     _save(_keyHideTitleBar, v);
+    notifyListeners();
+  }
+
+  set optLowLatencyMode(bool v) {
+    if (_optLowLatencyMode == v) return;
+    _optLowLatencyMode = v;
+    _save(_keyOptLowLatency, v);
+    notifyListeners();
+  }
+
+  set optRecoveryProfile(StreamRecoveryProfile v) {
+    if (_optRecoveryProfile == v) return;
+    _optRecoveryProfile = v;
+    _save(_keyOptRecovery, v.name);
+    notifyListeners();
+  }
+
+  set optMinBitrateKbps(int v) {
+    final clamped = v.clamp(1000, 100000).toInt();
+    if (_optMinBitrateKbps == clamped) return;
+    _optMinBitrateKbps = clamped;
+    _save(_keyOptMinBitrate, clamped);
+    notifyListeners();
+  }
+
+  set optEnableNack(bool v) {
+    if (_optEnableNack == v) return;
+    _optEnableNack = v;
+    _save(_keyOptNack, v);
+    notifyListeners();
+  }
+
+  set optEnableFec(bool v) {
+    if (_optEnableFec == v) return;
+    _optEnableFec = v;
+    _save(_keyOptFec, v);
     notifyListeners();
   }
 
@@ -368,11 +483,31 @@ class UserSettings extends ChangeNotifier {
     _streamPriority = StreamPriority.values.asNameMap()[
             _prefs.getString(_keyStreamPriority)] ??
         _streamPriority;
+    _streamPriorityEnabled =
+        _prefs.getBool(_keyStreamPriorityEnabled) ?? _streamPriorityEnabled;
+    _streamTransport = StreamTransportKind.values.asNameMap()[
+            _prefs.getString(_keyStreamTransport)] ??
+        _streamTransport;
+    _decoderBackend = DecoderBackend.values.asNameMap()[
+            _prefs.getString(_keyDecoderBackend)] ??
+        _decoderBackend;
+    _rendererBackend = RendererBackend.values.asNameMap()[
+            _prefs.getString(_keyRendererBackend)] ??
+        _rendererBackend;
     _backgroundStyle = BackgroundStyle.values.asNameMap()[
             _prefs.getString(_keyBackgroundStyle)] ??
         _backgroundStyle;
     _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
     _hideTitleBar = _prefs.getBool(_keyHideTitleBar) ?? _hideTitleBar;
+    _optLowLatencyMode =
+        _prefs.getBool(_keyOptLowLatency) ?? _optLowLatencyMode;
+    _optRecoveryProfile = StreamRecoveryProfile.values.asNameMap()[
+            _prefs.getString(_keyOptRecovery)] ??
+        _optRecoveryProfile;
+    _optMinBitrateKbps =
+        _prefs.getInt(_keyOptMinBitrate) ?? _optMinBitrateKbps;
+    _optEnableNack = _prefs.getBool(_keyOptNack) ?? _optEnableNack;
+    _optEnableFec = _prefs.getBool(_keyOptFec) ?? _optEnableFec;
     BackgroundGlow.current.value = _backgroundStyle;
   }
 
@@ -424,9 +559,18 @@ class UserSettings extends ChangeNotifier {
     _webrtcEnableDscp = false;
     _webrtcMaxIpv6Networks = 64;
     _streamPriority = StreamPriority.quality;
+    _streamPriorityEnabled = false;
+    _streamTransport = StreamTransportKind.flutterWebrtc;
+    _decoderBackend = DecoderBackend.vaapi;
+    _rendererBackend = RendererBackend.cpu;
     _backgroundStyle = BackgroundStyle.beams;
     _logsEnabled = true;
     _hideTitleBar = false;
+    _optLowLatencyMode = false;
+    _optRecoveryProfile = StreamRecoveryProfile.smooth;
+    _optMinBitrateKbps = 4000;
+    _optEnableNack = true;
+    _optEnableFec = true;
     BackgroundGlow.current.value = _backgroundStyle;
     notifyListeners();
   }
@@ -457,10 +601,43 @@ class UserSettings extends ChangeNotifier {
     _keyWebrtcDscp,
     _keyWebrtcMaxIpv6Networks,
     _keyStreamPriority,
+    _keyStreamPriorityEnabled,
+    _keyStreamTransport,
+    _keyDecoderBackend,
+    _keyRendererBackend,
     _keyBackgroundStyle,
     _keyLogsEnabled,
     _keyHideTitleBar,
+    _keyOptLowLatency,
+    _keyOptRecovery,
+    _keyOptMinBitrate,
+    _keyOptNack,
+    _keyOptFec,
   ];
+}
+
+/// Actual decode backend the custom libwebrtc uses for the next session.
+enum DecoderBackend {
+  /// GStreamer VAAPI hardware decode first, with automatic FFmpeg fallback.
+  /// This is the default custom-build behavior.
+  vaapi,
+
+  /// Force the built-in FFmpeg software decoder (the stock flutter_webrtc
+  /// path) irrespective of VAAPI availability.
+  ffmpeg,
+}
+
+/// How decoded frames are pushed to the Flutter Linux texture/engine.
+/// A/B switch while the GPU shader renderer (FlTextureGL) is landed.
+enum RendererBackend {
+  /// Stock path: libyuv ConvertToARGB on the CPU, upload the ARGB pixel
+  /// buffer to a Flutter texture. Works everywhere.
+  cpu,
+
+  /// GPU path: upload Y/U/V planes as GL textures and run the YUV→RGB chroma
+  /// upsampling in a fragment shader (OpenNOW-style). The engine composites
+  /// the resulting texture directly — no CPU conversion or readback.
+  gl,
 }
 
 /// WebRTC client-side ICE transport policy (RTCConfiguration).
@@ -485,4 +662,19 @@ enum StreamPriority {
 
   /// Prefer holding frame rate; allow resolution to scale down first.
   fps,
+}
+
+/// How aggressively the client asks the server to recover from packet loss.
+/// A direct tradeoff between keeping input latency low and riding out loss.
+enum StreamRecoveryProfile {
+  /// Deep NACK + FEC retransmission: most resilient to loss bursts, but
+  /// retransmits add jitter-buffer latency (the "input feels delayed" case).
+  smooth,
+
+  /// Middle ground between latency and resilience.
+  balanced,
+
+  /// Shallow NACK window + prefer fresh keyframes over deep retransmit:
+  /// lowest latency, but more visible artifacts under sustained loss.
+  latency,
 }
