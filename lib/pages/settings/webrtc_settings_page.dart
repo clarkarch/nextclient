@@ -54,6 +54,8 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final s = services.settings;
+    final usingLibwebrtc =
+        s.streamTransport == StreamTransportKind.flutterWebrtc;
     return NeonPageScaffold(
       title: 'Client',
       showBack: true,
@@ -63,11 +65,14 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _engineCard(services.settings),
-            const SizedBox(height: 14),
-            NeonCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                children: [
+            if (usingLibwebrtc) ...[
+              const SizedBox(height: 14),
+              NeonCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const NeonSettingSection(label: 'WebRTC settings'),
                   NeonSettingTile(
                     icon: Icons.route,
                     title: 'ICE transport policy',
@@ -247,6 +252,7 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                 ],
               ),
             ),
+            ],
             const SizedBox(height: 14),
             _inputCard(s),
           ],
@@ -261,6 +267,7 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const NeonSettingSection(label: 'Input'),
           NeonSettingTile(
@@ -348,129 +355,137 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
         _ => 'Fixed $ms ms batch — fewer packets, up to +$ms ms',
       };
 
-  /// Client-side engine selection (which WebRTC engine / decode / render path
+/// Client-side engine selection (which WebRTC engine / decode / render path
   /// carries the stream). All local, tagged EXPERIMENTAL.
   Widget _engineCard(UserSettings s) {
+    final usingLibwebrtc =
+        s.streamTransport == StreamTransportKind.flutterWebrtc;
     return NeonCard(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.zero,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'ENGINE',
-                  style: TextStyle(
-                    color: Neon.accent,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 2,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 20, 14, 8),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'WEBRTC',
+                    style: TextStyle(
+                      color: Neon.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 2,
+                    ),
                   ),
                 ),
+                const NeonExperimentalTag(),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: const Text(
+              'Which WebRTC engine carries the stream. LIBWEBRTC is the stock '
+              'plugin (custom build drives decoder/renderer below); the other '
+              'two use native GStreamer bridges with hardware decode. Applies '
+              'to the next session.',
+              style: TextStyle(color: Neon.inkMuted, fontSize: 12),
+            ),
+          ),
+          const NeonSettingSection(label: 'Transport'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final t in StreamTransportKind.values)
+                  NeonOptionChip(
+                    label: switch (t) {
+                      StreamTransportKind.flutterWebrtc =>
+                        'LIBWEBRTC (default)',
+                      StreamTransportKind.webrtcbinFfi => 'WEBRTCBIN (FFI)',
+                      StreamTransportKind.nvstGstreamer => 'NVST (GStreamer)',
+                    },
+                    selected: t == s.streamTransport,
+                    onTap: () => s.streamTransport = t,
+                  ),
+              ],
+            ),
+          ),
+          if (usingLibwebrtc) ...[
+            const NeonSettingSection(label: 'Decoder'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: const Text(
+                'Which decode backend the custom libwebrtc uses. VAAPI '
+                'hardware-decodes H.264 first with FFmpeg fallback; FFmpeg '
+                'forces software decode.',
+                style: TextStyle(color: Neon.inkMuted, fontSize: 12),
               ),
-              const NeonExperimentalTag(),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Which WebRTC engine carries the stream. LIBWEBRTC is the stock '
-            'plugin (custom build drives decoder/renderer below); the other two '
-            'use native GStreamer bridges with hardware decode. Applies to the '
-            'next session.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'TRANSPORT',
-            style: TextStyle(
-              color: Neon.inkMuted,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.6,
             ),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final t in StreamTransportKind.values)
-                NeonOptionChip(
-                  label: switch (t) {
-                    StreamTransportKind.flutterWebrtc => 'LIBWEBRTC (default)',
-                    StreamTransportKind.webrtcbinFfi => 'WEBRTCBIN (FFI)',
-                    StreamTransportKind.nvstGstreamer => 'NVST (GStreamer)',
-                  },
-                  selected: t == s.streamTransport,
-                  onTap: () => s.streamTransport = t,
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'DECODER',
-            style: TextStyle(
-              color: Neon.inkMuted,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.6,
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final b in DecoderBackend.values)
+                    NeonOptionChip(
+                      label: switch (b) {
+                        DecoderBackend.vaapi => 'VAAPI (GStreamer)',
+                        DecoderBackend.ffmpeg => 'FFMPEG (software)',
+                      },
+                      selected: b == s.decoderBackend,
+                      onTap: () => s.decoderBackend = b,
+                    ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Which decode backend the custom libwebrtc uses (LIBWEBRTC transport '
-            'only). VAAPI hardware-decodes H.264 first with FFmpeg fallback.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final b in DecoderBackend.values)
-                NeonOptionChip(
-                  label: switch (b) {
-                    DecoderBackend.vaapi => 'VAAPI (GStreamer)',
-                    DecoderBackend.ffmpeg => 'FFMPEG (software)',
-                  },
-                  selected: b == s.decoderBackend,
-                  onTap: () => s.decoderBackend = b,
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'RENDERER',
-            style: TextStyle(
-              color: Neon.inkMuted,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.6,
+            const NeonSettingSection(label: 'Renderer'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: const Text(
+                'How the Linux libwebrtc path hands decoded frames to Flutter. '
+                'GL uses a shader (no CPU readback); CPU is the stock ARGB '
+                'convert.',
+                style: TextStyle(color: Neon.inkMuted, fontSize: 12),
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'How the Linux libwebrtc path hands decoded frames to Flutter. GL '
-            'uses a shader (no CPU readback); CPU is the stock ARGB convert.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final r in RendererBackend.values)
-                NeonOptionChip(
-                  label: switch (r) {
-                    RendererBackend.cpu => 'CPU (ARGB convert)',
-                    RendererBackend.gl => 'GL (shader YUV→RGB)',
-                  },
-                  selected: r == s.rendererBackend,
-                  onTap: () => s.rendererBackend = r,
-                ),
-            ],
-          ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final r in RendererBackend.values)
+                    NeonOptionChip(
+                      label: switch (r) {
+                        RendererBackend.cpu => 'CPU (ARGB convert)',
+                        RendererBackend.gl => 'GL (shader YUV→RGB)',
+                      },
+                      selected: r == s.rendererBackend,
+                      onTap: () => s.rendererBackend = r,
+                    ),
+                ],
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
+              child: const Text(
+                'Decoder and renderer options only apply to the LIBWEBRTC '
+                'transport — VAAPI/FFmpeg and CPU/GL are libwebrtc decode/render '
+                'paths.',
+                style: TextStyle(color: Neon.inkMuted, fontSize: 12),
+              ),
+            ),
+          ],
         ],
       ),
     );
