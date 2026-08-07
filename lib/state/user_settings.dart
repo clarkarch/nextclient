@@ -58,6 +58,8 @@ class UserSettings extends ChangeNotifier {
   static const _keyInputPrecision = 'settings.input.mousePrecision';
   static const _keyInputSamplingMs = 'settings.input.mouseSamplingMs';
   static const _keyInputCursorOverlay = 'settings.input.cursorOverlay';
+  // --- Debug diagnostics (advanced) --------------------------------------
+  static const _keyDebugCursorOverlayBox = 'settings.debug.cursorOverlayBox';
 
   /// One-shot migration flag for the sampling default flip (adaptive ->
   /// immediate): only the pre-existing stored 0 from the old default is
@@ -110,6 +112,7 @@ class UserSettings extends ChangeNotifier {
   bool _inputMousePrecision = true;
   int _inputMouseSamplingMs = -1; // -1 = immediate (proven path; adaptive = 0)
   bool _inputCursorOverlay = true;
+  bool _debugCursorOverlayBox = false;
 
   UserSettings(this._prefs) {
     _load();
@@ -182,6 +185,11 @@ class UserSettings extends ChangeNotifier {
   /// `cursor_channel` (predefined styles map to OS cursors, custom bitmaps
   /// are drawn over the video). Off = server-side cursor rendering only.
   bool get inputCursorOverlay => _inputCursorOverlay;
+
+  /// Debug bounding box behind the client-rendered cursor overlay, so its
+  /// placement/size can be inspected while the actual bitmap decode is being
+  /// tuned. Off by default (pure diagnostics).
+  bool get debugCursorOverlayBox => _debugCursorOverlayBox;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -515,6 +523,13 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set debugCursorOverlayBox(bool v) {
+    if (_debugCursorOverlayBox == v) return;
+    _debugCursorOverlayBox = v;
+    _save(_keyDebugCursorOverlayBox, v);
+    notifyListeners();
+  }
+
   StreamSettings buildStreamSettings() {
     return StreamSettings(
       resolution: _resolution,
@@ -626,6 +641,8 @@ class UserSettings extends ChangeNotifier {
         _prefs.getInt(_keyInputSamplingMs) ?? _inputMouseSamplingMs;
     _inputCursorOverlay =
         _prefs.getBool(_keyInputCursorOverlay) ?? _inputCursorOverlay;
+    _debugCursorOverlayBox =
+        _prefs.getBool(_keyDebugCursorOverlayBox) ?? _debugCursorOverlayBox;
     BackgroundGlow.current.value = _backgroundStyle;
   }
 
@@ -695,6 +712,7 @@ class UserSettings extends ChangeNotifier {
     _inputMousePrecision = true;
     _inputMouseSamplingMs = -1;
     _inputCursorOverlay = true;
+    _debugCursorOverlayBox = false;
     BackgroundGlow.current.value = _backgroundStyle;
     notifyListeners();
   }
@@ -743,6 +761,7 @@ class UserSettings extends ChangeNotifier {
     _keyInputPrecision,
     _keyInputSamplingMs,
     _keyInputCursorOverlay,
+    _keyDebugCursorOverlayBox,
   ];
 }
 

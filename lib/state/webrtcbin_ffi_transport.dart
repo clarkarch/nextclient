@@ -658,6 +658,17 @@ class WebRtcBinFfiTransport implements StreamTransport {
   }
 
   @override
+  void sendMouseAbsolute({
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+  }) {
+    // No cursor overlay on the webrtcbin-FFI bridge; cursor stays
+    // server-rendered, so relative moves only.
+  }
+
+  @override
   void sendMouseButton({required bool down, required int button}) {
     if (!_inputReady) return;
     final ts = _inputEncoder.clock.captureTimestampUs();

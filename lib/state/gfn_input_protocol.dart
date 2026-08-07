@@ -166,6 +166,32 @@ class GfnInputEncoder {
     return _wrapMouseMove(data.buffer.asUint8List());
   }
 
+  /// Port of OpenNOW's `encodeMouseAbsolute` — absolute cursor position
+  /// (input type 5, 26 B). Coordinates live inside a client-defined extent
+  /// ([width]x[height]) that the server scales onto the remote desktop, so the
+  /// server cursor is pinned exactly where the client-rendered overlay cursor
+  /// is (kills the overlay/click offset with no aspect/DPI drift).
+  /// [type u32 LE][x u16 BE][y u16 BE][reserved u16][width u16 BE][height u16
+  /// BE][reserved u32][timestamp u64 BE]
+  Uint8List encodeMouseAbsolute({
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+    required int timestampUs,
+  }) {
+    final data = ByteData(26);
+    data.setUint32(0, inputMouseAbs, Endian.little);
+    data.setUint16(4, x & 0xffff, Endian.big);
+    data.setUint16(6, y & 0xffff, Endian.big);
+    data.setUint16(8, 0, Endian.big);
+    data.setUint16(10, width & 0xffff, Endian.big);
+    data.setUint16(12, height & 0xffff, Endian.big);
+    data.setUint32(14, 0, Endian.big);
+    data.setUint64(18, timestampUs, Endian.big);
+    return _wrapMouseMove(data.buffer.asUint8List());
+  }
+
   Uint8List encodeMouseButtonDown({
     required int button,
     required int timestampUs,

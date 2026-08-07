@@ -12,6 +12,7 @@ import '../../widgets/neon_switch.dart';
 import '../../widgets/section_header.dart';
 import '../log_viewer_page.dart';
 import 'account_page.dart';
+import 'debug_settings_page.dart';
 import 'experimental_settings_page.dart';
 import 'language_page.dart';
 import 'performance_settings_page.dart';
@@ -251,6 +252,17 @@ class SettingsPage extends StatelessWidget {
             onTap: () => _open(
               context,
               ExperimentalSettingsPage(services: services),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+          ),
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.bug_report_outlined,
+            title: 'Debug',
+            subtitle: 'Cursor overlay diagnostics',
+            onTap: () => _open(
+              context,
+              DebugSettingsPage(services: services),
             ),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),

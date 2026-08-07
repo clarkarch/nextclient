@@ -81,6 +81,17 @@ abstract class StreamTransport {
 
   void sendMouseMove({required int dx, required int dy});
 
+  /// Pins the server cursor to an absolute position inside the [width]x
+  /// [height] extent (input type 5). Used by the cursor overlay to keep the
+  /// in-game cursor exactly under the client-rendered one so clicks land where
+  /// the user is pointing. No-op on transports without a cursor overlay.
+  void sendMouseAbsolute({
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+  });
+
   void sendMouseButton({required bool down, required int button});
 
   void sendMouseWheel({required int delta});

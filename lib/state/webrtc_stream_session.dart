@@ -93,6 +93,11 @@ class WebRtcStreamSession implements StreamTransport {
   RTCDataChannel? _cursorChannel;
   _RiInputCapabilities _inputCaps = const _RiInputCapabilities();
 
+  /// True once the `cursor_channel` reports the open state. Distinguishes a
+  /// channel that never opened (negotiation picked it up late / was missed)
+  /// from one that opened but silently received nothing.
+  bool _cursorChannelOpen = false;
+
   /// Server cursor-overlay updates parsed from the `cursor_channel` (set only
   /// when [UserSettings.inputCursorOverlay] is on). The stream surface
   /// listens and renders the game's actual cursor.
@@ -480,23 +485,32 @@ class WebRtcStreamSession implements StreamTransport {
 
       // In-game cursor overlay (OpenNOW's cursor_channel): the server streams
       // the game's actual cursor (predefined styles + custom bitmaps) so the
-      // client can render it instead of a plain hidden/arrow OS cursor.
+      // client can render it instead of a plain native cursor/arrow.
       if (settings.inputCursorOverlay) {
+        _log('Creating cursor_channel data channel (overlay enabled)');
         final cursor = await pc.createDataChannel(
           'cursor_channel',
           RTCDataChannelInit()..ordered = true,
         );
         cursor.onDataChannelState = (state) {
-          if (state == RTCDataChannelState.RTCDataChannelOpen) {
-            _log('Cursor channel open');
-          } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
-            _log('Cursor channel closed');
-          }
+          _log('Cursor channel state: ${state.name}');
+          _cursorChannelOpen =
+              state == RTCDataChannelState.RTCDataChannelOpen;
         };
         cursor.onMessage = (event) {
-          _handleCursorMessage(_messageBytes(event));
+          final bytes = _messageBytes(event);
+          log.log(
+            LogLevel.debug,
+            'webrtc',
+            'Cursor channel message received: '
+                '${event.isBinary ? 'binary' : 'text'} ${bytes.length} bytes',
+          );
+          _handleCursorMessage(bytes);
         };
         _cursorChannel = cursor;
+      } else {
+        _log('Cursor overlay disabled (inputCursorOverlay=false); '
+            'skipping cursor_channel');
       }
     } catch (e) {
       // Data channels are advisory for media; don't fail the handshake over
@@ -528,14 +542,39 @@ class WebRtcStreamSession implements StreamTransport {
   void _handleCursorMessage(Uint8List bytes) {
     if (_disposed) return; // a late message must not touch the disposed notifier
     _cursorMessagesReceived++;
+    if (bytes.isEmpty) {
+      _cursorMessagesIgnored++;
+      log.log(LogLevel.debug, 'webrtc', 'Cursor message: empty payload');
+      return;
+    }
     final update = parseGfnCursorChannelMessage(bytes);
     if (update == null) {
       _cursorMessagesIgnored++;
-      log.log(LogLevel.debug, 'webrtc', 'Cursor message ignored (${bytes.length} bytes)');
+      log.log(
+        LogLevel.debug,
+        'webrtc',
+        'Cursor message ignored: ${bytes.length} bytes, '
+            'type=${bytes[0]} id=${bytes.length > 1 ? bytes[1] : '?'} '
+            '(parse failed)',
+      );
       return;
     }
     _cursorMessagesParsed++;
     cursorOverlay.value = update;
+    // Every parsed update at debug level with a compact summary so a silent
+    // (never-parsed) channel is visually distinct from one that parses but
+    // renders nothing.
+    log.log(
+      LogLevel.debug,
+      'webrtc',
+      'Cursor update: id=${update.cursorId} '
+          'custom=${update.custom} '
+          'mime=${update.mimeType ?? '-'} '
+          'imageBytes=${update.imageBytes?.length ?? 0} '
+          'hotspot=(${update.hotspotX ?? '-'},${update.hotspotY ?? '-'}) '
+          'scale=${update.scale ?? 1} '
+          'pos=${update.positionX ?? '-'},${update.positionY ?? '-'}',
+    );
   }
 
   /// Mouse movement packets actually handed to the transport (only counted
@@ -784,6 +823,33 @@ class WebRtcStreamSession implements StreamTransport {
       timestampUs: _inputEncoder.clock.captureTimestampUs(),
     );
     if (_canUsePartiallyReliableInput(inputMouseRel)) {
+      _sendPartiallyReliable(payload);
+    } else {
+      _sendReliable(payload);
+    }
+  }
+
+  /// Pins the server cursor to an absolute position inside the [width]x
+  /// [height] extent (input type 5) so the server cursor tracks the
+  /// client-rendered overlay exactly. Without this the game cursor can drift
+  /// from the overlay, making clicks land off-target.
+  @override
+  void sendMouseAbsolute({
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+  }) {
+    if (!_inputReady) return;
+    _mousePacketsSent++;
+    final payload = _inputEncoder.encodeMouseAbsolute(
+      x: x,
+      y: y,
+      width: width,
+      height: height,
+      timestampUs: _inputEncoder.clock.captureTimestampUs(),
+    );
+    if (_canUsePartiallyReliableInput(inputMouseAbs)) {
       _sendPartiallyReliable(payload);
     } else {
       _sendReliable(payload);
@@ -1522,7 +1588,8 @@ class WebRtcStreamSession implements StreamTransport {
       'webrtc',
       'Input teardown: mousePackets=$_mousePacketsSent '
           'cursorMessages=$_cursorMessagesReceived '
-          '(parsed=$_cursorMessagesParsed ignored=$_cursorMessagesIgnored)',
+          '(parsed=$_cursorMessagesParsed ignored=$_cursorMessagesIgnored) '
+          'cursorChannelOpen=$_cursorChannelOpen',
     );
 
     final pc = _pc;

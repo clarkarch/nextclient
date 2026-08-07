@@ -1134,6 +1134,16 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   /// older cursor can't clobber the current one.
   int _predefinedImageGen = 0;
 
+  /// Decoded [ui.Image] of the current *custom* cursor (PNG from the
+  /// cursor_channel), rendered via [RawImage] exactly like the predefined
+  /// path. `Image.memory` proved unreliable for these GFN cursor PNGs (silent
+  /// no-op paint), so custom bitmaps take the same decoded-image route.
+  ui.Image? _cursorCustomImage;
+
+  /// Generation guard for the async [ui.instantiateImageCodec] custom decode,
+  /// so a slow decode of a stale cursor can't clobber the current one.
+  int _customImageGen = 0;
+
   /// Pixel dimensions of the *currently rendered* cursor bitmap (custom PNG
   /// via [pngPixelSize], or the decoded predefined ICO), so the overlay can
   /// render at native resolution on any display scale.
@@ -1151,6 +1161,13 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   /// window resizes don't break placement.
   double _cursorNormX = 0;
   double _cursorNormY = 0;
+
+  /// Fired whenever the tracked cursor position changes while in-game, so the
+  /// overlay repaints on the same cadence as the mouse moves (like OpenNOW's
+  /// transform-updated canvas). Scoped to the cursor subtree via
+  /// [ValueListenableBuilder] so repainting a cursor frame never rebuilt the
+  /// whole stream surface.
+  final ValueNotifier<Offset> _cursorPos = ValueNotifier<Offset>(Offset.zero);
 
   @override
   void initState() {
@@ -1180,7 +1197,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     if (update == null) return;
     final wasVisible = _cursorVisible;
     if (update.custom) {
-      // Custom bitmap: cache + render via Image.memory (PNG payload). Any
+      // Custom bitmap: cache + render via a decoded ui.Image (RawImage). Any
       // stale predefined image is dropped (disposed, not just unreferenced —
       // ui.Image is a native resource).
       if (_cursorPredefinedImage != null) {
@@ -1188,8 +1205,16 @@ class _ReadySurfaceState extends State<_ReadySurface> {
         _cursorPredefinedImage!.dispose();
         _cursorPredefinedImage = null;
       }
+      // A custom cursor is always renderable once the server references one.
+      // (OpenNOW drives visibility from `style !== "none"`; custom cursors
+      // are never "none".)
+      _cursorVisible = true;
       if (update.imageBytes != null) {
-        // Cache the bitmap under its id so later id-only updates still render.
+        // Full bitmap update: cache the complete shape under its id so later
+        // id-only updates reuse it, and adopt THIS message's shape. Id-only
+        // re-streams send stale 0/0.0 hotspot/scale placeholders that must NOT
+        // overwrite the cached values, so they are only lowered here alongside
+        // the real bitmap.
         _cursorImageCache[update.cursorId] = (
           bytes: update.imageBytes!,
           hotspotX: update.hotspotX ?? 0,
@@ -1197,16 +1222,20 @@ class _ReadySurfaceState extends State<_ReadySurface> {
           scale: update.scale ?? 1,
         );
         _cursorImageBytes = update.imageBytes;
+        _cursorHotspotX = update.hotspotX ?? 0;
+        _cursorHotspotY = update.hotspotY ?? 0;
+        _cursorScale = update.scale ?? 1;
         final size = pngPixelSize(update.imageBytes!);
         if (size != null) {
           _cursorBitmapW = size.$1;
           _cursorBitmapH = size.$2;
         }
+        _decodeCustomImage(update.imageBytes!);
       } else {
-        // No image in this update: reuse the cached shape for this id (the
-        // server streams the image once, then references it by id). Without
-        // the cached hotspot/scale the cursor would jump to the top-left
-        // corner of the bitmap.
+        // Id-only re-stream: reuse the cached shape exactly (image + hotspot
+        // + scale). Without this the cursor would jump to the top-left corner
+        // of the bitmap; trusting the message's 0/0.0 hotspot+scale would make
+        // it draw at zero size / the wrong offset.
         final cached = _cursorImageCache[update.cursorId];
         if (cached == null) return; // nothing renderable yet
         _cursorImageBytes = cached.bytes;
@@ -1214,17 +1243,17 @@ class _ReadySurfaceState extends State<_ReadySurface> {
         _cursorHotspotY = cached.hotspotY;
         _cursorScale = cached.scale;
       }
-      // Only overwrite hotspot/scale when the update actually carries them;
-      // an id-only update must keep the cached shape's values.
-      if (update.hotspotX != null) _cursorHotspotX = update.hotspotX!;
-      if (update.hotspotY != null) _cursorHotspotY = update.hotspotY!;
-      if (update.scale != null) _cursorScale = update.scale!;
     } else {
       // Predefined style: render the built-in cursor bitmap client-side
       // (like OpenNOW) instead of swapping the OS cursor. The OS cursor stays
       // hidden in-game (_videoCursor) — showing it freezes the mouse on the
       // soft-lock path. id 0 (style 'none') renders as a hidden cursor.
       _cursorImageBytes = null;
+      if (_cursorCustomImage != null) {
+        _customImageGen++; // invalidate any in-flight custom decode
+        _cursorCustomImage!.dispose();
+        _cursorCustomImage = null;
+      }
       final predefined = predefinedCursorFor(update.cursorId);
       if (predefined.style == 'none') {
         _cursorVisible = false;
@@ -1257,6 +1286,19 @@ class _ReadySurfaceState extends State<_ReadySurface> {
       _cursorPositionKnown = true;
     }
     setState(() {});
+    // A freshly-shown cursor: immediately pin the server cursor to the overlay
+    // position so the game cursor and the client overlay never start apart.
+    if (_cursorVisible &&
+        _cursorPositionKnown &&
+        !_chromeVisible &&
+        widget.settings.inputCursorOverlay) {
+      widget.transport?.sendMouseAbsolute(
+        x: _cursorNormX.round(),
+        y: _cursorNormY.round(),
+        width: 65535,
+        height: 65535,
+      );
+    }
   }
 
   /// Converts the decoded ICO RGBA buffer into a [ui.Image] for [RawImage].
@@ -1283,6 +1325,36 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     );
   }
 
+  /// Decodes a custom cursor PNG into a [ui.Image] for [RawImage], the same
+  /// robust path the predefined cursors take. `Image.memory` proved to paint
+  /// nothing for these GFN cursor bitmaps, so the custom cursors use a decoded
+  /// [ui.Image] too. Async and guarded by [_customImageGen] so a slow decode
+  /// of a stale cursor can't clobber the current one.
+  void _decodeCustomImage(Uint8List bytes) {
+    final gen = ++_customImageGen;
+    ui
+        .instantiateImageCodec(
+          bytes,
+          targetWidth: _cursorBitmapW,
+          targetHeight: _cursorBitmapH,
+        )
+        .then((codec) => codec.getNextFrame())
+        .then<void>((frame) {
+          if (!mounted || gen != _customImageGen) {
+            frame.image.dispose();
+            return;
+          }
+          setState(() {
+            _cursorCustomImage?.dispose();
+            _cursorCustomImage = frame.image;
+          });
+        })
+        .catchError((Object _) {
+          // Unreadable bitmap: keep the previous cursor; the debug overlay
+          // box (when enabled) still shows the tracked position.
+        });
+  }
+
   /// Moves the tracked cursor by the *adjusted* deltas (sensitivity + accel
   /// already applied) — OpenNOW's `moveBy`. Runs under both soft lock and a
   /// native grab: under a grab the OS cursor is captured/hidden so the game
@@ -1303,6 +1375,12 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     _cursorNormX = (_cursorNormX + dx / size.width * 65535).clamp(0.0, 65535.0);
     _cursorNormY =
         (_cursorNormY + dy / size.height * 65535).clamp(0.0, 65535.0);
+    // Repaint only the cursor overlay on this delta (not the whole surface),
+    // mirroring OpenNOW's canvas transform update so the cursor tracks the
+    // mouse input smoothly instead of waiting for the next server position.
+    if (_cursorVisible && _cursorPositionKnown && !_chromeVisible) {
+      _cursorPos.value = Offset(_cursorNormX, _cursorNormY);
+    }
   }
 
   /// OS cursor shown over the video surface. In-game the OS cursor is ALWAYS
@@ -1504,6 +1582,10 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     _predefinedImageGen++; // invalidate any in-flight decode callback
     _cursorPredefinedImage?.dispose();
     _cursorPredefinedImage = null;
+    _customImageGen++; // invalidate any in-flight custom decode
+    _cursorCustomImage?.dispose();
+    _cursorCustomImage = null;
+    _cursorPos.dispose();
     _keyboardController.dispose();
     _keyboardFocus.dispose();
     _leaveOsFullscreen();
@@ -1563,6 +1645,29 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   /// each axis goes out and the fraction stays in [_mouseResidualX/Y]; with
   /// precision off, each flush rounds to whole pixels.
   void _flushMouse() {
+    // When the game cursor is being drawn client-side (overlay visible), pin
+    // the server cursor to the SAME absolute position (input type 5) instead
+    // of sending relative deltas. Relative deltas for a visible cursor drift
+    // from the overlay across aspect/DPR, so clicks land off-target.
+    if (widget.settings.inputCursorOverlay &&
+        _cursorVisible &&
+        _cursorPositionKnown &&
+        !_chromeVisible) {
+      widget.transport?.sendMouseAbsolute(
+        x: _cursorNormX.round(),
+        y: _cursorNormY.round(),
+        width: 65535,
+        height: 65535,
+      );
+      // The accumulated deltas already drove _cursorNorm; don't double-send
+      // them as relative moves on top of the absolute pin.
+      _pendingMouseDx = 0;
+      _pendingMouseDy = 0;
+      _mouseResidualX = 0;
+      _mouseResidualY = 0;
+      return;
+    }
+
     final precision = widget.settings.inputMousePrecision;
     var dx = _pendingMouseDx;
     var dy = _pendingMouseDy;
@@ -1961,15 +2066,19 @@ class _ReadySurfaceState extends State<_ReadySurface> {
             // what the user sees, rendered under both soft lock and native
             // grabs (under a grab the OS cursor is captured, so without this
             // overlay the game cursor would be invisible).
-            if (widget.settings.inputCursorOverlay &&
+if (widget.settings.inputCursorOverlay &&
                 !_chromeVisible &&
                 _cursorVisible &&
                 _cursorPositionKnown &&
                 (_cursorImageBytes != null || _cursorPredefinedImage != null))
               Positioned.fill(
                 child: IgnorePointer(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
+                  // Rebuild on tracked-position changes so the cursor follows
+                  // the mouse per-delta, without rebuilding the whole surface.
+                  child: ValueListenableBuilder<Offset>(
+                    valueListenable: _cursorPos,
+                    builder: (context, _, _) => LayoutBuilder(
+                      builder: (context, constraints) {
                       final w = constraints.maxWidth;
                       final h = constraints.maxHeight;
                       if (w <= 0 || h <= 0) return const SizedBox.shrink();
@@ -1989,6 +2098,44 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                           .clamp(-imgH, h);
                       // Positioned must be a direct Stack child, so the
                       // LayoutBuilder returns its own Stack for the image.
+                      // Custom cursors are drawn with a decoded ui.Image via
+                      // RawImage (the same robust path as predefined); the raw
+                      // Image.memory fallback only covers a still-decoding
+                      // frame. The debug box wraps the bitmap so its placement
+                      // can be inspected independently of the pixel content.
+                      final Widget customChild;
+                      if (_cursorCustomImage != null) {
+                        customChild = RawImage(
+                          image: _cursorCustomImage!,
+                          width: imgW,
+                          height: imgH,
+                          fit: BoxFit.fill,
+                          filterQuality: FilterQuality.none,
+                        );
+                      } else {
+                        customChild = _cursorImageBytes != null
+                            ? Image.memory(
+                                _cursorImageBytes!,
+                                width: imgW,
+                                height: imgH,
+                                fit: BoxFit.fill,
+                                filterQuality: FilterQuality.none,
+                                gaplessPlayback: true,
+                                errorBuilder: (_, _, _) =>
+                                    const SizedBox.shrink(),
+                              )
+                            : const SizedBox.shrink();
+                      }
+                      final cursorChild =
+                          widget.settings.debugCursorOverlayBox
+                              ? Container(
+                                  width: imgW,
+                                  height: imgH,
+                                  color: const Color(0x60FF1493),
+                                  alignment: Alignment.center,
+                                  child: customChild,
+                                )
+                              : customChild;
                       return Stack(
                         children: [
                           Positioned(
@@ -2004,16 +2151,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                                     fit: BoxFit.fill,
                                     filterQuality: FilterQuality.none,
                                   )
-                                : Image.memory(
-                                    _cursorImageBytes!,
-                                    width: imgW,
-                                    height: imgH,
-                                    fit: BoxFit.fill,
-                                    filterQuality: FilterQuality.none,
-                                    gaplessPlayback: true,
-                                    errorBuilder: (_, _, _) =>
-                                        const SizedBox.shrink(),
-                                  ),
+                                : cursorChild,
                           ),
                         ],
                       );
@@ -2021,6 +2159,7 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                   ),
                 ),
               ),
+            ),
 
             // Top chrome: timer + title/status + exit.
             if (_chromeVisible)

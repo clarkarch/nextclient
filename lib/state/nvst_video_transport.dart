@@ -4,7 +4,6 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
-import 'package:flutter/services.dart' show KeyEvent;
 import 'package:flutter/widgets.dart';
 import 'package:gfn_core/gfn_core.dart';
 
@@ -247,6 +246,16 @@ class NvstVideoTransport implements StreamTransport {
   @override
   void sendMouseMove({required int dx, required int dy}) =>
       _input.sendMouseMove(dx: dx, dy: dy);
+
+  @override
+  void sendMouseAbsolute({
+    required int x,
+    required int y,
+    required int width,
+    required int height,
+  }) {
+    // No cursor overlay on the NVST path; cursor is server-rendered.
+  }
 
   @override
   void sendMouseButton({required bool down, required int button}) =>
