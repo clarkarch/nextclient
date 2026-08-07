@@ -102,22 +102,34 @@ typedef _PutenvDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
 
 /// Applies the selected [backend] to the current process's `OPENNOW_DECODER`
 /// environment variable, which the custom libwebrtc decoder factory reads when
-/// it instantiates the next decoder. Linux-only (the VAAPI patch); the stock
-/// Windows libwebrtc has no such factory hook.
+/// it instantiates the next decoder: GStreamer VAAPI on Linux (vaapi_patch),
+/// GStreamer D3D11VA on Windows (d3d11_patch).
 ///
 /// Must be called *before* the peer connection / incoming video track is set
 /// up for a session so the factory picks the requested path.
 void applyDecoderBackend(DecoderBackend backend) {
-  if (!Platform.isLinux) return;
-  switch (backend) {
-    case DecoderBackend.vaapi:
-      // Anything other than "software" keeps the VAAPI-first path, which still
-      // auto-falls back to FFmpeg when VAAPI is unavailable.
-      Libc.setValue('OPENNOW_DECODER', 'vaapi');
-    case DecoderBackend.ffmpeg:
-      // The factory special-cases exactly "software" to force the FFmpeg
-      // software decoder.
-      Libc.setValue('OPENNOW_DECODER', 'software');
+  if (Platform.isLinux) {
+    switch (backend) {
+      case DecoderBackend.vaapi:
+        // Anything other than "software" keeps the VAAPI-first path, which still
+        // auto-falls back to FFmpeg when VAAPI is unavailable.
+        Libc.setValue('OPENNOW_DECODER', 'vaapi');
+      case DecoderBackend.ffmpeg:
+        // The factory special-cases exactly "software" to force the FFmpeg
+        // software decoder.
+        Libc.setValue('OPENNOW_DECODER', 'software');
+    }
+  } else if (Platform.isWindows) {
+    // The custom Windows libwebrtc decoder factory (d3d11_patch) reads
+    // OPENNOW_DECODER the same way the VAAPI one does: exactly "software"
+    // forces the builtin FFmpeg fallback; anything else (vaapi/d3d11) prefers
+    // the D3D11VA hardware decoder (GStreamer d3d11h264dec) with automatic
+    // FFmpeg fallback. Set through the CRT (_putenv_s) so std::getenv in the
+    // decoder factory sees it.
+    WindowsEnv.setValue(
+      'OPENNOW_DECODER',
+      backend == DecoderBackend.ffmpeg ? 'software' : 'd3d11',
+    );
   }
 }
 

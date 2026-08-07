@@ -418,15 +418,19 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
               ],
             ),
           ),
-          if (usingLibwebrtc && isLinux) ...[
+          if (usingLibwebrtc && (isLinux || isWindows)) ...[
             const NeonSettingSection(label: 'Decoder'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: const Text(
-                'Which decode backend the custom libwebrtc uses. VAAPI '
-                'hardware-decodes H.264 first with FFmpeg fallback; FFmpeg '
-                'forces software decode.',
-                style: TextStyle(color: Neon.inkMuted, fontSize: 12),
+              child: Text(
+                isWindows
+                    ? 'Which decode backend the custom libwebrtc uses. D3D11 '
+                          'hardware-decodes H.264 first (GStreamer d3d11h264dec) '
+                          'with FFmpeg fallback; FFmpeg forces software decode.'
+                    : 'Which decode backend the custom libwebrtc uses. VAAPI '
+                          'hardware-decodes H.264 first with FFmpeg fallback; '
+                          'FFmpeg forces software decode.',
+                style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
               ),
             ),
             const SizedBox(height: 8),
@@ -439,7 +443,9 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                   for (final b in DecoderBackend.values)
                     NeonOptionChip(
                       label: switch (b) {
-                        DecoderBackend.vaapi => 'VAAPI (GStreamer)',
+                        DecoderBackend.vaapi => isWindows
+                            ? 'D3D11 (GStreamer)'
+                            : 'VAAPI (GStreamer)',
                         DecoderBackend.ffmpeg => 'FFMPEG (software)',
                       },
                       selected: b == s.decoderBackend,

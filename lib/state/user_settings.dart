@@ -405,10 +405,11 @@ class UserSettings extends ChangeNotifier {
   }
 
   /// Which decode backend the custom libwebrtc uses for the next session:
-  /// [DecoderBackend.vaapi] (GStreamer VAAPI-first with FFmpeg fallback) or
-  /// [DecoderBackend.ffmpeg] (forced software). Applied just before the peer
-  /// connection is created by setting the `OPENNOW_DECODER` env var that the
-  /// libwebrtc decoder factory reads at decoder instantiation.
+  /// [DecoderBackend.vaapi] (GStreamer VAAPI-first on Linux, D3D11VA-first on
+  /// Windows, both with FFmpeg fallback) or [DecoderBackend.ffmpeg] (forced
+  /// software). Applied just before the peer connection is created by setting
+  /// the `OPENNOW_DECODER` env var that the libwebrtc decoder factory reads at
+  /// decoder instantiation.
   set decoderBackend(DecoderBackend v) {
     if (_decoderBackend == v) return;
     _decoderBackend = v;
@@ -787,12 +788,14 @@ class UserSettings extends ChangeNotifier {
 
 /// Actual decode backend the custom libwebrtc uses for the next session.
 enum DecoderBackend {
-  /// GStreamer VAAPI hardware decode first, with automatic FFmpeg fallback.
-  /// This is the default custom-build behavior.
+  /// Hardware decode first with automatic FFmpeg fallback: GStreamer VAAPI
+  /// (vah264dec) on Linux, GStreamer D3D11VA (d3d11h264dec) on Windows. This
+  /// is the default custom-build behavior; the same enum value selects the
+  /// platform-appropriate hardware element.
   vaapi,
 
   /// Force the built-in FFmpeg software decoder (the stock flutter_webrtc
-  /// path) irrespective of VAAPI availability.
+  /// path) irrespective of hardware-decode availability.
   ffmpeg,
 }
 

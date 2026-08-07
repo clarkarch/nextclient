@@ -174,8 +174,7 @@ class WebRtcStreamSession implements StreamTransport {
   Future<void> _applyRendererLogging(bool enabled) async {
     if (!Platform.isLinux && !Platform.isWindows) return;
     try {
-      const channel = MethodChannel('FlutterWebRTC.Method');
-      await channel
+      await _rendererChannel
           .invokeMethod('setRendererLoggingEnabled', enabled)
           .catchError((Object _) => false);
     } on Exception {
@@ -653,6 +652,11 @@ class WebRtcStreamSession implements StreamTransport {
         rendererHasVideo:
             rendererValue.renderVideo || rendererValue.width > 0,
       );
+      if (Platform.isWindows &&
+          settings.rendererBackend == RendererBackend.gl &&
+          !_rendererFallbackTried) {
+        await _watchGpuRenderer(rendererValue);
+      }
     } catch (e) {
       log.log(LogLevel.debug, 'webrtc', 'getStats failed: $e');
     } finally {
@@ -660,10 +664,81 @@ class WebRtcStreamSession implements StreamTransport {
     }
   }
 
+  /// Windows black-screen guard (see the watchdog state fields above). Polled
+  /// once per stats poll while the GPU renderer is requested.
+  Future<void> _watchGpuRenderer(RTCVideoValue rendererValue) async {
+    if (rendererValue.width > 0 && !_rendererFirstFrameSeen) {
+      _rendererFirstFrameSeen = true;
+    }
+    if (!_rendererFirstFrameSeen) return;
+
+    Map<dynamic, dynamic>? status;
+    try {
+      status = await _rendererChannel
+          .invokeMethod<Map<dynamic, dynamic>>('getRendererStatus');
+    } catch (_) {
+      return; // Channel absent (non-Windows plugin build) — nothing to watch.
+    }
+    final backend = status?['backend'] as String?;
+    final composited = (status?['composited'] as num?)?.toInt() ?? 0;
+    final error = (status?['error'] as String?) ?? '';
+
+    if (backend != 'd3d11') {
+      // CPU renderer already active: the D3D11 self-test preflight failed at
+      // texture creation, so there is nothing to fall back to. Surface the
+      // reason once so the session log explains why the GPU path is off.
+      if (!_rendererFallbackTried && error.isNotEmpty) {
+        _rendererFallbackTried = true;
+        _log('GPU renderer disabled by self-test ($error) — '
+            'using the CPU renderer');
+      }
+      return;
+    }
+    if (composited > 0) {
+      _rendererZeroCompositePolls = 0; // healthy — the engine is presenting
+      return;
+    }
+    if (++_rendererZeroCompositePolls < _rendererFallbackPolls) return;
+
+    _rendererFallbackTried = true;
+    _log('D3D11 renderer received frames but composited 0 — switching to the '
+        'CPU renderer (black-screen fallback'
+        '${error.isNotEmpty ? ': $error' : ''})');
+    bool ok = false;
+    try {
+      ok = await videoRenderer.switchToCpuRenderer();
+    } catch (e) {
+      log.log(LogLevel.debug, 'webrtc', 'Renderer CPU fallback threw: $e');
+    }
+    _log(ok
+        ? 'Renderer switched to CPU path — video should appear'
+        : 'Renderer CPU fallback failed — keeping the D3D11 path');
+  }
+
   String? _lastConnectionState;
 
   /// One-shot guard for the renderVideo-vs-frames discrepancy log above.
   bool _rendererFlagLogged = false;
+
+  // --- Windows GPU-renderer watchdog (black-screen guard) -------------------
+  //
+  // The D3D11 GPU renderer can decode + receive frames while the engine
+  // composites nothing (device/adapter mismatch with ANGLE, missing
+  // d3dcompiler_47.dll, ...), which presents as a black texture despite
+  // healthy decode stats (issue #1). The plugin exposes renderer health via
+  // getRendererStatus; if the GPU path was requested and frames have reached
+  // the renderer but ZERO frames were ever composited within ~3 s, swap the
+  // plugin texture to the CPU pixel-buffer renderer so the stream stays
+  // visible.
+  static const MethodChannel _rendererChannel =
+      MethodChannel('FlutterWebRTC.Method');
+  bool _rendererFallbackTried = false;
+  bool _rendererFirstFrameSeen = false;
+  int _rendererZeroCompositePolls = 0;
+
+  /// ~3 s at the 500 ms stats-poll rate: enough for the raster thread to
+  /// composite several frames on a healthy GL path.
+  static const int _rendererFallbackPolls = 6;
 
   // ---------------------------------------------------------------------
   // Input transport (port of OpenNOW's onInputHandshakeMessage + heartbeat)
