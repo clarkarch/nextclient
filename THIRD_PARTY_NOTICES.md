@@ -13,12 +13,11 @@ A port/derivative of **OpenNOW** (copyright (c) 2025 Zortos, MIT).
 
 OpenNOW is a GeForce NOW client for the community. This project adapts its
 architecture (cursor channel overlay, adaptive mouse input coalescing, WebRTC
-SDataChian negotiation, WebRTC signaling, absolute-mouse synchronization) and
+data-channel negotiation, WebRTC signaling, absolute-mouse synchronization) and
 portions of its native decoder/renderer design.
 
 License: MIT
-Source: https://github.com/OpenNOW-Template/OpenNOW (local checkout under
-`/home/clark/Downloads/git/OpenNOW` during development)
+Source: https://github.com/OpenCloudGaming/OpenNOW
 
 ---
 
