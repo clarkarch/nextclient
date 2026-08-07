@@ -115,60 +115,120 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
 # order over any stale System32 copy, fixing the access-violation-in-
 # MSVCP140.dll crash on machines with a 2019-era VC++ redistributable.
 if(MSVC)
-  # VCToolsRedistDir is set as a CMake variable by the VS generator and as an
-  # environment variable by vcvars.bat; try both.
+  # ---- Locate the MSVC redistributable. Several strategies so the DLLs are
+  # found regardless of how/where Visual Studio was installed (and even when
+  # the image is stripped of VC/Redist). ----
+  set(_msvc_redist_dir "")
+  # 1) VCToolsRedistDir: CMake variable set by the VS generator, environment
+  #    variable set by vcvars.bat. Try both.
   set(_msvc_redist_dir "${VCToolsRedistDir}")
   if(NOT _msvc_redist_dir)
     set(_msvc_redist_dir "$ENV{VCToolsRedistDir}")
   endif()
-  # vcvars' VCToolsRedistDir ends with a backslash; file(EXISTS)/file(GLOB)
-  # need forward slashes in patterns, so normalize before using it.
-  string(REPLACE "\\" "/" _msvc_redist_dir "${_msvc_redist_dir}")
   if(NOT _msvc_redist_dir OR NOT EXISTS "${_msvc_redist_dir}")
-    # vcvars may not be loaded (e.g. a bare `flutter build windows`), so scan
-    # the installed Visual Studio Redist folders and take the newest one.
-    set(_msvc_redist_dir "")
-    foreach(_vs_root IN ITEMS
-        "C:/Program Files/Microsoft Visual Studio/2022"
-        "C:/Program Files (x86)/Microsoft Visual Studio/2022"
-        "C:/Program Files/Microsoft Visual Studio/2019"
-        "C:/Program Files (x86)/Microsoft Visual Studio/2019")
-      file(GLOB _msvc_redist_candidates
-           "${_vs_root}/*/VC/Redist/MSVC/*")
-      if(_msvc_redist_candidates)
-        list(SORT _msvc_redist_candidates ORDER DESCENDING)
-        list(GET _msvc_redist_candidates 0 _msvc_redist_dir)
-        break()
+    # 2) vswhere: the official VS locator, layout-independent.
+    set(_msvc_vs_path "")
+    set(_msvc_vswhere "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe")
+    if(NOT EXISTS "${_msvc_vswhere}")
+      set(_msvc_vswhere "C:/Program Files/Microsoft Visual Studio/Installer/vswhere.exe")
+    endif()
+    if(EXISTS "${_msvc_vswhere}")
+      execute_process(
+        COMMAND "${_msvc_vswhere}" -latest -products "*"
+                -requires Microsoft.VisualStudio.Component.VC.Redist.14.Latest
+                -property installationPath
+        OUTPUT_VARIABLE _msvc_vs_path OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+      if(NOT _msvc_vs_path)
+        # Redist component not advertised; still use the plain install path.
+        execute_process(
+          COMMAND "${_msvc_vswhere}" -latest -products "*"
+                  -property installationPath
+          OUTPUT_VARIABLE _msvc_vs_path OUTPUT_STRIP_TRAILING_WHITESPACE
+          ERROR_QUIET)
       endif()
-    endforeach()
+      if(_msvc_vs_path)
+        set(_msvc_redist_dir "${_msvc_vs_path}/VC/Redist/MSVC")
+      endif()
+    endif()
+  endif()
+  if(NOT _msvc_redist_dir OR NOT EXISTS "${_msvc_redist_dir}")
+    # 3) Well-known install roots (any VS year/edition, x64 or x86 Program
+    #    Files), newest wins.
+    set(_msvc_redist_dir "")
+    file(GLOB _msvc_redist_candidates
+         "C:/Program Files*/Microsoft Visual Studio/*/*/VC/Redist/MSVC"
+         "C:/Program Files*/Microsoft Visual Studio/*/VC/Redist/MSVC")
+    list(SORT _msvc_redist_candidates ORDER DESCENDING)
+    if(_msvc_redist_candidates)
+      list(GET _msvc_redist_candidates 0 _msvc_redist_dir)
+    endif()
   endif()
 
+  # Normalize separators and strip trailing slashes so globs never see `//`.
+  string(REPLACE "\\" "/" _msvc_redist_dir "${_msvc_redist_dir}")
+  string(REGEX REPLACE "/+$" "" _msvc_redist_dir "${_msvc_redist_dir}")
+
+  # ---- Pick the newest CRT folder ----
+  set(_msvc_crt_dir "")
   if(_msvc_redist_dir AND EXISTS "${_msvc_redist_dir}")
-    # Pick the newest CRT flavor (Microsoft.VC143.CRT on VS2022,
-    # Microsoft.VC142.CRT on VS2019). Note: only the x64 flavor is bundled
-    # today — the app is x64-only (the plugin rejects 32-bit Windows).
-    file(GLOB _msvc_crt_dirs "${_msvc_redist_dir}/x64/Microsoft.VC1*.CRT")
+    # Redist layout is either <redist>/<version>/x64/Microsoft.VC1*.CRT
+    # (versioned) or <redist>/x64/Microsoft.VC1*.CRT (unversioned
+    # VCToolsRedistDir). Note: only the x64 flavor is bundled today — the app
+    # is x64-only (the plugin rejects 32-bit Windows).
+    file(GLOB _msvc_crt_dirs
+         "${_msvc_redist_dir}/*/x64/Microsoft.VC1*.CRT"
+         "${_msvc_redist_dir}/x64/Microsoft.VC1*.CRT")
     list(SORT _msvc_crt_dirs ORDER DESCENDING)
     if(_msvc_crt_dirs)
       list(GET _msvc_crt_dirs 0 _msvc_crt_dir)
-      file(GLOB _msvc_runtime_dlls "${_msvc_crt_dir}/*.dll")
-      if(_msvc_runtime_dlls)
-        # Copy next to the exe after every build (covers both VS and Ninja
-        # generators, including `flutter run -d windows`).
-        add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                  ${_msvc_runtime_dlls}
-                  "$<TARGET_FILE_DIR:${BINARY_NAME}>")
-        # Also stage through install() so the bundle step picks them up.
-        install(FILES ${_msvc_runtime_dlls}
-                DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
-                COMPONENT Runtime)
-        message(STATUS "Bundling MSVC runtime from ${_msvc_crt_dir}")
+    endif()
+  endif()
+  if(NOT _msvc_crt_dir)
+    # 4) Last resort: the CRT DLLs also ship inside the MSVC tools
+    #    (VC/Tools/MSVC/<version>/bin/Hostx64/x64), identical binaries to the
+    #    redistributable copies. VCToolsInstallDir is always set by the VS
+    #    generator, so this can't miss when MSVC is compiling.
+    set(_msvc_tools_dir "${VCToolsInstallDir}")
+    if(NOT _msvc_tools_dir)
+      set(_msvc_tools_dir "$ENV{VCToolsInstallDir}")
+    endif()
+    string(REPLACE "\\" "/" _msvc_tools_dir "${_msvc_tools_dir}")
+    string(REGEX REPLACE "/+$" "" _msvc_tools_dir "${_msvc_tools_dir}")
+    if(_msvc_tools_dir AND EXISTS "${_msvc_tools_dir}/bin/Hostx64/x64")
+      set(_msvc_crt_dir "${_msvc_tools_dir}/bin/Hostx64/x64")
+    elseif(_msvc_vs_path AND EXISTS "${_msvc_vs_path}/VC/Tools/MSVC")
+      # vswhere gave us the install root; pick the newest toolset's bin dir.
+      file(GLOB _msvc_tool_bins "${_msvc_vs_path}/VC/Tools/MSVC/*/bin/Hostx64/x64")
+      list(SORT _msvc_tool_bins ORDER DESCENDING)
+      if(_msvc_tool_bins)
+        list(GET _msvc_tool_bins 0 _msvc_crt_dir)
       endif()
     endif()
+  endif()
+
+  if(_msvc_crt_dir AND EXISTS "${_msvc_crt_dir}")
+    file(GLOB _msvc_runtime_dlls
+         "${_msvc_crt_dir}/msvcp140*.dll"
+         "${_msvc_crt_dir}/vcruntime140*.dll"
+         "${_msvc_crt_dir}/concrt140.dll")
+    if(_msvc_runtime_dlls)
+      # Copy next to the exe after every build (covers both VS and Ninja
+      # generators, including `flutter run -d windows`).
+      add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_msvc_runtime_dlls}
+                "$<TARGET_FILE_DIR:${BINARY_NAME}>")
+      # Also stage through install() so the bundle step picks them up.
+      install(FILES ${_msvc_runtime_dlls}
+              DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+              COMPONENT Runtime)
+      message(STATUS "Bundling MSVC runtime from ${_msvc_crt_dir}")
+    endif()
   else()
-    message(WARNING "MSVC runtime not found in VCToolsRedistDir or the VS "
-                    "install — the bundle will still require the VC++ "
-                    "2015-2022 redistributable on target machines")
+    message(WARNING "MSVC runtime not found (VCToolsRedistDir, vswhere, "
+                    "Program Files, VCToolsInstallDir) — the bundle will "
+                    "require the VC++ 2015-2022 redistributable on target "
+                    "machines")
   endif()
 endif()
