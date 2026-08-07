@@ -32,15 +32,23 @@
 #include "api/video/video_frame_buffer.h"
 #include "rtc_video_frame.h"
 
+// Forward declaration only: this header compiles on every platform the
+// wrapper builds for, so d3d11.h must not leak into non-Windows builds. The
+// full type is only ever touched in d3d11_video_buffer.cc under _WIN32.
+struct ID3D11Texture2D;
+
 namespace libwebrtc {
 
-// kNative D3D11 frame envelope (Windows zero-copy path). The decoder exports
-// the decoded NV12 surface's legacy shared handle into the descriptor; the
-// renderer opens it on its own device and converts it GPU-side.
+// kNative D3D11 frame envelope (Windows zero-CPU-copy path). The decoder
+// exports the decoded NV12 surface's legacy shared handle into the descriptor
+// (either the decoder's own MISC_SHARED texture, or a MISC_SHARED GPU copy it
+// blitted for stock elements); the renderer opens it on its own device and
+// converts it GPU-side.
 class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
  public:
   D3d11VideoBuffer(void* shared_handle, int width, int height, int stride_y,
-                   int stride_uv, GstBuffer* buffer = nullptr);
+                   int stride_uv, GstBuffer* buffer = nullptr,
+                   ID3D11Texture2D* owned_texture = nullptr);
 
   ~D3d11VideoBuffer() override;
 
@@ -70,8 +78,14 @@ class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
   int height_ = 0;
   // Ref'd GstBuffer (owns the GstD3D11Memory -> D3D11 texture). Keeps the
   // shared handle valid until the frame is released. Null for frames created
-  // without a GStreamer buffer (e.g. tests).
+  // without a GStreamer buffer (e.g. tests) and for the GPU shared-copy path.
   GstBuffer* buffer_ = nullptr;
+  // Owned D3D11 shared-copy texture (GPU-copy export): the decoder blits the
+  // decode texture into a MISC_SHARED copy and transfers ownership here, so
+  // the exported shared handle stays valid exactly as long as this frame
+  // buffer. Null for the direct-export path (texture owned by the GstBuffer)
+  // and tests.
+  ID3D11Texture2D* owned_texture_ = nullptr;
 };
 
 }  // namespace libwebrtc

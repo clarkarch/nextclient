@@ -26,12 +26,12 @@ zero-copy dmabuf render).
   in place. **Activation still requires** a Windows custom libwebrtc build
   that links a GStreamer runtime with the d3d11 plugin (bundled with the
   app); until then the stock prebuilt dll uses FFmpeg, which is the fallback
-  by design. Zero-copy caveat: the shared-handle export needs the decoder
-  element to allocate `MISC_SHARED` textures; stock `d3d11h264dec` doesn't,
-  so the decoder exports via `gst_d3d11_memory_get_resource_handle` +
-  `IDXGIResource::GetSharedHandle` and CPU-falls-back (hardware decode still
-  runs) until a shared-texture element exists. Decode is not the bottleneck
-  (FFmpeg keeps up at 59 fps), so this is an optimization, not a blocker.
+  by design. CPU-overhead note: stock `d3d11h264dec` doesn't allocate
+  `MISC_SHARED` textures, so the decoder takes the GPU-only shared copy
+  (`CopySubresourceRegion` into a `MISC_SHARED` texture — no CPU pixels); the
+  CPU NV12→I420 fallback only runs when no usable D3D11 device exists. Decode
+  is not the bottleneck (FFmpeg keeps up at 59 fps), so this is an
+  optimization, not a blocker.
 
 **Remaining:** macOS Metal renderer (analogous `flutter_video_renderer_metal`,
 `CVPixelBuffer`/Metal texture via the engine's macOS texture path) + macOS

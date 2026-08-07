@@ -5,18 +5,20 @@
 // built-in FFmpeg software decoder whenever D3D11VA is unavailable,
 // initialization fails, or OPENNOW_DECODER=software is set.
 //
-// The zero-copy contract is already in place: decoded NV12 surfaces are
+// The zero-CPU-copy contract is already in place: decoded NV12 surfaces are
 // exported to a legacy DXGI shared handle
 // (gst_d3d11_memory_get_resource_handle + IDXGIResource::GetSharedHandle;
 // note gst_d3d11_memory_export was removed in gst-plugins-bad 1.22) and
 // wrapped in a libwebrtc::D3d11VideoBuffer (d3d11_video_buffer.h) — a kNative
 // VideoFrameBuffer carrying the texture's shared handle — so the Windows
 // renderer (FlutterVideoRendererD3D, OPENNOW_RENDERER=gl) opens the texture
-// on its own device and composites it with no CPU copy. Export succeeds only
-// when the element allocates D3D11_RESOURCE_MISC_SHARED textures (stock
-// d3d11h264dec does not), so frames that are NOT wrapped (CPU NV12->I420
-// fallback) stay on the I420 plane-upload path, and a factory that only
-// hardware-decodes *some* frames is safe.
+// on its own device and composites it with no CPU copy. Two export tiers:
+// direct MISC_SHARED export when the element allocates shared textures, and a
+// GPU-only shared copy (CopySubresourceRegion) for stock d3d11h264dec, whose
+// textures are not shared — decoded pixels stay on the GPU in both cases.
+// Only when neither works (no usable D3D11 device) do frames take the CPU
+// NV12->I420 fallback, so a factory that only hardware-decodes *some* frames
+// is safe.
 //
 // The decoder is backed by the same GStreamer d3d11h264dec element the app's
 // native nvst_bridge uses on Windows (gst-plugins-bad,

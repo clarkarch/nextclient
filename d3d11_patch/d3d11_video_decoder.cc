@@ -10,15 +10,19 @@
 //
 // d3d11h264dec (gst-plugins-bad) decodes on the GPU via D3D11VA. When the
 // element offers video/x-raw(memory:D3D11Memory) on its src pad we request it
-// in the caps filter, so appsink receives D3D11-memory-backed NV12 buffers;
-// each decoded surface's texture is exported to a legacy DXGI shared handle
-// (gst_d3d11_memory_get_resource_handle + IDXGIResource::GetSharedHandle,
-// see OnSample) and wrapped in a libwebrtc::D3d11VideoBuffer (kNative) so the
-// Windows renderer (FlutterVideoRendererD3D, OPENNOW_RENDERER=gl) opens the
-// texture on its own device and composites it with zero CPU copies. Export
-// only succeeds when the element allocates D3D11_RESOURCE_MISC_SHARED
-// textures (stock d3d11h264dec does not) — otherwise frames take the CPU
-// NV12->I420 fallback instead.
+// in the caps filter, so appsink receives D3D11-memory-backed NV12 buffers,
+// and each decoded surface is exported as a legacy DXGI shared handle into a
+// libwebrtc::D3d11VideoBuffer (kNative) so the Windows renderer
+// (FlutterVideoRendererD3D, OPENNOW_RENDERER=gl) opens the texture on its own
+// device and composites it with ZERO CPU involvement:
+//   Tier 1 — direct export: the element allocated MISC_SHARED textures
+//            (dormant with stock d3d11h264dec, which does not).
+//   Tier 2 — GPU shared copy: blit the texture slice into a MISC_SHARED copy
+//            with CopySubresourceRegion on the element's device and export
+//            the copy's handle. GPU-only; never touches CPU pixels. This is
+//            the path stock d3d11h264dec takes.
+//   Tier 3 — CPU fallback: NV12 -> I420 readback (only when neither export
+//            works, e.g. no usable D3D11 device).
 //
 // WebRTC hands us AVCC (length-prefixed) access units; we convert them to
 // Annex-B (start codes) and re-inject SPS/PPS ahead of IDR keyframes, then
@@ -42,6 +46,7 @@
 
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
+#include <gst/d3d11/gstd3d11device.h>
 #include <gst/d3d11/gstd3d11memory.h>
 #include <gst/gst.h>
 #include <gst/video/video-frame.h>
@@ -545,26 +550,24 @@ class GstD3d11VideoDecoder : public webrtc::VideoDecoder {
     const int width = GST_VIDEO_INFO_WIDTH(&info);
     const int height = GST_VIDEO_INFO_HEIGHT(&info);
 
-    // --- Zero-copy path: export the D3D11 texture's shared handle ----------
+    // --- Zero-CPU-copy path: export the D3D11 texture's shared handle ------
     //
     // When the pipeline negotiated (memory:D3D11Memory), the buffer's first
     // memory is a GstD3D11Memory wrapping a decoder-owned D3D11 texture. We
-    // export its legacy DXGI shared handle so the Windows renderer can open
-    // the texture on its own D3D11 device — decode → composite with zero CPU
-    // copies. The D3d11VideoBuffer refs the GstBuffer so the texture (and
-    // therefore the handle) outlives the frame.
+    // hand the renderer a legacy DXGI shared handle so it can open the
+    // texture on its own D3D11 device — decode → composite with no CPU
+    // involvement. Two export tiers (see ExportSharedCopy for tier 2):
     //
-    // NOTE: gst_d3d11_memory_export (the 1.20-era name for this) was removed
-    // in the gst-plugins-bad 1.22 C++ port and never returned, so we use the
-    // stable public API present in every 1.22+ release: pull the texture via
-    // gst_d3d11_memory_get_resource_handle() and ask DXGI for its legacy
-    // shared handle. GetSharedHandle succeeds ONLY when the texture was
-    // created with D3D11_RESOURCE_MISC_SHARED — stock d3d11h264dec does NOT
-    // (its pool allocates with GST_D3D11_ALLOCATION_FLAG_TEXTURE_ARRAY, no
-    // shared flag), so on a stock runtime this fails and every frame takes
-    // the CPU NV12->I420 fallback below. A custom/bundled d3d11 element that
-    // allocates MISC_SHARED textures activates the zero-copy path with no
-    // change here.
+    // NOTE on the API: gst_d3d11_memory_export (the 1.20-era name for this)
+    // was removed in the gst-plugins-bad 1.22 C++ port and never returned, so
+    // we use the stable public API present in every 1.22+ release: pull the
+    // texture via gst_d3d11_memory_get_resource_handle() and ask DXGI for its
+    // legacy shared handle. GetSharedHandle succeeds ONLY when the texture
+    // was created with D3D11_RESOURCE_MISC_SHARED — stock d3d11h264dec does
+    // NOT (its pool allocates with GST_D3D11_ALLOCATION_FLAG_TEXTURE_ARRAY,
+    // no shared flag), so tier 1 is dormant on stock and tier 2 (the GPU
+    // shared copy) carries the load instead. Both keep every decoded pixel on
+    // the GPU; only tier 3 (below) reads frames back to the CPU.
     webrtc::scoped_refptr<webrtc::VideoFrameBuffer> frame_buffer = nullptr;
     GstMemory* mem = gst_buffer_peek_memory(buffer, 0);
     // The descriptor hardcodes kNv12, so only wrap NV12 D3D11 buffers (the
@@ -572,14 +575,23 @@ class GstD3d11VideoDecoder : public webrtc::VideoDecoder {
     // keeps a hypothetical non-NV12 D3D11 buffer from being mislabeled).
     if (gst_is_d3d11_memory(mem) &&
         GST_VIDEO_INFO_FORMAT(&info) == GST_VIDEO_FORMAT_NV12) {
-      ID3D11Resource* resource = gst_d3d11_memory_get_resource_handle(
-          GST_D3D11_MEMORY_CAST(mem));
+      GstD3D11Memory* d3d11_mem = GST_D3D11_MEMORY_CAST(mem);
+      // Tier 1 — direct export: the element allocated MISC_SHARED textures,
+      // so hand the renderer the decoder's own shared handle (zero GPU work,
+      // zero CPU). Dormant with stock d3d11h264dec.
+      HANDLE handle = nullptr;
+      ID3D11Resource* resource =
+          gst_d3d11_memory_get_resource_handle(d3d11_mem);
       if (resource != nullptr) {
         Microsoft::WRL::ComPtr<IDXGIResource> dxgi_resource;
         if (SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&dxgi_resource)))) {
-          HANDLE handle = nullptr;
           if (SUCCEEDED(dxgi_resource->GetSharedHandle(&handle)) &&
               handle != nullptr) {
+            if (!export_direct_logged_) {
+              export_direct_logged_ = true;
+              RTC_LOG(LS_INFO) << "GstD3D11: direct MISC_SHARED export (zero "
+                                  "copy, no GPU blit)";
+            }
             // NOTE: the caps-negotiated strides may be 0/aligned for D3D11
             // memory (the real pitch lives in the texture desc); they are
             // informational only — the renderer creates whole-texture SRVs
@@ -587,27 +599,29 @@ class GstD3d11VideoDecoder : public webrtc::VideoDecoder {
             frame_buffer = webrtc::make_ref_counted<D3d11VideoBuffer>(
                 handle, width, height, GST_VIDEO_INFO_PLANE_STRIDE(&info, 0),
                 GST_VIDEO_INFO_PLANE_STRIDE(&info, 1), buffer);
-          } else {
-            RTC_LOG(LS_WARNING)
-                << "D3D11 texture has no legacy shared handle (stock "
-                   "d3d11h264dec is not MISC_SHARED) — CPU fallback";
           }
-        } else {
-          RTC_LOG(LS_WARNING)
-              << "ID3D11Resource QI to IDXGIResource failed — CPU fallback";
         }
-      } else {
+      }
+      // Tier 2 — GPU shared copy: stock d3d11h264dec textures are not
+      // shared, so blit this frame's texture slice into a MISC_SHARED copy on
+      // the element's device and export the copy's handle. GPU-only; the
+      // buffer OWNS the copy texture so the handle stays valid for the frame.
+      if (frame_buffer == nullptr) {
+        frame_buffer = ExportSharedCopy(d3d11_mem, width, height);
+      }
+      if (frame_buffer == nullptr) {
         RTC_LOG(LS_WARNING)
-            << "gst_d3d11_memory_get_resource_handle failed — CPU fallback";
+            << "GstD3D11: export/copy failed — CPU NV12->I420 fallback";
       }
     }
 
     if (frame_buffer == nullptr) {
       // --- CPU fallback: NV12 -> I420 in a single pass ---------------------
       //
-      // Only hit when the element doesn't offer D3D11Memory, export fails, or
-      // the surface is not NV12. Keep this path so the FFmpeg renderer-backend
-      // and any non-D3D11 session still work.
+      // Tier 3: only hit when the element doesn't offer D3D11Memory, neither
+      // export tier worked (no usable D3D11 device), or the surface is not
+      // NV12. Keep this path so the FFmpeg renderer-backend and any non-D3D11
+      // session still work.
       GstVideoFrame frame;
       if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ)) {
         gst_sample_unref(sample);
@@ -691,6 +705,92 @@ class GstD3d11VideoDecoder : public webrtc::VideoDecoder {
     return GST_FLOW_OK;
   }
 
+  // Tier-2 export: copies the D3D11 memory's texture slice into a MISC_SHARED
+  // texture on the element's device and returns a D3d11VideoBuffer that OWNS
+  // the copy (the renderer opens the copy's legacy shared handle — zero CPU
+  // pixels involved). The decoder element runs on the streaming thread and we
+  // are called from that same thread (appsink new-sample), so this context use
+  // cannot race the decoder's own; the device lock is still taken to match
+  // gst-plugins-bad's own readback convention (gstd3d11videosink emits its
+  // readback signal with the lock held). Returns nullptr on any failure and
+  // the caller takes the CPU fallback.
+  webrtc::scoped_refptr<webrtc::VideoFrameBuffer> ExportSharedCopy(
+      GstD3D11Memory* mem, int width, int height) {
+    // Guard BEFORE calling the device getters (they g_return_val_if_fail on
+    // null, but we should not rely on that path).
+    if (mem == nullptr || mem->device == nullptr) {
+      RTC_LOG(LS_WARNING) << "GstD3D11: no D3D11 device on memory";
+      return nullptr;
+    }
+    GstD3D11Device* device = mem->device;
+    ID3D11Device* dev = gst_d3d11_device_get_device_handle(device);
+    ID3D11DeviceContext* ctx =
+        gst_d3d11_device_get_device_context_handle(device);
+    ID3D11Resource* src = gst_d3d11_memory_get_resource_handle(mem);
+    if (dev == nullptr || ctx == nullptr || src == nullptr) {
+      RTC_LOG(LS_WARNING)
+          << "GstD3D11: device/context/resource unavailable";
+      return nullptr;
+    }
+    D3D11_TEXTURE2D_DESC src_desc = {};
+    if (!gst_d3d11_memory_get_texture_desc(mem, &src_desc)) {
+      RTC_LOG(LS_WARNING) << "GstD3D11: get_texture_desc failed";
+      return nullptr;
+    }
+    // The decoder's pool allocates one texture ARRAY (dpb depth); each memory
+    // is a single slice, so copy just that subresource into a 1-slice copy.
+    const UINT src_subresource = gst_d3d11_memory_get_subresource_index(mem);
+
+    D3D11_TEXTURE2D_DESC copy_desc = {};
+    copy_desc.Width = src_desc.Width;
+    copy_desc.Height = src_desc.Height;
+    copy_desc.MipLevels = 1;
+    copy_desc.ArraySize = 1;
+    copy_desc.Format = src_desc.Format;
+    copy_desc.SampleDesc.Count =
+        src_desc.SampleDesc.Count > 0 ? src_desc.SampleDesc.Count : 1;
+    copy_desc.SampleDesc.Quality = 0;
+    copy_desc.Usage = D3D11_USAGE_DEFAULT;
+    copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    copy_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> copy;
+    if (FAILED(dev->CreateTexture2D(&copy_desc, nullptr, &copy)) ||
+        copy == nullptr) {
+      RTC_LOG(LS_WARNING) << "GstD3D11: CreateTexture2D(shared copy) failed";
+      return nullptr;
+    }
+    gst_d3d11_device_lock(device);
+    ctx->CopySubresourceRegion(copy.Get(), 0, 0, 0, 0, src, src_subresource,
+                               nullptr);
+    // Flush submits the copy to the GPU. The renderer opens the handle on its
+    // OWN device later (raster thread, milliseconds after this frame's
+    // decode) — D3D11 gives no cross-device ordering guarantee, so this
+    // relies on that temporal separation, exactly like the direct-export
+    // path. An ID3D11Fence handoff would make it airtight; not needed at the
+    // current frame timing.
+    ctx->Flush();
+    gst_d3d11_device_unlock(device);
+
+    Microsoft::WRL::ComPtr<IDXGIResource> dxgi;
+    HANDLE handle = nullptr;
+    if (FAILED(copy.As(&dxgi)) || FAILED(dxgi->GetSharedHandle(&handle)) ||
+        handle == nullptr) {
+      RTC_LOG(LS_WARNING) << "GstD3D11: shared-copy export failed";
+      return nullptr;
+    }
+    if (!export_gpu_logged_) {
+      export_gpu_logged_ = true;
+      RTC_LOG(LS_INFO) << "GstD3D11: GPU shared copy "
+                          "(CopySubresourceRegion) export — no CPU pixels";
+    }
+    // Transfer ownership of the copy texture (Detach passes our ref; the
+    // buffer releases it when the frame is done). Strides are informational
+    // only (the renderer uses whole-texture SRVs).
+    return webrtc::make_ref_counted<D3d11VideoBuffer>(
+        handle, width, height, 0, 0, nullptr, copy.Detach());
+  }
+
   // Pushes one already-converted Annex-B AU into appsrc. Caller holds mutex_.
   int32_t PushLocked(const uint8_t* data, size_t size, uint64_t pts_ns) {
     GstBuffer* buffer = gst_buffer_new_allocate(nullptr, size, nullptr);
@@ -766,6 +866,9 @@ class GstD3d11VideoDecoder : public webrtc::VideoDecoder {
   std::deque<PendingAu> pending_;
   size_t pending_bytes_ = 0;
   int push_failures_ = 0;  // consecutive non-OK appsrc pushes (backpressure)
+  // Log-once flags for the export tier actually used (info logs).
+  bool export_direct_logged_ = false;
+  bool export_gpu_logged_ = false;
   static constexpr size_t kMaxPendingFrames = 120;  // ~2 s at 60 fps
   static constexpr size_t kMaxPendingBytes = 8 * 1024 * 1024;
 
