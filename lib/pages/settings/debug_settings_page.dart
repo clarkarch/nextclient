@@ -27,6 +27,18 @@ class DebugSettingsPage extends StatelessWidget {
             child: Column(
               children: [
                 NeonSettingTile(
+                  icon: Icons.mouse,
+                  title: 'Native cursor',
+                  subtitle: 'Use OS cursor for predefined styles (WM effects)',
+                  trailing: NeonSwitch(
+                    value: services.settings.inputCursorNative,
+                    onChanged: (v) {
+                      services.settings.inputCursorNative = v;
+                    },
+                  ),
+                ),
+                const Divider(height: 1),
+                NeonSettingTile(
                   icon: Icons.track_changes,
                   title: 'Cursor overlay box',
                   subtitle: 'Show a filled box at the rendered cursor',
@@ -41,10 +53,13 @@ class DebugSettingsPage extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
                   child: Text(
-                    'Puts a translucent box at the client-rendered cursor '
-                    'position so you can inspect the overlay\'s bounding box '
-                    '(size, hotspot offset, and tracking) without relying on '
-                    'the cursor bitmap alone. Off by default.',
+                    'Native cursor: predefined styles (arrow/text/wait/'
+                    'crosshair/resize) are presented to the window manager as '
+                    'the real OS cursor, so your compositor\'s cursor effects '
+                    '(e.g. speed-stretch) apply — like OpenNOW. Custom bitmap '
+                    'cursors always use the client-drawn overlay.\n\n'
+                    'Cursor overlay box puts a translucent box at the rendered '
+                    'cursor to inspect its bounding box and tracking.',
                     style:
                         const TextStyle(color: Neon.inkMuted, fontSize: 12),
                   ),

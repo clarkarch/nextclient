@@ -1153,6 +1153,11 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   /// True once the server has told us the game cursor is active.
   bool _cursorVisible = false;
 
+  /// Predefined cursor *style* label from the server (e.g. "crosshair"), used
+  /// to map to a native OS cursor when [UserSettings.inputCursorNative] is on
+  /// and the pointer isn't locked. 'custom' means a bitmap (no native equiv).
+  String _cursorOsStyle = 'default';
+
   /// True once the tracked position is meaningful (server position applied on
   /// the hidden→visible transition, or deltas have moved it).
   bool _cursorPositionKnown = false;
@@ -1257,7 +1262,9 @@ class _ReadySurfaceState extends State<_ReadySurface> {
       final predefined = predefinedCursorFor(update.cursorId);
       if (predefined.style == 'none') {
         _cursorVisible = false;
+        _cursorOsStyle = 'none';
       } else {
+        _cursorOsStyle = predefined.style;
         final bitmap = _predefinedBitmapCache[update.cursorId] ??
             decodeIcoCursor(base64Decode(predefined.imageBase64));
         if (bitmap == null) return; // malformed table entry — skip
@@ -1267,7 +1274,8 @@ class _ReadySurfaceState extends State<_ReadySurface> {
         _cursorHotspotX = predefined.hotspotX;
         _cursorHotspotY = predefined.hotspotY;
         _cursorScale = 1;
-        _cursorVisible = true;
+_cursorVisible = true;
+      _cursorOsStyle = 'custom'; // bitmap — no native OS cursor equivalent
         // Skip the async decode when this id is already the displayed cursor
         // (id-only updates re-stream the same style every frame); the image
         // only needs (re)building when the cursor actually changes.
@@ -1383,15 +1391,43 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     }
   }
 
-  /// OS cursor shown over the video surface. In-game the OS cursor is ALWAYS
-  /// hidden — never swapped to a real predefined cursor. On the soft-lock
-  /// path (no native grab) the OS cursor is the one the user physically moves,
-  /// so showing it means it hits the window edge and the pointer deltas stop:
-  /// the mouse "freezes" exactly as observed with the overlay enabled. The
-  /// game cursor is drawn client-side by the bitmap overlay instead.
+  /// OS cursor shown over the video surface. In-game (mouse locked) the OS
+  /// cursor is ALWAYS hidden — never swapped to a real predefined cursor. On
+  /// the soft-lock path (no native grab) the OS cursor is the one the user
+  /// physically moves, so showing it means it hits the window edge and the
+  /// pointer deltas stop; the game cursor is drawn client-side instead.
+  ///
+  /// When NOT locked (chrome / game menus), a native-cursor mapping can be
+  /// used so the window manager renders the game's predefined cursor style
+  /// (arrow/text/wait/crosshair/resize) — including its own compositor effects
+  /// like speed-stretch. Custom bitmap cursors always fall back to the overlay.
   SystemMouseCursor get _videoCursor {
-    if (!_mouseLocked) return SystemMouseCursors.basic;
-    return SystemMouseCursors.none;
+    if (_mouseLocked) return SystemMouseCursors.none;
+    if (widget.settings.inputCursorNative && _cursorVisible) {
+      final native = _nativeCursorForStyle(_cursorOsStyle);
+      if (native != null) return native;
+    }
+    return SystemMouseCursors.basic;
+  }
+
+  /// Maps a predefined cursor style to the corresponding OS cursor so the WM
+  /// renders it natively. Returns null for custom bitmaps/unknown styles,
+  /// leaving the caller to use the basic arrow.
+  SystemMouseCursor? _nativeCursorForStyle(String style) {
+    return switch (style) {
+      'text' => SystemMouseCursors.text,
+      'wait' => SystemMouseCursors.wait,
+      'progress' => SystemMouseCursors.progress,
+      'crosshair' => SystemMouseCursors.precise,
+      'move' => SystemMouseCursors.move,
+      'help' => SystemMouseCursors.help,
+      'pointer' => SystemMouseCursors.click,
+      'ns-resize' => SystemMouseCursors.resizeUpDown,
+      'ew-resize' => SystemMouseCursors.resizeLeftRight,
+      'nwse-resize' => SystemMouseCursors.resizeUpLeftDownRight,
+      'nesw-resize' => SystemMouseCursors.resizeUpRightDownLeft,
+      _ => null,
+    };
   }
 
   // Gamepad bitmask + stick state (normalized -1..1), streamed over the
