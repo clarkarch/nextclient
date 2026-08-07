@@ -54,14 +54,14 @@ class SettingsPage extends StatelessWidget {
               const SectionHeader(title: 'Settings'),
               _advancedToggleCard(),
               const SizedBox(height: 14),
-              // Server settings are always visible; Advanced Settings only
-              // exposes the client-side categories below them.
-              _serverCard(context),
+              // Main settings are always visible; the Advanced Settings section
+              // the toggle reveals holds the lower-level categories.
+              _mainSettingsCard(context),
               if (advanced) ...[
                 const SizedBox(height: 20),
-                const _GroupLabel('CLIENT SETTINGS'),
+                const _GroupLabel('ADVANCED SETTINGS'),
                 const SizedBox(height: 6),
-                _clientCard(context),
+                _advancedSettingsCard(context),
               ],
             ],
           );
@@ -76,7 +76,7 @@ class SettingsPage extends StatelessWidget {
       child: NeonSettingTile(
         icon: Icons.tune,
         title: 'Advanced Settings',
-        subtitle: 'Show client-side categories',
+        subtitle: 'Show advanced categories',
         trailing: NeonSwitch(
           value: services.settings.advancedMode,
           onChanged: (v) => services.settings.advancedMode = v,
@@ -85,10 +85,9 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  /// Server-side options sent to the NVIDIA server on launch, plus account
-  /// (identity, tied to the session) and Logs (always reachable when something
-  /// goes wrong).
-  Widget _serverCard(BuildContext context) {
+  /// Always-visible settings: the stream server options, account, and the
+  /// UI category (kept on the main view since it's a day-to-day preference).
+  Widget _mainSettingsCard(BuildContext context) {
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -132,15 +131,12 @@ class SettingsPage extends StatelessWidget {
           ),
           const Divider(height: 1),
           NeonSettingTile(
-            icon: Icons.terminal,
-            title: 'Logs',
-            subtitle: 'Debug log viewer',
+            icon: Icons.palette_outlined,
+            title: 'UI',
+            subtitle: _uiSummary(),
             onTap: () => _open(
               context,
-              LogViewerPage(
-                logSink: services.logSink,
-                logFilePath: services.logFilePath,
-              ),
+              UiSettingsPage(services: services),
             ),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
@@ -207,7 +203,10 @@ class SettingsPage extends StatelessWidget {
       );
     }
   }
-  Widget _clientCard(BuildContext context) {
+  /// Lower-level categories only relevant to tinkerers, hidden behind the
+  /// Advanced Settings toggle (WebRTC, logging, Performance, Experimental,
+  /// Debug).
+  Widget _advancedSettingsCard(BuildContext context) {
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -224,12 +223,15 @@ class SettingsPage extends StatelessWidget {
           ),
           const Divider(height: 1),
           NeonSettingTile(
-            icon: Icons.palette_outlined,
-            title: 'UI',
-            subtitle: _uiSummary(),
+            icon: Icons.terminal,
+            title: 'Logs',
+            subtitle: 'Debug log viewer',
             onTap: () => _open(
               context,
-              UiSettingsPage(services: services),
+              LogViewerPage(
+                logSink: services.logSink,
+                logFilePath: services.logFilePath,
+              ),
             ),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
