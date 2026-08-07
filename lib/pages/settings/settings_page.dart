@@ -13,7 +13,6 @@ import '../../widgets/section_header.dart';
 import '../log_viewer_page.dart';
 import 'account_page.dart';
 import 'debug_settings_page.dart';
-import 'experimental_settings_page.dart';
 import 'language_page.dart';
 import 'performance_settings_page.dart';
 import 'region_page.dart';
@@ -204,17 +203,18 @@ class SettingsPage extends StatelessWidget {
     }
   }
   /// Lower-level categories only relevant to tinkerers, hidden behind the
-  /// Advanced Settings toggle (WebRTC, logging, Performance, Experimental,
-  /// Debug).
+  /// Advanced Settings toggle (client transport, logging, Performance,
+  /// Debug). Experimental options now live inside their own pages, marked with
+  /// an EXPERIMENTAL tag instead of a separate category.
   Widget _advancedSettingsCard(BuildContext context) {
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
         children: [
           NeonSettingTile(
-            icon: Icons.podcasts,
-            title: 'WebRTC',
-            subtitle: 'ICE transport · bundle · mux · acceleration',
+            icon: Icons.computer,
+            title: 'Client',
+            subtitle: 'Transport · renderer · input · cursor overlay',
             onTap: () => _open(
               context,
               WebRtcSettingsPage(services: services),
@@ -248,17 +248,6 @@ class SettingsPage extends StatelessWidget {
           ),
           const Divider(height: 1),
           NeonSettingTile(
-            icon: Icons.science_outlined,
-            title: 'Experimental',
-            subtitle: _experimentalSummary(),
-            onTap: () => _open(
-              context,
-              ExperimentalSettingsPage(services: services),
-            ),
-            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
-          ),
-          const Divider(height: 1),
-          NeonSettingTile(
             icon: Icons.bug_report_outlined,
             title: 'Debug',
             subtitle: 'Cursor overlay diagnostics',
@@ -285,11 +274,6 @@ class SettingsPage extends StatelessWidget {
 
   String _perfSummary() {
     return 'Verbose logs: ${services.settings.logsEnabled ? 'on' : 'off'}';
-  }
-
-  String _experimentalSummary() {
-    final p = services.settings.streamPriority;
-    return 'Stream priority: ${p.name.toUpperCase()}';
   }
 }
 
