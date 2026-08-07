@@ -119,10 +119,14 @@ function(_libwebrtc_extract_and_normalize zip_path dest_dir)
   file(REMOVE_RECURSE "${_staging}")
 endfunction()
 
-if(EXISTS "${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc/lib/libwebrtc.so")
+# The next_client custom VAAPI libwebrtc is vendored as a LINUX binary
+# (third_party/libwebrtc/lib/libwebrtc.so). It only applies on Linux; on other
+# platforms (e.g. Windows) ignore it and download the platform-appropriate
+# release below instead.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS "${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc/lib/libwebrtc.so")
   # A libwebrtc has been vendored into third_party/libwebrtc already (the
   # next_client custom VAAPI build). Never download or overwrite it.
-  message(STATUS "libwebrtc: using vendored ${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc")
+  message(STATUS "libwebrtc: using vendored ${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc (linux custom VAAPI)")
 elseif(NOT EXISTS "${ZIPFILE}")
   message(NOTICE "download: ${DOWNLOAD_URL}")
   file(MAKE_DIRECTORY "${LIBWEBRTC_THIRD_PARTY_DIR}/downloads")
