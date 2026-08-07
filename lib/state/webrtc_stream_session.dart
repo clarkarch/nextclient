@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert' show utf8;
+import 'dart:io' show Platform;
 import 'dart:math' show max, min;
 import 'dart:typed_data';
 
-import 'package:flutter/services.dart' show KeyEvent, KeyDownEvent, KeyUpEvent, KeyRepeatEvent;
+import 'package:flutter/services.dart'
+    show KeyEvent, KeyDownEvent, KeyUpEvent, KeyRepeatEvent, MethodChannel;
 import 'package:flutter/foundation.dart' show ValueChanged, ValueNotifier;
 import 'package:flutter/widgets.dart' show Widget;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -165,6 +167,21 @@ class WebRtcStreamSession implements StreamTransport {
     onStatus?.call(message);
   }
 
+  /// Mirrors the Verbose-logs setting onto the native GL video renderer, whose
+  /// [glrender] stderr diagnostics bypass the in-app LogSink. Best-effort: the
+  /// Linux GL renderer may not be built, and the call must not fail the stream.
+  Future<void> _applyRendererLogging(bool enabled) async {
+    if (!Platform.isLinux) return;
+    try {
+      const channel = MethodChannel('FlutterWebRTC.Method');
+      await channel
+          .invokeMethod('setRendererLoggingEnabled', enabled)
+          .catchError((Object _) => false);
+    } on Exception {
+      // Renderer logging is advisory; ignore platform/init failures.
+    }
+  }
+
   @override
   Future<void> start() async {
     if (_disposed) return;
@@ -178,6 +195,11 @@ class WebRtcStreamSession implements StreamTransport {
     // decode/render path for this session (A/B testing).
     applyDecoderBackend(settings.decoderBackend);
     applyRendererBackend(settings.rendererBackend);
+
+    // Reflect the Verbose-logs setting onto the native GL renderer so its
+    // [glrender] stderr diagnostics (which bypass the in-app LogSink) are
+    // silenced when logging is off.
+    await _applyRendererLogging(settings.logsEnabled);
 
     await videoRenderer.initialize();
     _rendererInitialized = true;
