@@ -33,4 +33,8 @@ build/
 # third_party/CMakeLists.txt). The checked-in source under third_party/
 # (CMakeLists.txt, libwebrtc_version.ini, svpng/) is published with the package.
 third_party/downloads/
-third_party/libwebrtc/
+# NOTE: third_party/libwebrtc/ is intentionally NOT ignored here — the
+# next_client fork builds against a CUSTOM VAAPI-patched libwebrtc that exists
+# only in the repo (it cannot be fetched from any public release). It is
+# vendored so CI reproduces the exact local build. Only transient downloads in
+# third_party/downloads/ are ignored.

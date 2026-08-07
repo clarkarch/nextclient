@@ -39,10 +39,10 @@ jobs:
             os: macos-latest
             build: macos
             path: build/macos/Build/Products/Release
-          - name: web
-            os: ubuntu-latest
-            build: web
-            path: build/web
+          # NOTE: 'web' is intentionally not in the matrix for now — the app
+          # is desktop-centric (dart:ffi/GStreamer/libwebrtc/pointer_lock/
+          # window_manager) and `dart:ffi` is unavailable on web, so it cannot
+          # compile. Re-add once a web-safe path (conditional imports) exists.
     steps:
       - uses: actions/checkout@v4
 
