@@ -160,21 +160,80 @@ class MediaConnectionInfo {
   const MediaConnectionInfo({required this.ip, required this.port, this.usage});
 }
 
+/// Ad lifecycle action reported to the server (matches OpenNOW's
+/// `SessionAdAction`). Wire codes come from `adActionWireCode`.
+enum SessionAdAction { start, pause, resume, finish, cancel }
+
+/// Wire codes for [SessionAdAction] (matches OpenNOW's AD_ACTION_CODES:
+/// start=1, pause=2, resume=3, finish=4, cancel=5).
+int adActionWireCode(SessionAdAction action) {
+  switch (action) {
+    case SessionAdAction.start:
+      return 1;
+    case SessionAdAction.pause:
+      return 2;
+    case SessionAdAction.resume:
+      return 3;
+    case SessionAdAction.finish:
+      return 4;
+    case SessionAdAction.cancel:
+      return 5;
+  }
+}
+
+/// A multi-format media source entry for an ad (port of SessionAdMediaFile).
+class SessionAdMediaFile {
+  final String? mediaFileUrl;
+  final String? encodingProfile;
+
+  const SessionAdMediaFile({this.mediaFileUrl, this.encodingProfile});
+}
+
+/// Normalized `opportunity` object from a session response (port of
+/// SessionOpportunityInfo).
+class SessionOpportunityInfo {
+  final String? state;
+  final bool? queuePaused;
+  final int? gracePeriodSeconds;
+  final String? message;
+  final String? title;
+  final String? description;
+
+  const SessionOpportunityInfo({
+    this.state,
+    this.queuePaused,
+    this.gracePeriodSeconds,
+    this.message,
+    this.title,
+    this.description,
+  });
+}
+
 class SessionAdInfo {
   final String adId;
   final int? state;
+  final int? adState;
   final String? adUrl;
   final String? mediaUrl;
+  final List<SessionAdMediaFile> adMediaFiles;
   final String? clickThroughUrl;
+  final double? adLengthInSeconds;
   final int? durationMs;
+  final String? title;
+  final String? description;
 
   const SessionAdInfo({
     required this.adId,
     this.state,
+    this.adState,
     this.adUrl,
     this.mediaUrl,
+    this.adMediaFiles = const [],
     this.clickThroughUrl,
+    this.adLengthInSeconds,
     this.durationMs,
+    this.title,
+    this.description,
   });
 }
 
@@ -186,6 +245,12 @@ class SessionAdState {
   final String? message;
   final List<SessionAdInfo> sessionAds;
   final List<SessionAdInfo> ads;
+  final SessionOpportunityInfo? opportunity;
+
+  /// True when the server explicitly returned sessionAds=null (a transient gap
+  /// between polls). Used by [mergeAdState] to decide whether to restore the
+  /// previous ad list — see OpenNOW's serverSentEmptyAds.
+  final bool? serverSentEmptyAds;
 
   const SessionAdState({
     required this.isAdsRequired,
@@ -195,6 +260,65 @@ class SessionAdState {
     this.message,
     required this.sessionAds,
     required this.ads,
+    this.opportunity,
+    this.serverSentEmptyAds,
+  });
+
+  SessionAdState copyWith({
+    bool? isAdsRequired,
+    bool? sessionAdsRequired,
+    bool? isQueuePaused,
+    int? gracePeriodSeconds,
+    String? message,
+    List<SessionAdInfo>? sessionAds,
+    List<SessionAdInfo>? ads,
+    SessionOpportunityInfo? opportunity,
+    bool? serverSentEmptyAds,
+  }) {
+    return SessionAdState(
+      isAdsRequired: isAdsRequired ?? this.isAdsRequired,
+      sessionAdsRequired: sessionAdsRequired ?? this.sessionAdsRequired,
+      isQueuePaused: isQueuePaused ?? this.isQueuePaused,
+      gracePeriodSeconds: gracePeriodSeconds ?? this.gracePeriodSeconds,
+      message: message ?? this.message,
+      sessionAds: sessionAds ?? this.sessionAds,
+      ads: ads ?? this.ads,
+      opportunity: opportunity ?? this.opportunity,
+      serverSentEmptyAds: serverSentEmptyAds ?? this.serverSentEmptyAds,
+    );
+  }
+}
+
+/// Request to report an ad lifecycle event (port of SessionAdReportRequest).
+class SessionAdReportRequest {
+  final String? token;
+  final String? streamingBaseUrl;
+  final String? serverIp;
+  final String zone;
+  final String sessionId;
+  final String? clientId;
+  final String? deviceId;
+  final String adId;
+  final SessionAdAction action;
+  final int? clientTimestamp;
+  final int? watchedTimeInMs;
+  final int? pausedTimeInMs;
+  final String? cancelReason;
+
+  const SessionAdReportRequest({
+    this.token,
+    this.streamingBaseUrl,
+    this.serverIp,
+    required this.zone,
+    required this.sessionId,
+    this.clientId,
+    this.deviceId,
+    required this.adId,
+    required this.action,
+    this.clientTimestamp,
+    this.watchedTimeInMs,
+    this.pausedTimeInMs,
+    this.cancelReason,
   });
 }
 
@@ -278,6 +402,61 @@ class SessionInfo {
     this.clientId,
     this.deviceId,
   });
+
+  /// Sentinel for nullable copyWith fields that need to be null-able.
+  static const Object _unset = Object();
+
+  SessionInfo copyWith({
+    String? sessionId,
+    String? appId,
+    int? status,
+    int? queuePosition,
+    int? seatSetupStep,
+    Object? adState = _unset,
+    String? zone,
+    String? streamingBaseUrl,
+    String? serverIp,
+    String? signalingServer,
+    String? signalingUrl,
+    String? gpuType,
+    int? appLaunchMode,
+    bool? enablePersistingInGameSettings,
+    List<String>? rtspsEndpoints,
+    List<IceServer>? iceServers,
+    Object? mediaConnectionInfo = _unset,
+    NegotiatedStreamProfile? negotiatedStreamProfile,
+    String? clientId,
+    String? deviceId,
+  }) {
+    return SessionInfo(
+      sessionId: sessionId ?? this.sessionId,
+      appId: appId ?? this.appId,
+      status: status ?? this.status,
+      queuePosition: queuePosition ?? this.queuePosition,
+      seatSetupStep: seatSetupStep ?? this.seatSetupStep,
+      adState: identical(adState, _unset)
+          ? this.adState
+          : adState as SessionAdState?,
+      zone: zone ?? this.zone,
+      streamingBaseUrl: streamingBaseUrl ?? this.streamingBaseUrl,
+      serverIp: serverIp ?? this.serverIp,
+      signalingServer: signalingServer ?? this.signalingServer,
+      signalingUrl: signalingUrl ?? this.signalingUrl,
+      gpuType: gpuType ?? this.gpuType,
+      appLaunchMode: appLaunchMode ?? this.appLaunchMode,
+      enablePersistingInGameSettings:
+          enablePersistingInGameSettings ?? this.enablePersistingInGameSettings,
+      rtspsEndpoints: rtspsEndpoints ?? this.rtspsEndpoints,
+      iceServers: iceServers ?? this.iceServers,
+      mediaConnectionInfo: identical(mediaConnectionInfo, _unset)
+          ? this.mediaConnectionInfo
+          : mediaConnectionInfo as MediaConnectionInfo?,
+      negotiatedStreamProfile:
+          negotiatedStreamProfile ?? this.negotiatedStreamProfile,
+      clientId: clientId ?? this.clientId,
+      deviceId: deviceId ?? this.deviceId,
+    );
+  }
 }
 
 class ActiveSessionInfo {
@@ -419,4 +598,62 @@ class SessionHelpers {
   static bool isSessionReadyForConnectStatus(int status) {
     return status == 2 || status == 3;
   }
+}
+
+/// Port of OpenNOW's getSessionAdItems (sessionAds preferred, then ads).
+List<SessionAdInfo> getSessionAdItems(SessionAdState? adState) =>
+    adState?.sessionAds ?? adState?.ads ?? const [];
+
+/// Port of OpenNOW's isSessionAdsRequired.
+bool isSessionAdsRequired(SessionAdState? adState) =>
+    adState?.sessionAdsRequired ?? adState?.isAdsRequired ?? false;
+
+/// Port of OpenNOW's getSessionAdOpportunity.
+SessionOpportunityInfo? getSessionAdOpportunity(SessionAdState? adState) =>
+    adState?.opportunity;
+
+/// Port of OpenNOW's isSessionQueuePaused.
+bool isSessionQueuePaused(SessionAdState? adState) =>
+    getSessionAdOpportunity(adState)?.queuePaused ??
+    adState?.isQueuePaused ??
+    false;
+
+/// Port of OpenNOW's getSessionAdGracePeriodSeconds.
+int? getSessionAdGracePeriodSeconds(SessionAdState? adState) =>
+    getSessionAdOpportunity(adState)?.gracePeriodSeconds ??
+    adState?.gracePeriodSeconds;
+
+/// Port of OpenNOW's queueAds.mergeAdState.
+///
+/// The server only populates `sessionAds` in the first poll after session
+/// creation. Later polls return sessionAdsRequired=true but sessionAds=null
+/// (serverSentEmptyAds=true), which would otherwise produce an empty ad list.
+/// Preserve the ad list from the most recent poll that had URLs so the ad
+/// player can continue. Do NOT restore when serverSentEmptyAds is false —
+/// that signals an explicit client-side clear after a rejected finish action.
+SessionAdState? mergeAdState(SessionAdState? previous, SessionAdState? next) {
+  if (next == null) return previous;
+  if (isSessionAdsRequired(next) &&
+      next.serverSentEmptyAds == true &&
+      getSessionAdItems(next).isEmpty &&
+      (previous != null && previous.sessionAds.isNotEmpty)) {
+    return next.copyWith(sessionAds: previous.sessionAds, ads: previous.ads);
+  }
+  return next;
+}
+
+/// Port of OpenNOW's queueAds.mergePolledSessionState.
+SessionInfo mergePolledSessionState(SessionInfo previous, SessionInfo next) {
+  final appLaunchMode = next.appLaunchMode ?? previous.appLaunchMode;
+  final appId = next.appId ?? previous.appId;
+  if (SessionHelpers.isSessionReadyForConnectStatus(next.status)) {
+    return next.copyWith(appId: appId, appLaunchMode: appLaunchMode);
+  }
+  return next.copyWith(
+    appId: appId,
+    appLaunchMode: appLaunchMode,
+    adState: mergeAdState(previous.adState, next.adState),
+    mediaConnectionInfo:
+        next.mediaConnectionInfo ?? previous.mediaConnectionInfo,
+  );
 }

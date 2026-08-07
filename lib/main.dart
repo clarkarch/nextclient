@@ -1,8 +1,10 @@
+import 'dart:async' show unawaited;
 import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:io' show File, Platform;
 import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
+import 'package:fvp/fvp.dart' as fvp;
 import 'package:gfn_core/gfn_core.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -15,8 +17,73 @@ import 'app.dart';
 import 'state/session_controller.dart';
 import 'state/user_settings.dart';
 
+/// Set by the stream page while a stream is live. Invoked when the OS asks
+/// the window to close (Alt+F4 / WM close / title-bar X) so the cloud session,
+/// transports, pointer lock and OS fullscreen are torn down while the engine
+/// is still alive — closing the window under the active native video stack
+/// crashes the Linux engine (SIGSEGV, corrupted double-linked list).
+Future<void> Function()? appCloseHook;
+
+/// Opaque owner token for [appCloseHook]: only the page that installed the
+/// hook clears it, so a popped page can't clobber a newer page's hook.
+Object? appCloseOwner;
+
+/// True once a window-close is being handled, so the "close" event re-emitted
+/// by [WindowManager.destroy] (Linux/Windows re-fire it while the window goes
+/// away) can't re-enter the handler.
+bool _windowClosing = false;
+
+/// Listens for the native window close request (Alt+F4 / WM close / X) and
+/// runs the app's teardown before the engine dies.
+final _closeWindowListener = _WindowCloseListener();
+
+class _WindowCloseListener with WindowListener {
+  @override
+  void onWindowClose() {
+    unawaited(_handleWindowClose());
+  }
+}
+
+Future<void> _handleWindowClose() async {
+  if (_windowClosing) return;
+  _windowClosing = true;
+  try {
+    // Tear the stream down (stop session, dispose transports, leave
+    // fullscreen + pointer lock). Capped so a hung server call can't keep
+    // the window open forever.
+    final hook = appCloseHook;
+    if (hook != null) {
+      await Future.any<void>([
+        hook(),
+        Future<void>.delayed(const Duration(seconds: 3)),
+      ]);
+    }
+  } catch (_) {
+    // Never let a teardown failure keep the window open.
+  } finally {
+    windowManager.removeListener(_closeWindowListener);
+    try {
+      await windowManager.destroy();
+    } catch (_) {
+      // The engine is going down regardless.
+    }
+  }
+}
+
+/// Intercepts the native window close so the app's teardown runs before the
+/// engine dies. Must be called after [WindowManager.ensureInitialized].
+Future<void> installWindowCloseHandler() async {
+  await windowManager.setPreventClose(true);
+  windowManager.addListener(_closeWindowListener);
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Use the fvp (libmdk) backend for video_player so ads/creative play on
+  // Windows, Linux, macOS, iOS and Android. Official video_player has no
+  // desktop implementation; fvp supplies it. Must be a direct dependency and
+  // registered before any player is created.
+  fvp.registerWith();
   // Desktop-only plugins (pointer lock, window management). Guarded so the
   // app boots on mobile/web where the plugins have no implementation — an
   // unguarded await throws MissingPluginException before runApp and the app
@@ -30,6 +97,12 @@ Future<void> main() async {
     // Desktop window management (hide title bar). No-op on unsupported
     // platforms.
     await windowManager.ensureInitialized();
+    // Intercept window close (Alt+F4 / WM close / title-bar X) so the cloud
+    // session and native transports are torn down gracefully BEFORE the
+    // window actually closes. Closing the window mid-stream destroys the
+    // engine under the live native video stack, which crashes on Linux
+    // (SIGSEGV / corrupted double-linked list).
+    await installWindowCloseHandler();
   }
   runApp(const DebugShellApp());
 }

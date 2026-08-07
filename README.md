@@ -2,6 +2,14 @@
 
 A new Flutter project.
 
+## Build notes
+
+- **Custom libwebrtc wrapper** (VAAPI decode + zero-copy render): see
+  [`native/README.md`](native/README.md) for the incremental rebuild workflow,
+  and [`vaapi_patch/README.md`](vaapi_patch/README.md) for the patch itself.
+  The release app ships the locally built `libwebrtc.so`, vendored into
+  `packages/flutter_webrtc/third_party/libwebrtc/`.
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.

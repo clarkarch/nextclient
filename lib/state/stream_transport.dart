@@ -1,8 +1,10 @@
-import 'package:flutter/foundation.dart' show ValueChanged, ValueNotifier;
+import 'package:flutter/foundation.dart'
+    show ValueChanged, ValueListenable, ValueNotifier;
 import 'package:flutter/services.dart' show KeyEvent;
 import 'package:flutter/widgets.dart' show Widget;
 import 'package:gfn_core/gfn_core.dart';
 
+import 'gfn_cursor_overlay.dart' show GfnCursorOverlayUpdate;
 import 'nvst_video_transport.dart';
 import 'stream_stats.dart';
 import 'user_settings.dart';
@@ -58,6 +60,17 @@ abstract class StreamTransport {
   /// Builds the video surface widget (placeholder is shown until frames
   /// arrive). The stream page wraps this in its input Listener layers.
   Widget buildVideoView({required Widget placeholder});
+
+  /// Server cursor-overlay updates from the WebRTC `cursor_channel`
+  /// (predefined styles + custom bitmaps). Null on transports without a
+  /// cursor channel (NVST), where cursor rendering stays server-side.
+  ValueListenable<GfnCursorOverlayUpdate?>? get cursorOverlay => null;
+
+  /// Bytes currently queued in the transport's reliable input channel (SCTP
+  /// backpressure). Null when the transport has no such telemetry; the
+  /// adaptive mouse sampler uses it to back off its coalesce interval under
+  /// pressure.
+  int? get inputQueueBufferedBytes => null;
 
   // --- Input (mirrors the WebRtcStreamSession input API) --------------------
 

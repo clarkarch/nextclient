@@ -3,10 +3,12 @@ import 'dart:ffi' as ffi;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/services.dart' show KeyEvent;
 import 'package:flutter/widgets.dart';
 import 'package:gfn_core/gfn_core.dart';
 
+import 'gfn_cursor_overlay.dart' show GfnCursorOverlayUpdate;
 import 'gfn_sdp_munger.dart';
 import 'nvst_bridge_ffi.dart';
 import 'stream_stats.dart';
@@ -74,6 +76,16 @@ class NvstVideoTransport implements StreamTransport {
   int? get videoHeight => _videoHeight;
   @override
   bool get rendererHasVideo => frameImage.value != null;
+
+  /// No WebRTC cursor_channel on the NVST path — cursor rendering stays
+  /// server-side.
+  @override
+  ValueListenable<GfnCursorOverlayUpdate?>? get cursorOverlay => null;
+
+  /// The NVST path has no SCTP buffered-amount telemetry; the adaptive mouse
+  /// sampler sees no backpressure signal.
+  @override
+  int? get inputQueueBufferedBytes => null;
 
   @override
   Future<void> start() async {
@@ -186,9 +198,15 @@ class NvstVideoTransport implements StreamTransport {
     try {
       final now = DateTime.now();
       final frames = bridge.framesDecoded();
+      // Same minimum-window rule as StreamStatsSnapshot.fromStats: a
+      // sub-100ms poll (timer jitter, back-to-back polls) makes the frame
+      // delta meaningless — a 1-frame burst in 1ms reads as 1000 fps.
+      final elapsedMs = now.difference(_lastStatsAt).inMilliseconds;
       final deltaSec =
-          (now.difference(_lastStatsAt).inMilliseconds / 1000).clamp(0.001, 5.0);
-      final decodeFps = (frames - _lastFramesDecoded) / deltaSec;
+          elapsedMs < 100 ? 0.0 : (elapsedMs / 1000).clamp(0.0, 5.0);
+      final decodeFps = deltaSec > 0
+          ? ((frames - _lastFramesDecoded) / deltaSec).clamp(0.0, 240.0)
+          : 0.0;
       _lastFramesDecoded = frames;
       _lastStatsAt = now;
 
@@ -202,8 +220,8 @@ class NvstVideoTransport implements StreamTransport {
         rendererHasVideo: rendererHasVideo,
         framesReceived: frames,
         framesDecoded: frames,
-        decodeFps: decodeFps.clamp(0, 240).toDouble(),
-        receivedFps: decodeFps.clamp(0, 240).toDouble(),
+        decodeFps: decodeFps.toDouble(),
+        receivedFps: decodeFps.toDouble(),
         videoWidth: _videoWidth,
         videoHeight: _videoHeight,
         codecMime: null,

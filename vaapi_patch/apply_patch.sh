@@ -26,10 +26,15 @@ if [[ ! -f "$WRAPPER/BUILD.gn" || ! -d "$WRAPPER/src" ]]; then
   exit 1
 fi
 
-echo "==> Copying decoder sources into $WRAPPER/src/"
+echo "==> Copying decoder + zero-copy sources into $WRAPPER/src/"
 cp "$HERE/vaapi_h264_bitstream.h"   "$WRAPPER/src/"
 cp "$HERE/vaapi_video_decoder.h"    "$WRAPPER/src/"
 cp "$HERE/vaapi_video_decoder.cc"   "$WRAPPER/src/"
+cp "$HERE/dmabuf_video_buffer.h"    "$WRAPPER/src/"
+cp "$HERE/dmabuf_video_buffer.cc"   "$WRAPPER/src/"
+cp "$HERE/rtc_video_frame.h"        "$WRAPPER/include/"
+cp "$HERE/rtc_video_frame_impl.h"   "$WRAPPER/src/"
+cp "$HERE/rtc_video_frame_impl.cc"  "$WRAPPER/src/"
 
 echo "==> Patching BUILD.gn"
 python3 "$HERE/patch_build_gn.py" "$WRAPPER/BUILD.gn"

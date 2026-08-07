@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:math' show max, min;
 import 'dart:typed_data';
 
@@ -8,6 +9,7 @@ import 'package:flutter/widgets.dart' show Widget;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:gfn_core/gfn_core.dart';
 
+import 'gfn_cursor_overlay.dart';
 import 'gfn_input_protocol.dart';
 import 'gfn_keyboard_mapping.dart';
 import 'process_env.dart' show applyDecoderBackend, applyRendererBackend;
@@ -61,8 +63,14 @@ class WebRtcStreamSession implements StreamTransport {
   @override
   int? get videoHeight => videoRenderer.videoHeight;
 
+  /// True once the renderer is actually receiving frames: either the Dart
+  /// attach flag is set, or the renderer has reported a frame size
+  /// (didTextureChangeVideoSize fires when the C++ renderer's OnFrame stores a
+  /// frame). The stock renderVideo flag alone has been observed false on the
+  /// GL path even while frames flow, so it can't be the only signal.
   @override
-  bool get rendererHasVideo => videoRenderer.value.renderVideo;
+  bool get rendererHasVideo =>
+      videoRenderer.value.renderVideo || videoRenderer.value.width > 0;
 
   @override
   Widget buildVideoView({required Widget placeholder}) {
@@ -82,7 +90,20 @@ class WebRtcStreamSession implements StreamTransport {
   final List<IceCandidatePayload> _queuedRemoteCandidates = [];
   RTCDataChannel? _reliableInputChannel;
   RTCDataChannel? _partiallyReliableInputChannel;
+  RTCDataChannel? _cursorChannel;
   _RiInputCapabilities _inputCaps = const _RiInputCapabilities();
+
+  /// Server cursor-overlay updates parsed from the `cursor_channel` (set only
+  /// when [UserSettings.inputCursorOverlay] is on). The stream surface
+  /// listens and renders the game's actual cursor.
+  @override
+  final ValueNotifier<GfnCursorOverlayUpdate?> cursorOverlay =
+      ValueNotifier(null);
+
+  /// SCTP bytes queued on the reliable input channel, read by the stream
+  /// surface's adaptive mouse sampler to back off under backpressure.
+  @override
+  int? get inputQueueBufferedBytes => _reliableInputChannel?.bufferedAmount;
 
   // --- Input transport state ---
   final GfnInputEncoder _inputEncoder = GfnInputEncoder();
@@ -90,6 +111,15 @@ class WebRtcStreamSession implements StreamTransport {
   bool _reliableInputOpen = false;
   bool _partiallyReliableInputOpen = false;
   Timer? _inputHeartbeatTimer;
+
+  /// Fallback so a resumed session can't strand input: NVIDIA's streamer sends
+  /// the NVST input handshake once per *session*, so a resumed (re-claimed)
+  /// session may never re-send it — leaving `_inputReady` false and every
+  /// input packet silently dropped (dead mouse on resume). If no handshake
+  /// arrives within [_inputReadyFallbackDelay] of the reliable channel
+  /// opening, assume protocol v2 (the official default) and go live anyway.
+  Timer? _inputReadyFallbackTimer;
+  static const Duration _inputReadyFallbackDelay = Duration(seconds: 3);
 
   /// Connected-gamepad bitmap: bit i = gamepad i connected, bit (i+8) = the
   /// device is XInput/xinput-style (port of OpenNOW's `gamepadBitmap`).
@@ -110,6 +140,10 @@ class WebRtcStreamSession implements StreamTransport {
   static const int _officialMinBitrateKbps = 4000;
   static const int _highResolutionPixelCount = 2764800;
   static const int _highBitratePacingThresholdKbps = 42000;
+
+  /// b=AS value used in constant-quality mode: far above any GFN encode rate,
+  /// so the SDP bandwidth attribute stops being a practical cap.
+  static const int _uncappedBitrateKbps = 200000;
 
   /// Fires with human-readable connection milestones (for the session panel).
   final ValueChanged<String>? onStatus;
@@ -175,6 +209,16 @@ class WebRtcStreamSession implements StreamTransport {
         videoRenderer.srcObject = _remoteStream;
         _established = true;
         _log('Remote video track attached');
+      } else {
+        // Unified-plan servers can deliver a track with no stream association.
+        // The GL renderer attaches the track natively and keeps compositing
+        // frames into the texture (renderVideo stays false in Dart but the
+        // view renders the texture once width>0 is reported). Still mark the
+        // session established so a post-handshake signaling close is treated
+        // as expected, not as a failure.
+        _established = true;
+        _log('Remote video track arrived WITHOUT a stream'
+            ' (${event.track.id}) — native renderer attaches it directly');
       }
     };
 
@@ -297,10 +341,12 @@ class WebRtcStreamSession implements StreamTransport {
       //    set it locally. We send before ICE gathering completes and let
       //    trickle handle the rest, exactly like OpenNOW.
       var answer = await pc.createAnswer();
-      final munged = _mungeAnswerSdp(
-        answer.sdp ?? '',
-        streamSettings.maxBitrateMbps * 1000,
-      );
+      // Constant quality also lifts the SDP b=AS cap so the server isn't
+      // limited to the slider ceiling on top of the disabled BWE.
+      final answerCapKbps = settings.optConstantQuality
+          ? _uncappedBitrateKbps
+          : streamSettings.maxBitrateMbps * 1000;
+      final munged = _mungeAnswerSdp(answer.sdp ?? '', answerCapKbps);
       answer = RTCSessionDescription(munged, 'answer');
       await pc.setLocalDescription(answer);
 
@@ -336,6 +382,7 @@ class WebRtcStreamSession implements StreamTransport {
         minBitrateKbps: settings.optMinBitrateKbps,
         enableNack: settings.optEnableNack,
         enableFec: settings.optEnableFec,
+        constantQuality: settings.optConstantQuality,
       );
 
       await _signaling?.sendAnswer(
@@ -379,28 +426,36 @@ class WebRtcStreamSession implements StreamTransport {
     try {
       _reliableInputChannel?.close();
       _partiallyReliableInputChannel?.close();
+      _cursorChannel?.close();
     } catch (_) {}
     _reliableInputChannel = null;
     _partiallyReliableInputChannel = null;
+    _cursorChannel = null;
 
     try {
       final reliable = await pc.createDataChannel(
         'input_channel_v1',
         RTCDataChannelInit()..ordered = true,
       );
+      // Surface low-threshold crossings (bufferedAmount drops below 64 KB) so
+      // the adaptive mouse sampler sees real SCTP pressure instead of 0.
+      reliable.bufferedAmountLowThreshold = 64 * 1024;
       reliable.onDataChannelState = (state) {
         if (state == RTCDataChannelState.RTCDataChannelOpen) {
           _reliableInputOpen = true;
           _log('Reliable input channel open');
+          _armInputReadyFallback();
         } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
           _reliableInputOpen = false;
           _inputReady = false;
+          _inputReadyFallbackTimer?.cancel();
+          _inputReadyFallbackTimer = null;
           _inputHeartbeatTimer?.cancel();
           _log('Reliable input channel closed');
         }
       };
       reliable.onMessage = (event) {
-        if (event.isBinary) _onInputChannelMessage(event.binary);
+        _onInputChannelMessage(_messageBytes(event));
       };
       _reliableInputChannel = reliable;
 
@@ -422,12 +477,78 @@ class WebRtcStreamSession implements StreamTransport {
         }
       };
       _partiallyReliableInputChannel = pr;
+
+      // In-game cursor overlay (OpenNOW's cursor_channel): the server streams
+      // the game's actual cursor (predefined styles + custom bitmaps) so the
+      // client can render it instead of a plain hidden/arrow OS cursor.
+      if (settings.inputCursorOverlay) {
+        final cursor = await pc.createDataChannel(
+          'cursor_channel',
+          RTCDataChannelInit()..ordered = true,
+        );
+        cursor.onDataChannelState = (state) {
+          if (state == RTCDataChannelState.RTCDataChannelOpen) {
+            _log('Cursor channel open');
+          } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
+            _log('Cursor channel closed');
+          }
+        };
+        cursor.onMessage = (event) {
+          _handleCursorMessage(_messageBytes(event));
+        };
+        _cursorChannel = cursor;
+      }
     } catch (e) {
       // Data channels are advisory for media; don't fail the handshake over
       // them, but surface it in the log.
       _log('Data channel setup failed (continuing): $e');
     }
   }
+
+  /// Normalizes a data-channel message to bytes. The native plugin flags a
+  /// message binary or text by the wire type; the server can deliver either
+  /// (OpenNOW's `toBytes` accepts string | Blob | ArrayBuffer). Text payloads
+  /// are UTF-8 encoded back to bytes so the handshake / cursor parsers see
+  /// the same byte layout either way.
+  ///
+  /// NOTE: text round-tripping is lossless only for ASCII-safe payloads (the
+  /// handshake `[0x02 0x0e …]` and predefined cursor ids qualify); binary
+  /// cursor wire bytes (hotspots, positions ≥ 0x80, base64 image payloads)
+  /// are mangled once by the platform channel's string conversion, so text
+  /// delivery of those is best-effort. Binary is the authoritative path
+  /// (OpenNOW sets `binaryType = "arraybuffer"`); text handling exists so a
+  /// mis-flagged handshake can't dead the whole input session.
+  Uint8List _messageBytes(RTCDataChannelMessage event) {
+    if (event.isBinary) return event.binary;
+    return Uint8List.fromList(utf8.encode(event.text));
+  }
+
+  /// Parses one `cursor_channel` message and publishes it to [cursorOverlay]
+  /// for the stream surface (port of OpenNOW's cursorChannel handler).
+  void _handleCursorMessage(Uint8List bytes) {
+    if (_disposed) return; // a late message must not touch the disposed notifier
+    _cursorMessagesReceived++;
+    final update = parseGfnCursorChannelMessage(bytes);
+    if (update == null) {
+      _cursorMessagesIgnored++;
+      log.log(LogLevel.debug, 'webrtc', 'Cursor message ignored (${bytes.length} bytes)');
+      return;
+    }
+    _cursorMessagesParsed++;
+    cursorOverlay.value = update;
+  }
+
+  /// Mouse movement packets actually handed to the transport (only counted
+  /// once input is ready, so the on-exit log can tell a dead handshake from a
+  /// dead surface).
+  int _mousePacketsSent = 0;
+
+  /// Cursor-channel diagnostics for the teardown log: received vs parsed vs
+  /// ignored, so a silent cursor channel (no messages at all) is distinct
+  /// from a failing parser.
+  int _cursorMessagesReceived = 0;
+  int _cursorMessagesParsed = 0;
+  int _cursorMessagesIgnored = 0;
 
   // ---------------------------------------------------------------------
   // Live stats polling (port of OpenNOW's setupStatsPolling + collectStats)
@@ -448,6 +569,17 @@ class WebRtcStreamSession implements StreamTransport {
       final reports = await pc.getStats();
       if (_disposed) return;
       final rendererValue = videoRenderer.value;
+      // A frame size means OnFrame delivered a frame to the renderer — the
+      // display path is live even if the Dart renderVideo flag is stale/false
+      // (observed on the GL path). Log the discrepancy once so a session that
+      // shows "· waiting" in the report can be interpreted correctly.
+      if (!rendererValue.renderVideo && rendererValue.width > 0 &&
+          !_rendererFlagLogged) {
+        _rendererFlagLogged = true;
+        _log('Renderer: frames reaching renderer '
+            '(${rendererValue.width.toInt()}x${rendererValue.height.toInt()}) '
+            'but renderVideo=false — placeholder may be showing');
+      }
       stats.value = StreamStatsSnapshot.fromStats(
         reports,
         prev: stats.value,
@@ -456,7 +588,8 @@ class WebRtcStreamSession implements StreamTransport {
         inputReady: _inputReady,
         reliableInputOpen: _reliableInputOpen,
         partiallyReliableInputOpen: _partiallyReliableInputOpen,
-        rendererHasVideo: rendererValue.renderVideo,
+        rendererHasVideo:
+            rendererValue.renderVideo || rendererValue.width > 0,
       );
     } catch (e) {
       log.log(LogLevel.debug, 'webrtc', 'getStats failed: $e');
@@ -466,6 +599,9 @@ class WebRtcStreamSession implements StreamTransport {
   }
 
   String? _lastConnectionState;
+
+  /// One-shot guard for the renderVideo-vs-frames discrepancy log above.
+  bool _rendererFlagLogged = false;
 
   // ---------------------------------------------------------------------
   // Input transport (port of OpenNOW's onInputHandshakeMessage + heartbeat)
@@ -479,7 +615,15 @@ class WebRtcStreamSession implements StreamTransport {
   void _onInputChannelMessage(Uint8List bytes) {
     if (bytes.length < 2) return;
     if (_inputReady) {
-      // Post-handshake messages are haptics/telemetry — ignore for now.
+      // Post-handshake messages are haptics/telemetry — ignore for now, but
+      // log once when a *real* handshake arrives after the fallback timer
+      // already took input live, so a version mismatch is diagnosable.
+      if (bytes[0] == 0x0e ||
+          (bytes.length >= 2 &&
+              ByteData.sublistView(bytes).getUint16(0, Endian.little) == 526)) {
+        log.log(LogLevel.debug, 'webrtc',
+            'Late input handshake after input was already ready (fallback)');
+      }
       return;
     }
 
@@ -498,6 +642,8 @@ class WebRtcStreamSession implements StreamTransport {
 
     _inputEncoder.clock.start();
     _inputReady = true;
+    _inputReadyFallbackTimer?.cancel();
+    _inputReadyFallbackTimer = null;
     _inputEncoder.setProtocolVersion(version);
     _log('Input handshake complete (protocol v$version) — starting heartbeat');
     _startInputHeartbeat();
@@ -506,6 +652,27 @@ class WebRtcStreamSession implements StreamTransport {
     if (_gamepadTouched) {
       _sendLatchedGamepadState();
     }
+  }
+
+  /// Starts the resume-safety fallback: if the server doesn't send the NVST
+  /// input handshake within the grace window (resumed sessions may not get
+  /// one), go input-ready with the default protocol v2 anyway so mouse,
+  /// keyboard and gamepad aren't silently dead.
+  void _armInputReadyFallback() {
+    _inputReadyFallbackTimer?.cancel();
+    _inputReadyFallbackTimer = Timer(_inputReadyFallbackDelay, () {
+      _inputReadyFallbackTimer = null;
+      if (_inputReady || _disposed) return;
+      _inputEncoder.clock.start();
+      _inputReady = true;
+      _log('No input handshake within '
+          '${_inputReadyFallbackDelay.inSeconds}s — assuming protocol v2'
+          ' (resumed session fallback)');
+      _startInputHeartbeat();
+      if (_gamepadTouched) {
+        _sendLatchedGamepadState();
+      }
+    });
   }
 
   void _startInputHeartbeat() {
@@ -610,6 +777,7 @@ class WebRtcStreamSession implements StreamTransport {
   @override
   void sendMouseMove({required int dx, required int dy}) {
     if (!_inputReady) return;
+    _mousePacketsSent++;
     final payload = _inputEncoder.encodeMouseMove(
       dx: dx,
       dy: dy,
@@ -1002,12 +1170,17 @@ class WebRtcStreamSession implements StreamTransport {
     int minBitrateKbps = 4000,
     bool enableNack = true,
     bool enableFec = true,
+    bool constantQuality = false,
   }) {
     final maxBitrate = max(_officialMinBitrateKbps, maxBitrateKbps.floor());
-    final startupBitrate = max(
-      _officialMinBitrateKbps,
-      (maxBitrate / 4).round(),
-    );
+    // Constant quality starts the encoder at the full budget (no slow ramp
+    // from max/4) — there's no adaptive BWE to ramp up against.
+    final startupBitrate = constantQuality
+        ? maxBitrate
+        : max(
+            _officialMinBitrateKbps,
+            (maxBitrate / 4).round(),
+          );
     final isHighFps = fps >= 90;
     final is90Fps = fps == 90;
     final is120Fps = fps == 120;
@@ -1250,8 +1423,11 @@ class WebRtcStreamSession implements StreamTransport {
       'a=vqos.bw.minimumBitrateKbps:$minBitrateKbps',
       'a=vqos.bw.peakBitrateKbps:$maxBitrate',
       'a=vqos.bw.serverPeakBitrateKbps:$maxBitrate',
-      'a=vqos.bw.enableBandwidthEstimation:1',
-      'a=vqos.bw.disableBitrateLimit:0',
+      // Constant quality: disable the server's adaptive bandwidth estimation
+      // and bitrate limiting so the encode bitrate holds at the max even in
+      // complex scenes (no quality shed on feedback). Default: adaptive.
+      'a=vqos.bw.enableBandwidthEstimation:${constantQuality ? 0 : 1}',
+      'a=vqos.bw.disableBitrateLimit:${constantQuality ? 1 : 0}',
       'a=vqos.grc.maximumBitrateKbps:$maxBitrate',
       'a=vqos.grc.enable:0',
       'a=video.maxNumReferenceFrames:4',
@@ -1307,14 +1483,20 @@ class WebRtcStreamSession implements StreamTransport {
 
     _inputHeartbeatTimer?.cancel();
     _inputHeartbeatTimer = null;
+    _inputReadyFallbackTimer?.cancel();
+    _inputReadyFallbackTimer = null;
     _inputReady = false;
 
     try {
       _reliableInputChannel?.close();
       _partiallyReliableInputChannel?.close();
+      _cursorChannel?.close();
     } catch (_) {}
     _reliableInputChannel = null;
     _partiallyReliableInputChannel = null;
+    _cursorChannel = null;
+    cursorOverlay.value = null;
+    cursorOverlay.dispose();
 
     // Detach the renderer before the media graph is torn down.
     try {
@@ -1331,6 +1513,17 @@ class WebRtcStreamSession implements StreamTransport {
         log.log(LogLevel.debug, 'webrtc', 'Remote stream dispose skipped: $e');
       }
     }
+
+    // Input-teardown diagnostics: distinguish a dead handshake (0 packets
+    // ever sent) from a dead surface, and a silent cursor channel from a
+    // parser failure — the two failure modes look identical in-game.
+    log.log(
+      LogLevel.info,
+      'webrtc',
+      'Input teardown: mousePackets=$_mousePacketsSent '
+          'cursorMessages=$_cursorMessagesReceived '
+          '(parsed=$_cursorMessagesParsed ignored=$_cursorMessagesIgnored)',
+    );
 
     final pc = _pc;
     _pc = null;

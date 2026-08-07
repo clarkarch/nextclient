@@ -2,7 +2,7 @@ import 'dart:math' show max, min;
 
 import 'package:gfn_core/gfn_core.dart';
 
-import 'user_settings.dart' show StreamPriority;
+import 'user_settings.dart' show StreamPriority, StreamRecoveryProfile;
 
 /// Shared NVST SDP helpers used by every [StreamTransport] implementation.
 ///
@@ -783,12 +783,22 @@ class GfnSdpMunger {
     required IceCredentials credentials,
     required RiInputCapabilities caps,
     StreamPriority priority = StreamPriority.quality,
+    bool lowLatencyMode = false,
+    StreamRecoveryProfile recoveryProfile = StreamRecoveryProfile.smooth,
+    int minBitrateKbps = 4000,
+    bool enableNack = true,
+    bool enableFec = true,
+    bool constantQuality = false,
   }) {
     final maxBitrate = max(_officialMinBitrateKbps, maxBitrateKbps.floor());
-    final startupBitrate = max(
-      _officialMinBitrateKbps,
-      (maxBitrate / 4).round(),
-    );
+    // Constant quality starts the encoder at the full budget (no slow ramp
+    // from max/4) — there's no adaptive BWE to ramp up against.
+    final startupBitrate = constantQuality
+        ? maxBitrate
+        : max(
+            _officialMinBitrateKbps,
+            (maxBitrate / 4).round(),
+          );
     final isHighFps = fps >= 90;
     final is90Fps = fps == 90;
     final is120Fps = fps == 120;
@@ -803,8 +813,17 @@ class GfnSdpMunger {
         : 8;
     final minTargetFrameTimeUs = max(
       1000,
-      (1000000 * 95 ~/ (max(1, fps) * 100)),
+      // Low-latency mode tightens the server's target frame time (95% -> 60%)
+      // so the encoder/sender holds less buffered video ahead of the display.
+      (1000000 * (lowLatencyMode ? 60 : 95) ~/ (max(1, fps) * 100)),
     );
+    final (nackQueueLength, nackQueueMaxPackets, nackMaxPacketCount) =
+        switch (recoveryProfile) {
+      StreamRecoveryProfile.smooth => (1024, 512, 25),
+      StreamRecoveryProfile.balanced => (512, 256, 16),
+      StreamRecoveryProfile.latency => (256, 128, 8),
+    };
+    final preemptiveIdr = recoveryProfile == StreamRecoveryProfile.latency;
     final hidDeviceMask = caps.hidDeviceMask;
     final enablePartiallyReliableTransferGamepad =
         caps.enablePartiallyReliableTransferGamepad;
@@ -831,16 +850,24 @@ class GfnSdpMunger {
       'a=general.dtlsFingerprint:${credentials.fingerprint}',
       'm=video 0 RTP/AVP',
       'a=msid:fbc-video-0',
-      'a=vqos.fec.rateDropWindow:10',
-      'a=vqos.fec.minRequiredFecPackets:2',
-      'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
-      'a=vqos.fec.repairMinPercent:5',
-      'a=vqos.fec.repairPercent:5',
-      'a=vqos.fec.repairMaxPercent:35',
       'a=vqos.dynamicStreamingMode:${allowResolutionScaling ? 1 : 0}',
       'a=vqos.drc.enable:0',
       'a=vqos.calculateAvgVideoStreamingBitrate:1',
     ];
+
+    if (enableFec) {
+      // Match the stable Android-native recovery profile. Large FEC/NACK
+      // bursts amplify congestion after packet loss instead of letting BWE
+      // recover.
+      lines.addAll([
+        'a=vqos.fec.rateDropWindow:10',
+        'a=vqos.fec.minRequiredFecPackets:2',
+        'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
+        'a=vqos.fec.repairMinPercent:5',
+        'a=vqos.fec.repairPercent:5',
+        'a=vqos.fec.repairMaxPercent:35',
+      ]);
+    }
 
     if (dfcEnable) {
       lines.addAll([
@@ -875,8 +902,8 @@ class GfnSdpMunger {
       'a=video.framePacing.mode:2',
       'a=video.framePacing.pid.minTargetFrameTimeUs:$minTargetFrameTimeUs',
       'a=bwe.useOwdCongestionControl:1',
-      'a=video.enableRtpNack:1',
-      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:200',
+      'a=video.enableRtpNack:${enableNack ? 1 : 0}',
+      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:${lowLatencyMode ? 100 : 200}',
       'a=vqos.drc.bitrateIirFilterFactor:18',
       'a=video.packetSize:1140',
       'a=packetPacing.version:3',
@@ -935,12 +962,22 @@ class GfnSdpMunger {
 
     lines.addAll([
       'a=packetPacing.numGroups:${is120Fps ? 3 : 5}',
-      'a=packetPacing.maxDelayUs:1000',
+      'a=packetPacing.maxDelayUs:${lowLatencyMode ? 500 : 1000}',
       'a=packetPacing.minNumPacketsFrame:10',
-      'a=video.rtpNackQueueLength:1024',
-      'a=video.rtpNackQueueMaxPackets:512',
-      'a=video.rtpNackMaxPacketCount:25',
+      'a=video.rtpNackQueueLength:$nackQueueLength',
+      'a=video.rtpNackQueueMaxPackets:$nackQueueMaxPackets',
+      'a=video.rtpNackMaxPacketCount:$nackMaxPacketCount',
     ]);
+
+    // Latency recovery profile asks for a fresh keyframe as soon as a burst of
+    // loss hits instead of waiting on slow deep retransmits. Skipped on 240 FPS
+    // where the high-FPS block already pins the preemptive-IDR thresholds.
+    if (preemptiveIdr && !is240Fps) {
+      lines.addAll([
+        'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:1',
+        'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:1000',
+      ]);
+    }
 
     if (useHighThroughputPacing) {
       lines.add('a=vqos.drc.iirFilterFactor:100');
@@ -986,11 +1023,14 @@ class GfnSdpMunger {
       'a=video.initialBitrateKbps:$startupBitrate',
       'a=video.initialPeakBitrateKbps:$startupBitrate',
       'a=vqos.bw.maximumBitrateKbps:$maxBitrate',
-      'a=vqos.bw.minimumBitrateKbps:$_officialMinBitrateKbps',
+      'a=vqos.bw.minimumBitrateKbps:$minBitrateKbps',
       'a=vqos.bw.peakBitrateKbps:$maxBitrate',
       'a=vqos.bw.serverPeakBitrateKbps:$maxBitrate',
-      'a=vqos.bw.enableBandwidthEstimation:1',
-      'a=vqos.bw.disableBitrateLimit:0',
+      // Constant quality: disable the server's adaptive bandwidth estimation
+      // and bitrate limiting so the encode bitrate holds at the max even in
+      // complex scenes (no quality shed on feedback). Default: adaptive.
+      'a=vqos.bw.enableBandwidthEstimation:${constantQuality ? 0 : 1}',
+      'a=vqos.bw.disableBitrateLimit:${constantQuality ? 1 : 0}',
       'a=vqos.grc.maximumBitrateKbps:$maxBitrate',
       'a=vqos.grc.enable:0',
       'a=video.maxNumReferenceFrames:4',

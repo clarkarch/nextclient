@@ -50,6 +50,19 @@ class UserSettings extends ChangeNotifier {
   static const _keyOptMinBitrate = 'settings.experimental.opt.minBitrate';
   static const _keyOptNack = 'settings.experimental.opt.enableNack';
   static const _keyOptFec = 'settings.experimental.opt.enableFec';
+  static const _keyOptConstantQuality =
+      'settings.experimental.opt.constantQuality';
+  // --- Input (client-side, applied on the stream surface) ----------------
+  static const _keyInputSensitivity = 'settings.input.mouseSensitivity';
+  static const _keyInputAcceleration = 'settings.input.mouseAcceleration';
+  static const _keyInputPrecision = 'settings.input.mousePrecision';
+  static const _keyInputSamplingMs = 'settings.input.mouseSamplingMs';
+  static const _keyInputCursorOverlay = 'settings.input.cursorOverlay';
+
+  /// One-shot migration flag for the sampling default flip (adaptive ->
+  /// immediate): only the pre-existing stored 0 from the old default is
+  /// rewritten; a later explicit choice of adaptive (also 0) is left alone.
+  static const _keyInputSamplingMigrated = 'settings.input.samplingMigrated';
 
   String _resolution = '1920x1080';
   int _fps = 60;
@@ -90,6 +103,13 @@ class UserSettings extends ChangeNotifier {
   int _optMinBitrateKbps = 4000;
   bool _optEnableNack = true;
   bool _optEnableFec = true;
+  bool _optConstantQuality = false;
+  // --- Input (client-side, applied on the stream surface) ----------------
+  double _inputMouseSensitivity = 1.0;
+  int _inputMouseAcceleration = 1;
+  bool _inputMousePrecision = true;
+  int _inputMouseSamplingMs = -1; // -1 = immediate (proven path; adaptive = 0)
+  bool _inputCursorOverlay = true;
 
   UserSettings(this._prefs) {
     _load();
@@ -132,6 +152,36 @@ class UserSettings extends ChangeNotifier {
   int get optMinBitrateKbps => _optMinBitrateKbps;
   bool get optEnableNack => _optEnableNack;
   bool get optEnableFec => _optEnableFec;
+
+  /// When on, tells the server to disable its adaptive bandwidth estimation
+  /// and bitrate limiting so the encode bitrate stays at the max even during
+  /// complex scenes. Holds quality through high-motion/particle moments, but
+  /// gives up the graceful quality shed that protects a shaky link.
+  bool get optConstantQuality => _optConstantQuality;
+
+  /// Mouse sensitivity multiplier applied to every streamed delta
+  /// (0.25–4.0, 1.0 = default). Port of OpenNOW's mouseSensitivity.
+  double get inputMouseSensitivity => _inputMouseSensitivity;
+
+  /// Software mouse acceleration strength (1–150, 1 = off). The curve boosts
+  /// large fast deltas for turn speed while keeping small slow deltas precise.
+  /// Port of OpenNOW's mouseAcceleration (OpenNOW defaults to 1 = linear).
+  int get inputMouseAcceleration => _inputMouseAcceleration;
+
+  /// Sub-pixel mouse precision: fractional deltas accumulate into a residual
+  /// so micro-movements under 1 px are eventually sent instead of dropped.
+  bool get inputMousePrecision => _inputMousePrecision;
+
+  /// Mouse delta coalescing interval in ms. `<0` sends every event
+  /// immediately (minimal latency, highest packet rate), `0` adapts between
+  /// 2–20 ms from SCTP backpressure (OpenNOW's default), `>0` is a fixed
+  /// 4/8/16 ms batch.
+  int get inputMouseSamplingMs => _inputMouseSamplingMs;
+
+  /// Renders the game's actual cursor client-side via the WebRTC
+  /// `cursor_channel` (predefined styles map to OS cursors, custom bitmaps
+  /// are drawn over the video). Off = server-side cursor rendering only.
+  bool get inputCursorOverlay => _inputCursorOverlay;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -421,6 +471,50 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set optConstantQuality(bool v) {
+    if (_optConstantQuality == v) return;
+    _optConstantQuality = v;
+    _save(_keyOptConstantQuality, v);
+    notifyListeners();
+  }
+
+  set inputMouseSensitivity(double v) {
+    final clamped = v.clamp(0.25, 4.0);
+    if (_inputMouseSensitivity == clamped) return;
+    _inputMouseSensitivity = clamped;
+    _prefs.setDouble(_keyInputSensitivity, clamped);
+    notifyListeners();
+  }
+
+  set inputMouseAcceleration(int v) {
+    final clamped = v.clamp(1, 150).toInt();
+    if (_inputMouseAcceleration == clamped) return;
+    _inputMouseAcceleration = clamped;
+    _save(_keyInputAcceleration, clamped);
+    notifyListeners();
+  }
+
+  set inputMousePrecision(bool v) {
+    if (_inputMousePrecision == v) return;
+    _inputMousePrecision = v;
+    _save(_keyInputPrecision, v);
+    notifyListeners();
+  }
+
+  set inputMouseSamplingMs(int v) {
+    if (_inputMouseSamplingMs == v) return;
+    _inputMouseSamplingMs = v;
+    _save(_keyInputSamplingMs, v);
+    notifyListeners();
+  }
+
+  set inputCursorOverlay(bool v) {
+    if (_inputCursorOverlay == v) return;
+    _inputCursorOverlay = v;
+    _save(_keyInputCursorOverlay, v);
+    notifyListeners();
+  }
+
   StreamSettings buildStreamSettings() {
     return StreamSettings(
       resolution: _resolution,
@@ -508,6 +602,30 @@ class UserSettings extends ChangeNotifier {
         _prefs.getInt(_keyOptMinBitrate) ?? _optMinBitrateKbps;
     _optEnableNack = _prefs.getBool(_keyOptNack) ?? _optEnableNack;
     _optEnableFec = _prefs.getBool(_keyOptFec) ?? _optEnableFec;
+    _optConstantQuality =
+        _prefs.getBool(_keyOptConstantQuality) ?? _optConstantQuality;
+    _inputMouseSensitivity =
+        _prefs.getDouble(_keyInputSensitivity) ?? _inputMouseSensitivity;
+    _inputMouseAcceleration =
+        _prefs.getInt(_keyInputAcceleration) ?? _inputMouseAcceleration;
+    _inputMousePrecision =
+        _prefs.getBool(_keyInputPrecision) ?? _inputMousePrecision;
+    // The input-sampling feature shipped with adaptive (0) as the default;
+    // that added latency and was implicated in the dead-mouse reports, so a
+    // stored 0 from the old default is migrated to immediate (-1) — but only
+    // once, so a later explicit choice of adaptive isn't reset every launch.
+    if (!(_prefs.getBool(_keyInputSamplingMigrated) ?? false)) {
+      final storedSamplingMs = _prefs.getInt(_keyInputSamplingMs);
+      if (storedSamplingMs == 0) {
+        _inputMouseSamplingMs = -1;
+        _prefs.remove(_keyInputSamplingMs);
+      }
+      _prefs.setBool(_keyInputSamplingMigrated, true);
+    }
+    _inputMouseSamplingMs =
+        _prefs.getInt(_keyInputSamplingMs) ?? _inputMouseSamplingMs;
+    _inputCursorOverlay =
+        _prefs.getBool(_keyInputCursorOverlay) ?? _inputCursorOverlay;
     BackgroundGlow.current.value = _backgroundStyle;
   }
 
@@ -571,6 +689,12 @@ class UserSettings extends ChangeNotifier {
     _optMinBitrateKbps = 4000;
     _optEnableNack = true;
     _optEnableFec = true;
+    _optConstantQuality = false;
+    _inputMouseSensitivity = 1.0;
+    _inputMouseAcceleration = 1;
+    _inputMousePrecision = true;
+    _inputMouseSamplingMs = -1;
+    _inputCursorOverlay = true;
     BackgroundGlow.current.value = _backgroundStyle;
     notifyListeners();
   }
@@ -613,6 +737,12 @@ class UserSettings extends ChangeNotifier {
     _keyOptMinBitrate,
     _keyOptNack,
     _keyOptFec,
+    _keyOptConstantQuality,
+    _keyInputSensitivity,
+    _keyInputAcceleration,
+    _keyInputPrecision,
+    _keyInputSamplingMs,
+    _keyInputCursorOverlay,
   ];
 }
 

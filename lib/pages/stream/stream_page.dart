@@ -1,14 +1,21 @@
 import 'dart:async';
+import 'dart:convert' show base64Decode;
+import 'dart:io' show Platform;
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb, kProfileMode, kReleaseMode;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:pointer_lock/pointer_lock.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
+import '../../state/gfn_cursor_overlay.dart';
 import '../../state/gfn_input_protocol.dart';
+import '../../state/gfn_mouse_input.dart';
 import '../../state/session_controller.dart';
 import '../../state/stream_stats.dart';
 import '../../state/stream_transport.dart';
@@ -24,6 +31,7 @@ import '../../widgets/neon_card.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_snackbar.dart';
+import '../../widgets/stream/queue_ad_player.dart';
 import '../../widgets/stream/session_timer.dart';
 
 /// Full-screen streaming surface. Drives the [SessionController] lifecycle
@@ -54,22 +62,172 @@ class _StreamPageState extends State<StreamPage> {
   String? _webrtcStatus;
   bool _stopInFlight = false;
 
+  /// Session-wide stats rollup, recorded to the logs on exit so a laggy
+  /// session (high decode ms, low FPS) can be reviewed after the stream ends.
+  StreamStatsSummary? _statsSummary;
+  bool _statsLogged = false;
+
+  /// UI-fps measurement: a post-frame callback counts frames that are actually
+  /// produced. Unlike a Ticker it never schedules frames, so it can't worsen
+  /// the very lag it measures — and it runs even when the stats overlay is off,
+  /// so the on-exit report always carries the UI-fps numbers.
+  bool _uiFpsActive = false;
+  int _uiFrames = 0;
+  Duration? _uiWindowStart;
+
   /// Lets the outer PopScope ask the live stream surface how to handle the
   /// Android system back button (show chrome / close keyboard / exit).
   final GlobalKey<_ReadySurfaceState> _readyKey = GlobalKey();
 
+  /// Ownership token for the window-close hook in main.dart. Only the page
+  /// that installed [appCloseHook] clears it, so popping an older page can't
+  /// wipe a newer page's hook.
+  late final Object _closeHookToken = Object();
+
+  void _onStats() {
+    final snap = _transport?.stats.value;
+    if (snap != null) _statsSummary?.add(snap);
+  }
+
+  void _startUiFpsTracking() {
+    if (_uiFpsActive) return;
+    _uiFpsActive = true;
+    _uiFrames = 0;
+    _uiWindowStart = null;
+    WidgetsBinding.instance.addPostFrameCallback(_onUiFrame);
+  }
+
+  void _onUiFrame(Duration elapsed) {
+    if (!_uiFpsActive) return;
+    _uiFrames++;
+    final start = _uiWindowStart;
+    if (start == null) {
+      // First frame only opens the window — re-register so the chain keeps
+      // running. Without this the callback never reschedules and the report
+      // never gets any ui-fps samples (the ui fps row silently vanishes).
+      _uiWindowStart = elapsed;
+      WidgetsBinding.instance.addPostFrameCallback(_onUiFrame);
+      return;
+    }
+    final windowMs = elapsed - start;
+    if (windowMs.inMilliseconds >= 500 && windowMs.inMilliseconds > 0) {
+      _statsSummary?.setUiFps(_uiFrames * 1000 / windowMs.inMilliseconds);
+      _uiFrames = 0;
+      _uiWindowStart = elapsed;
+    }
+    WidgetsBinding.instance.addPostFrameCallback(_onUiFrame);
+  }
+
+  /// debug / profile / release, from the compile-time [kDebugMode] etc. flags.
+  String get _buildMode =>
+      kReleaseMode ? 'release' : (kProfileMode ? 'profile' : 'debug');
+
+  /// Human label for the mouse sampling interval setting (for the on-exit
+  /// report): <0 immediate, 0 adaptive, >0 fixed ms.
+  String _samplingLabel(int ms) => switch (ms) {
+        < 0 => 'immediate',
+        0 => 'adaptive',
+        _ => '${ms}ms',
+      };
+
+  /// Compact block describing the build mode and the settings the session ran
+  /// under, logged with the on-exit stats so lag/decode numbers can be
+  /// correlated with the exact configuration they were reproduced with.
+  String _sessionContextReport() {
+    final s = widget.services.settings;
+    String line(String label, String value) =>
+        '${label.padRight(12)}$value';
+    return [
+      line('build', _buildMode),
+      line(
+        'requested',
+        '${s.resolution} @ ${s.fps} fps ${s.codec.name} · '
+            '${s.maxBitrateMbps} Mbps',
+      ),
+      line('transport', s.streamTransport.name),
+      line('decoder', s.decoderBackend.name),
+      line('renderer', s.rendererBackend.name),
+      line(
+        'priority',
+        '${s.streamPriority.name}'
+            '${s.streamPriorityEnabled ? '' : ' (off)'}',
+      ),
+      line(
+        'gamepad',
+        s.streamGamepad
+            ? 'on ${s.streamGamepadScale.toStringAsFixed(1)}x'
+            : 'off',
+      ),
+      line(
+        'input',
+        'sens=${s.inputMouseSensitivity.toStringAsFixed(2)}x '
+            'accel=${s.inputMouseAcceleration} '
+            'sample=${_samplingLabel(s.inputMouseSamplingMs)} '
+            'precision=${s.inputMousePrecision} '
+            'cursor=${s.inputCursorOverlay}',
+      ),
+      line('stats', s.streamShowFps ? 'on' : 'off'),
+      line(
+        'webrtc',
+        'hwAccel=${s.webrtcHwAccel} ice=${s.webrtcIceTransport.name} '
+            'bundle=${s.webrtcBundle.name} rtcpMux=${s.webrtcRtcpMux.name}',
+      ),
+      line(
+        'recovery',
+        '${s.optRecoveryProfile.name} minBitrate=${s.optMinBitrateKbps}kbps '
+            'nack=${s.optEnableNack} fec=${s.optEnableFec} '
+            'lowLatency=${s.optLowLatencyMode} '
+            'constantQuality=${s.optConstantQuality}',
+      ),
+    ].join('\n');
+  }
+
+  /// Logs the end-of-stream stats report exactly once, then unsubscribes.
+  /// Called from both [dispose] (safety-net teardown) and [_stopAndExit].
+  void _logStreamStats(StreamTransport? transport) {
+    if (_statsLogged) return;
+    _statsLogged = true;
+    _uiFpsActive = false; // stop the frame callback from rescheduling
+    transport?.stats.removeListener(_onStats);
+    final summary = _statsSummary;
+    _statsSummary = null;
+    if (summary == null || summary.samples == 0) return;
+    widget.services.logSink.log(
+      LogLevel.info,
+      'stream',
+      'Stream stats on exit:\n'
+      '${_sessionContextReport()}\n'
+      '${summary.toReportString()}',
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    // Window-close hook (Alt+F4 / WM close): main.dart intercepts the native
+    // close and runs this first so the stream is torn down while the engine
+    // is still alive (see main.dart's installWindowCloseHandler). Closing the
+    // window mid-stream would destroy the engine under the live native video
+    // stack and crash on Linux.
+    appCloseHook = _stopAndExit;
+    appCloseOwner = _closeHookToken;
     _start();
   }
 
   @override
   void dispose() {
+    // Clear the close hook only if this page still owns it (see
+    // [_closeHookToken]). The close handler then no-ops — and the window
+    // closes immediately — when no stream page is live.
+    if (identical(appCloseOwner, _closeHookToken)) {
+      appCloseOwner = null;
+      appCloseHook = null;
+    }
     final transport = _transport;
     _transport = null;
     // Fire-and-forget local teardown; dispose() never throws.
     if (transport != null) {
+      _logStreamStats(transport);
       transport.dispose();
     }
     // Safety net: if the route was popped without going through
@@ -78,6 +236,9 @@ class _StreamPageState extends State<StreamPage> {
     if (!_stopInFlight) {
       unawaited(_stopServerSession());
     }
+    // Safety net for the frame callback chain when no transport was ever
+    // connected (nothing else stops it).
+    _uiFpsActive = false;
     super.dispose();
   }
 
@@ -96,11 +257,15 @@ class _StreamPageState extends State<StreamPage> {
       },
     );
     _transport = transport;
+    // Start the session stats rollup for the on-exit report.
+    _statsSummary = StreamStatsSummary();
+    transport.stats.addListener(_onStats);
+    _startUiFpsTracking();
     widget.services.logSink.log(
       LogLevel.info,
       'stream',
       'Starting stream session [SESSION ID REDACTED] '
-          '(${widget.services.settings.streamTransport.name})',
+          '(${widget.services.settings.streamTransport.name} · $_buildMode)',
     );
     try {
       await transport.start();
@@ -124,7 +289,12 @@ class _StreamPageState extends State<StreamPage> {
         _transport = null;
         _webrtcStatus = 'Stream connection failed: $e';
       });
-      // Tear down so a later retry isn't blocked by the non-null guard.
+      // Tear down so a later retry isn't blocked by the non-null guard. The
+      // rollup is abandoned (nothing was streamed); drop the listener so the
+      // disposed notifier can't notify this state again.
+      transport.stats.removeListener(_onStats);
+      _uiFpsActive = false;
+      _statsSummary = null;
       await transport.dispose();
     }
   }
@@ -195,10 +365,49 @@ class _StreamPageState extends State<StreamPage> {
     }
   }
 
+
+  /// Reports an ad lifecycle action to the backend for the current session.
+  Future<void> _reportAdAction(
+    SessionAdAction action,
+    String adId, {
+    int? watchedMs,
+  }) async {
+    final session = widget.services.session.session;
+    if (session == null) return;
+    try {
+      final token = await widget.services.auth.resolveJwtToken();
+      await widget.services.cloudMatch.reportSessionAd(
+        SessionAdReportRequest(
+          token: token,
+          streamingBaseUrl: session.streamingBaseUrl,
+          serverIp: session.serverIp,
+          zone: session.zone,
+          sessionId: session.sessionId,
+          clientId: session.clientId,
+          deviceId: session.deviceId,
+          adId: adId,
+          action: action,
+          watchedTimeInMs: watchedMs,
+        ),
+      );
+    } catch (e) {
+      widget.services.logSink.log(
+        LogLevel.warn,
+        'queue-ad',
+        'report $action (ad $adId) failed: $e',
+      );
+    }
+  }
+
+
   Future<void> _stopAndExit() async {
     if (_stopInFlight) return;
     _stopInFlight = true;
     final transport = _transport;
+    // Release in-game mode (pointer lock + OS fullscreen) explicitly BEFORE
+    // the route teardown: on the window-close path the engine may die right
+    // after this returns, so the native pointer grab must already be down.
+    _readyKey.currentState?.releaseInGameMode();
     // Drop the video surface out of the widget tree first so the transport's
     // native texture is no longer being painted when we dispose it. Tearing
     // down a still-mounted RTCVideoView's texture crashes the engine on Linux
@@ -210,6 +419,9 @@ class _StreamPageState extends State<StreamPage> {
       _transport = null;
     }
     if (mounted) Navigator.of(context).pop();
+    // Record the end-of-stream stats report before the transport is torn down
+    // (the stats notifier stops updating once disposed).
+    _logStreamStats(transport);
     // Local teardown after the video surface is off-screen. Never let a local
     // failure prevent the server-side session stop (DELETE /v2/session).
     try {
@@ -331,6 +543,7 @@ class _StreamPageState extends State<StreamPage> {
       state: state,
       session: controller.session,
       events: controller.events,
+      reportAd: _reportAdAction,
     );
   }
 }
@@ -340,12 +553,15 @@ class _ProgressSurface extends StatefulWidget {
   final SessionState state;
   final SessionInfo? session;
   final List<SessionPhaseEvent> events;
+  final Future<void> Function(SessionAdAction action, String adId,
+      {int? watchedMs}) reportAd;
 
   const _ProgressSurface({
     required this.game,
     required this.state,
     this.session,
     this.events = const [],
+    required this.reportAd,
   });
 
   @override
@@ -448,7 +664,10 @@ class _ProgressSurfaceState extends State<_ProgressSurface> {
                 (s!.adState!.isAdsRequired ||
                     s.adState!.isQueuePaused == true)) ...[
               const SizedBox(height: 20),
-              _QueueAdCard(adState: s.adState!),
+              _QueueAdCard(
+                adState: s.adState!,
+                reportAd: widget.reportAd,
+              ),
             ],
             const SizedBox(height: 24),
             _LogsToggle(
@@ -468,8 +687,10 @@ class _ProgressSurfaceState extends State<_ProgressSurface> {
 
 class _QueueAdCard extends StatelessWidget {
   final SessionAdState adState;
+  final Future<void> Function(SessionAdAction action, String adId,
+      {int? watchedMs}) reportAd;
 
-  const _QueueAdCard({required this.adState});
+  const _QueueAdCard({required this.adState, required this.reportAd});
 
   @override
   Widget build(BuildContext context) {
@@ -516,6 +737,17 @@ class _QueueAdCard extends StatelessWidget {
           ),
           if (adState.ads.isNotEmpty) ...[
             const SizedBox(height: 14),
+            // Play the first ad that has a media source; remaining ads are
+            // listed as metadata.
+            for (final ad in adState.ads)
+              if (QueueAdPlayer.resolveMediaUrl(ad) != null) ...[
+                QueueAdPlayer(
+                  ad: ad,
+                  onReport: (action, {int? watchedMs}) =>
+                      reportAd(action, ad.adId, watchedMs: watchedMs),
+                ),
+                const SizedBox(height: 12),
+              ],
             for (final ad in adState.ads)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -528,13 +760,32 @@ class _QueueAdCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        ad.adId,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Neon.inkMuted,
-                          fontSize: 12,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            (ad.title ?? ad.adId).isNotEmpty
+                                ? ad.title ?? ad.adId
+                                : ad.adId,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Neon.ink,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          if (ad.description != null &&
+                              ad.description!.isNotEmpty)
+                            Text(
+                              ad.description!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Neon.inkMuted,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                     if (ad.durationMs != null)
@@ -764,8 +1015,9 @@ class _InfoRow extends StatelessWidget {
 /// Full-bleed streaming surface: video fills the screen, with gradient chrome
 /// overlays (session timer + exit, bottom control bar) and an optional virtual
 /// gamepad overlay. A single Esc is forwarded to the game; a quick double-Esc
-/// shows the chrome; tapping the video locks the mouse. Layout borrows from
-/// open_next's stream screen, themed with Neon.
+/// — or parking the cursor at the top edge — shows the chrome; tapping the
+/// video locks the mouse. Layout borrows from open_next's stream screen,
+/// themed with Neon.
 class _ReadySurface extends StatefulWidget {
   final CatalogGame game;
   final SessionInfo session;
@@ -796,6 +1048,20 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   /// hitting the window edge. The capture click is consumed; a double-Esc
   /// shows the chrome and releases it (a single Esc goes to the game).
   bool _mouseLocked = false;
+
+  /// True while the window is in real OS fullscreen. Entering fullscreen lets
+  /// the compositor (KWin) unredirect the window to direct scanout — one fewer
+  /// full-screen GPU pass per frame, which is the difference between 31 and
+  /// 60 fps UI on a weak iGPU (OpenNOW runs its games fullscreen for the same
+  /// reason). Only used on desktop; the in-app Fullscreen button and the
+  /// capture-click both route through [_enterMouseLock].
+  bool _osFullscreen = false;
+
+  /// Height of the top-edge escape zone (logical px). While in-game, parking
+  /// the cursor here shows the stream UI — the reliable, mouse-only way out.
+  /// Double-Esc needs the keyboard, which some Wayland compositors stop
+  /// delivering to the app during OS fullscreen; the edge never does.
+  static const double _edgeZoneHeight = 28;
   StreamSubscription<PointerLockMoveEvent>? _pointerLockSub;
 
   /// In-flight unlock so a re-lock can't race it. Cancelling a Wayland lock
@@ -830,6 +1096,225 @@ class _ReadySurfaceState extends State<_ReadySurface> {
   /// tap handler (never streamed to the game), matching cloud-gaming
   /// click-to-capture conventions.
   bool _consumingClickForLock = false;
+
+  // --- In-game cursor overlay (WebRTC cursor_channel) -----------------------
+
+  /// Decoded custom cursor bitmap bytes (PNG), when the current cursor is a
+  /// custom image rather than a predefined style.
+  Uint8List? _cursorImageBytes;
+  int _cursorHotspotX = 0;
+  int _cursorHotspotY = 0;
+  double _cursorScale = 1;
+
+  /// Custom cursor bitmaps keyed by server cursor id (OpenNOW's cursorCache).
+  /// The server streams the image once per id and later updates reference the
+  /// id without re-sending the bytes — without this cache those updates would
+  /// render nothing. The full shape (hotspot + scale) is cached too so an
+  /// id-only update doesn't reset the hotspot to 0 and misplace the cursor.
+  final Map<int, ({Uint8List bytes, int hotspotX, int hotspotY, double scale})>
+      _cursorImageCache = {};
+
+  /// Decoded RGBA bitmaps for predefined cursor ids (OpenNOW renders the
+  /// built-in PREDEFINED_CURSORS client-side too — it never swaps the OS
+  /// cursor, which would freeze the mouse on the soft-lock path). Keyed by
+  /// server id, decoded once from the ported 1-bit ICO table.
+  final Map<int, ({int width, int height, Uint8List rgba})>
+      _predefinedBitmapCache = {};
+
+  /// Decoded [ui.Image] of the current predefined cursor, rendered via
+  /// [RawImage] (predefined bitmaps are raw RGBA from the ICO decoder, which
+  /// `Image.memory` can't decode). Null while a custom cursor is active.
+  ui.Image? _cursorPredefinedImage;
+
+  /// Server id of the cursor [_cursorPredefinedImage] was decoded from, so
+  /// id-only re-streams of the same style skip the (re)decode.
+  int? _cursorPredefinedId;
+
+  /// Generation guard so a slow [ui.decodeImageFromPixels] callback from an
+  /// older cursor can't clobber the current one.
+  int _predefinedImageGen = 0;
+
+  /// Pixel dimensions of the *currently rendered* cursor bitmap (custom PNG
+  /// via [pngPixelSize], or the decoded predefined ICO), so the overlay can
+  /// render at native resolution on any display scale.
+  int _cursorBitmapW = 32;
+  int _cursorBitmapH = 32;
+
+  /// True once the server has told us the game cursor is active.
+  bool _cursorVisible = false;
+
+  /// True once the tracked position is meaningful (server position applied on
+  /// the hidden→visible transition, or deltas have moved it).
+  bool _cursorPositionKnown = false;
+
+  /// Tracked cursor position in normalized 0..65535 space (server units), so
+  /// window resizes don't break placement.
+  double _cursorNormX = 0;
+  double _cursorNormY = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _attachCursorOverlay(widget.transport);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReadySurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.transport != widget.transport) {
+      _detachCursorOverlay(oldWidget.transport);
+      _attachCursorOverlay(widget.transport);
+    }
+  }
+
+  void _attachCursorOverlay(StreamTransport? transport) {
+    transport?.cursorOverlay?.addListener(_onCursorOverlay);
+  }
+
+  void _detachCursorOverlay(StreamTransport? transport) {
+    transport?.cursorOverlay?.removeListener(_onCursorOverlay);
+  }
+
+  void _onCursorOverlay() {
+    final update = widget.transport?.cursorOverlay?.value;
+    if (update == null) return;
+    final wasVisible = _cursorVisible;
+    if (update.custom) {
+      // Custom bitmap: cache + render via Image.memory (PNG payload). Any
+      // stale predefined image is dropped (disposed, not just unreferenced —
+      // ui.Image is a native resource).
+      if (_cursorPredefinedImage != null) {
+        _predefinedImageGen++; // invalidate any in-flight predefined decode
+        _cursorPredefinedImage!.dispose();
+        _cursorPredefinedImage = null;
+      }
+      if (update.imageBytes != null) {
+        // Cache the bitmap under its id so later id-only updates still render.
+        _cursorImageCache[update.cursorId] = (
+          bytes: update.imageBytes!,
+          hotspotX: update.hotspotX ?? 0,
+          hotspotY: update.hotspotY ?? 0,
+          scale: update.scale ?? 1,
+        );
+        _cursorImageBytes = update.imageBytes;
+        final size = pngPixelSize(update.imageBytes!);
+        if (size != null) {
+          _cursorBitmapW = size.$1;
+          _cursorBitmapH = size.$2;
+        }
+      } else {
+        // No image in this update: reuse the cached shape for this id (the
+        // server streams the image once, then references it by id). Without
+        // the cached hotspot/scale the cursor would jump to the top-left
+        // corner of the bitmap.
+        final cached = _cursorImageCache[update.cursorId];
+        if (cached == null) return; // nothing renderable yet
+        _cursorImageBytes = cached.bytes;
+        _cursorHotspotX = cached.hotspotX;
+        _cursorHotspotY = cached.hotspotY;
+        _cursorScale = cached.scale;
+      }
+      // Only overwrite hotspot/scale when the update actually carries them;
+      // an id-only update must keep the cached shape's values.
+      if (update.hotspotX != null) _cursorHotspotX = update.hotspotX!;
+      if (update.hotspotY != null) _cursorHotspotY = update.hotspotY!;
+      if (update.scale != null) _cursorScale = update.scale!;
+    } else {
+      // Predefined style: render the built-in cursor bitmap client-side
+      // (like OpenNOW) instead of swapping the OS cursor. The OS cursor stays
+      // hidden in-game (_videoCursor) — showing it freezes the mouse on the
+      // soft-lock path. id 0 (style 'none') renders as a hidden cursor.
+      _cursorImageBytes = null;
+      final predefined = predefinedCursorFor(update.cursorId);
+      if (predefined.style == 'none') {
+        _cursorVisible = false;
+      } else {
+        final bitmap = _predefinedBitmapCache[update.cursorId] ??
+            decodeIcoCursor(base64Decode(predefined.imageBase64));
+        if (bitmap == null) return; // malformed table entry — skip
+        _predefinedBitmapCache[update.cursorId] = bitmap;
+        _cursorBitmapW = bitmap.width;
+        _cursorBitmapH = bitmap.height;
+        _cursorHotspotX = predefined.hotspotX;
+        _cursorHotspotY = predefined.hotspotY;
+        _cursorScale = 1;
+        _cursorVisible = true;
+        // Skip the async decode when this id is already the displayed cursor
+        // (id-only updates re-stream the same style every frame); the image
+        // only needs (re)building when the cursor actually changes.
+        if (_cursorPredefinedId != update.cursorId) {
+          _cursorPredefinedId = update.cursorId;
+          _decodePredefinedImage(bitmap.rgba, bitmap.width, bitmap.height,
+              update.cursorId);
+        }
+      }
+    }
+    // The server's absolute position only lands on the hidden→visible
+    // transition (OpenNOW's shouldApplyCursorChannelPosition).
+    if (!wasVisible && update.positionX != null && update.positionY != null) {
+      _cursorNormX = update.positionX!.toDouble();
+      _cursorNormY = update.positionY!.toDouble();
+      _cursorPositionKnown = true;
+    }
+    setState(() {});
+  }
+
+  /// Converts the decoded ICO RGBA buffer into a [ui.Image] for [RawImage].
+  /// Async, so guarded by [_predefinedImageGen] against out-of-order callbacks
+  /// (a slow decode from a previous cursor must not overwrite the current one).
+  void _decodePredefinedImage(
+      Uint8List rgba, int width, int height, int cursorId) {
+    final gen = ++_predefinedImageGen;
+    ui.decodeImageFromPixels(
+      rgba,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      (image) {
+        if (!mounted || gen != _predefinedImageGen) {
+          image.dispose();
+          return;
+        }
+        setState(() {
+          _cursorPredefinedImage?.dispose();
+          _cursorPredefinedImage = image;
+        });
+      },
+    );
+  }
+
+  /// Moves the tracked cursor by the *adjusted* deltas (sensitivity + accel
+  /// already applied) — OpenNOW's `moveBy`. Runs under both soft lock and a
+  /// native grab: under a grab the OS cursor is captured/hidden so the game
+  /// cursor must still be drawn client-side at the tracked position.
+  void _trackCursorPosition(double dx, double dy) {
+    if (!widget.settings.inputCursorOverlay) return;
+    if (!mounted) return;
+    final size = MediaQuery.sizeOf(context);
+    if (size.width <= 0 || size.height <= 0) return;
+    // First delta without a server-anchored position: start at the viewport
+    // center (OpenNOW's `positionInitialized` centering) so the cursor doesn't
+    // appear from a corner. Deltas are relative, so this only matters once.
+    if (!_cursorPositionKnown) {
+      _cursorNormX = 32768;
+      _cursorNormY = 32768;
+      _cursorPositionKnown = true;
+    }
+    _cursorNormX = (_cursorNormX + dx / size.width * 65535).clamp(0.0, 65535.0);
+    _cursorNormY =
+        (_cursorNormY + dy / size.height * 65535).clamp(0.0, 65535.0);
+  }
+
+  /// OS cursor shown over the video surface. In-game the OS cursor is ALWAYS
+  /// hidden — never swapped to a real predefined cursor. On the soft-lock
+  /// path (no native grab) the OS cursor is the one the user physically moves,
+  /// so showing it means it hits the window edge and the pointer deltas stop:
+  /// the mouse "freezes" exactly as observed with the overlay enabled. The
+  /// game cursor is drawn client-side by the bitmap overlay instead.
+  SystemMouseCursor get _videoCursor {
+    if (!_mouseLocked) return SystemMouseCursors.basic;
+    return SystemMouseCursors.none;
+  }
 
   // Gamepad bitmask + stick state (normalized -1..1), streamed over the
   // input data channel once the NVST handshake completes.
@@ -896,6 +1381,30 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     if (pending != null) await pending;
     if (!mounted) return;
     if (_mouseLocked) return;
+    // Real OS fullscreen alongside the in-game mode: the compositor stops
+    // re-compositing the windowed surface (direct scanout), which is a
+    // full-screen pass saved per frame on iGPUs. No-op on mobile/web and when
+    // the platform plugin has no implementation. The flag is set BEFORE the
+    // await so a dispose during the in-flight transition (user exits the
+    // stream) still runs _leaveOsFullscreen and restores the window.
+    if (!kIsWeb && (Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
+      _osFullscreen = true;
+      try {
+        await windowManager.setFullScreen(true);
+      } catch (_) {
+        _osFullscreen = false;
+      }
+      // Best-effort: some Wayland compositors drop keyboard focus during the
+      // fullscreen transition; re-grab it so Esc keeps reaching the app.
+      // Deliberately outside the state transition — a failure here must not
+      // mark the window as non-fullscreen.
+      if (_osFullscreen) {
+        try {
+          await windowManager.focus();
+        } catch (_) {}
+      }
+    }
+    if (!mounted) return;
     setState(() {
       _mouseLocked = true;
       _chromeVisible = false;
@@ -934,13 +1443,45 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     _pointerLockSub = null;
     _nativeGrabLive = false;
     _mouseLocked = false;
+    _leaveOsFullscreen();
     if (sub != null) _pendingUnlock = sub.cancel();
+  }
+
+  /// Shows the stream UI when the cursor reaches the top edge while in-game.
+  /// Releases the pointer lock and OS fullscreen so the user is never trapped,
+  /// even when keyboard input is unavailable (Wayland fullscreen focus loss).
+  void _showChromeFromEdge() {
+    if (!mounted) return;
+    if (_chromeVisible) return;
+    // _exitMouseLock is safe unconditionally: _leaveOsFullscreen and the
+    // pointer-lock cancel both no-op when nothing is active.
+    _exitMouseLock();
+    setState(() => _chromeVisible = true);
+  }
+
+  /// Releases in-game mode (pointer lock + OS fullscreen) without popping.
+  /// Called by the stream page before route teardown so the native pointer
+  /// grab is down before the engine can die (window-close path).
+  void releaseInGameMode() {
+    _exitMouseLock();
+  }
+
+  /// Restores the window from OS fullscreen when leaving in-game mode. Fired
+  /// on double-Esc, pointer-lock release, and dispose. No-op on non-desktop.
+  void _leaveOsFullscreen() {
+    if (!_osFullscreen) return;
+    _osFullscreen = false;
+    if (kIsWeb || !(Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
+      return;
+    }
+    unawaited(windowManager.setFullScreen(false).catchError((_) => false));
   }
 
   /// Fired when the platform releases the pointer on its own (e.g. the
   /// browser exits pointer lock on Esc during web builds).
   void _onPointerLockReleased() {
     _pendingUnlock = null;
+    _leaveOsFullscreen();
     if (!mounted) return;
     setState(() {
       _pointerLockSub = null;
@@ -955,8 +1496,17 @@ class _ReadySurfaceState extends State<_ReadySurface> {
     _pointerLockSub?.cancel();
     _pendingUnlock = null;
     _escTimer?.cancel();
+    _mouseFlushTimer?.cancel();
+    _mouseFlushTimer = null;
+    // Flush any deltas left in the coalescing buffer before the surface dies.
+    _flushMouse();
+    _detachCursorOverlay(widget.transport);
+    _predefinedImageGen++; // invalidate any in-flight decode callback
+    _cursorPredefinedImage?.dispose();
+    _cursorPredefinedImage = null;
     _keyboardController.dispose();
     _keyboardFocus.dispose();
+    _leaveOsFullscreen();
     super.dispose();
   }
 
@@ -971,11 +1521,115 @@ class _ReadySurfaceState extends State<_ReadySurface> {
         _ => null,
       };
 
+  // --- Mouse shaping pipeline (port of OpenNOW's mouseInput.ts) ------------
+
+  /// Accumulated (post-transform) deltas awaiting the coalescing flush.
+  double _pendingMouseDx = 0;
+  double _pendingMouseDy = 0;
+
+  /// Sub-pixel remainders carried across flushes so micro-movements are not
+  /// lost to integer quantization.
+  double _mouseResidualX = 0;
+  double _mouseResidualY = 0;
+
+  Timer? _mouseFlushTimer;
+  int _mouseFlushIntervalMs = 0;
+
+  /// Accumulated nominal flush time across ticks, used to re-evaluate the
+  /// adaptive interval on a ~0.5 s window (OpenNOW recomputes on its 500 ms
+  /// stats poll).
+  int _mouseFlushWindowMs = 0;
+
   void _sendMouseDelta(Offset delta) {
-    final dx = delta.dx.round().clamp(-32767, 32767);
-    final dy = delta.dy.round().clamp(-32767, 32767);
+    final s = widget.settings;
+    final transformed = applyMouseTransform(
+      delta.dx,
+      delta.dy,
+      sensitivity: s.inputMouseSensitivity,
+      accelerationPercent: s.inputMouseAcceleration,
+    );
+    _trackCursorPosition(transformed.dx, transformed.dy);
+    _pendingMouseDx += transformed.dx;
+    _pendingMouseDy += transformed.dy;
+    if (s.inputMouseSamplingMs < 0) {
+      // Immediate: every event (still keeps the sub-pixel residual).
+      _flushMouse();
+    } else {
+      _ensureMouseFlushTimer();
+    }
+  }
+
+  /// Sends the accumulated deltas. With precision on, the integer part of
+  /// each axis goes out and the fraction stays in [_mouseResidualX/Y]; with
+  /// precision off, each flush rounds to whole pixels.
+  void _flushMouse() {
+    final precision = widget.settings.inputMousePrecision;
+    var dx = _pendingMouseDx;
+    var dy = _pendingMouseDy;
+    _pendingMouseDx = 0;
+    _pendingMouseDy = 0;
+    if (precision) {
+      final qx = quantizeMouseDeltaWithResidual(dx, _mouseResidualX);
+      final qy = quantizeMouseDeltaWithResidual(dy, _mouseResidualY);
+      _mouseResidualX = qx.residual;
+      _mouseResidualY = qy.residual;
+      dx = qx.send.toDouble();
+      dy = qy.send.toDouble();
+    } else {
+      dx = dx.roundToDouble();
+      dy = dy.roundToDouble();
+    }
     if (dx == 0 && dy == 0) return;
-    widget.transport?.sendMouseMove(dx: dx, dy: dy);
+    widget.transport?.sendMouseMove(
+      dx: dx.clamp(-32767, 32767).round(),
+      dy: dy.clamp(-32767, 32767).round(),
+    );
+  }
+
+  void _ensureMouseFlushTimer() {
+    if (_mouseFlushTimer != null) return;
+    if (_pendingMouseDx == 0 && _pendingMouseDy == 0) return;
+    _mouseFlushTimer = Timer(
+      Duration(milliseconds: _currentMouseFlushIntervalMs()),
+      _onMouseFlushTick,
+    );
+  }
+
+  /// Coalesce interval: a fixed 4/8/16 ms when the user picked one, otherwise
+  /// OpenNOW's adaptive policy — base 4 ms on raw pointer-lock deltas, 8 ms
+  /// otherwise, backing off toward 20 ms under SCTP backpressure and
+  /// tightening toward 2 ms when the reliable queue is empty.
+  int _currentMouseFlushIntervalMs() {
+    final fixed = widget.settings.inputMouseSamplingMs;
+    if (fixed > 0) return fixed;
+    final base = _nativeGrabLive ? 4 : 8;
+    return chooseAdaptiveMouseFlushInterval(
+      baseIntervalMs: base,
+      currentIntervalMs:
+          _mouseFlushIntervalMs == 0 ? base : _mouseFlushIntervalMs,
+      reliableBufferedAmount: widget.transport?.inputQueueBufferedBytes ?? 0,
+      canUsePartiallyReliableMouse: false,
+      backpressureThresholdBytes: 64 * 1024,
+      minIntervalMs: 2,
+      maxIntervalMs: 20,
+    );
+  }
+
+  void _onMouseFlushTick() {
+    _mouseFlushTimer = null;
+    // Accumulate the nominal flush time across ticks; once a ~0.5 s window
+    // has elapsed, re-evaluate the adaptive interval from the current SCTP
+    // pressure (OpenNOW recomputes on its 500 ms stats poll).
+    _mouseFlushWindowMs += _currentMouseFlushIntervalMs();
+    if (widget.settings.inputMouseSamplingMs == 0 &&
+        _mouseFlushWindowMs >= 500) {
+      _mouseFlushWindowMs = 0;
+      _mouseFlushIntervalMs = _currentMouseFlushIntervalMs();
+    }
+    _flushMouse();
+    if (_pendingMouseDx != 0 || _pendingMouseDy != 0) {
+      _ensureMouseFlushTimer();
+    }
   }
 
   void _onVideoPointerDown(PointerDownEvent event) {
@@ -1259,12 +1913,12 @@ class _ReadySurfaceState extends State<_ReadySurface> {
                   }
                 },
                 child: MouseRegion(
-                  // Soft lock: hide the OS cursor while in-game. This is what
+                  // In-game the OS cursor is hidden (soft lock — this is what
                   // actually hides it on Linux/Wayland, where no native grab
-                  // exists.
-                  cursor: _mouseLocked
-                      ? SystemMouseCursors.none
-                      : SystemMouseCursors.basic,
+                  // exists). With the cursor overlay enabled, server-streamed
+                  // predefined styles take over the OS cursor; custom bitmaps
+                  // are drawn as an image overlay instead.
+                  cursor: _videoCursor,
                   child: Container(
                     color: Colors.black,
                     child: transport != null
@@ -1277,6 +1931,96 @@ class _ReadySurfaceState extends State<_ReadySurface> {
               ),
             ),
           ),
+
+            // Top-edge escape: while in-game, moving the cursor to the top
+            // edge shows the stream UI. This is the mouse-only way out that
+            // works even when the keyboard stops reaching the app (some
+            // Wayland compositors drop focus during OS fullscreen) — the
+            // double-Esc path can't be relied on there.
+            if (!_chromeVisible)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: _edgeZoneHeight,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.basic,
+                  // Explicit opaque so the zone is hit-testable over its whole
+                  // area (not just the child), and onHover so it also fires
+                  // when the cursor is already parked here as the chrome hides.
+                  opaque: true,
+                  onHover: (_) => _showChromeFromEdge(),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+
+            // In-game cursor overlay: draws the game cursor (custom bitmap
+            // from the WebRTC cursor_channel, or the built-in predefined style
+            // decoded from the ported ICO table) at the tracked position. The
+            // OS cursor stays hidden in-game (_videoCursor); this bitmap is
+            // what the user sees, rendered under both soft lock and native
+            // grabs (under a grab the OS cursor is captured, so without this
+            // overlay the game cursor would be invisible).
+            if (widget.settings.inputCursorOverlay &&
+                !_chromeVisible &&
+                _cursorVisible &&
+                _cursorPositionKnown &&
+                (_cursorImageBytes != null || _cursorPredefinedImage != null))
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final w = constraints.maxWidth;
+                      final h = constraints.maxHeight;
+                      if (w <= 0 || h <= 0) return const SizedBox.shrink();
+                      final dpr = MediaQuery.devicePixelRatioOf(context);
+                      final baseW = _cursorBitmapW.toDouble();
+                      final baseH = _cursorBitmapH.toDouble();
+                      // Render at native bitmap resolution on any display
+                      // scale (bitmap px / dpr = logical px), like OpenNOW's
+                      // image-set 2x cursor handling.
+                      final imgW = baseW / dpr * _cursorScale;
+                      final imgH = baseH / dpr * _cursorScale;
+                      final left = (_cursorNormX / 65535 * w -
+                              _cursorHotspotX / dpr * _cursorScale)
+                          .clamp(-imgW, w);
+                      final top = (_cursorNormY / 65535 * h -
+                              _cursorHotspotY / dpr * _cursorScale)
+                          .clamp(-imgH, h);
+                      // Positioned must be a direct Stack child, so the
+                      // LayoutBuilder returns its own Stack for the image.
+                      return Stack(
+                        children: [
+                          Positioned(
+                            left: left,
+                            top: top,
+                            width: imgW,
+                            height: imgH,
+                            child: _cursorPredefinedImage != null
+                                ? RawImage(
+                                    image: _cursorPredefinedImage!,
+                                    width: imgW,
+                                    height: imgH,
+                                    fit: BoxFit.fill,
+                                    filterQuality: FilterQuality.none,
+                                  )
+                                : Image.memory(
+                                    _cursorImageBytes!,
+                                    width: imgW,
+                                    height: imgH,
+                                    fit: BoxFit.fill,
+                                    filterQuality: FilterQuality.none,
+                                    gaplessPlayback: true,
+                                    errorBuilder: (_, _, _) =>
+                                        const SizedBox.shrink(),
+                                  ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
 
             // Top chrome: timer + title/status + exit.
             if (_chromeVisible)
@@ -1740,11 +2484,10 @@ class _HintPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.keyboard, size: 13, color: Neon.inkSoft),
-          SizedBox(width: 7),
-          Text(
-            'click to lock mouse · Esc goes to the game · Esc Esc opens UI',
-            style: TextStyle(color: Neon.inkSoft, fontSize: 11),
-          ),
+          SizedBox(width: 7),            Text(
+              'click to lock mouse · Esc Esc or top edge opens UI',
+              style: TextStyle(color: Neon.inkSoft, fontSize: 11),
+            ),
         ],
       ),
     );

@@ -234,6 +234,18 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
                     _SectionLabel(label: 'Max bitrate'),
                     const SizedBox(height: 10),
                     _bitrateSlider(s),
+                    const SizedBox(height: 6),
+                    _toggleRow(
+                      icon: Icons.auto_awesome_motion,
+                      title: 'Constant quality',
+                      subtitle:
+                          'Holds full bitrate during complex scenes by '
+                          'disabling the server\'s adaptive rate control. '
+                          'Best on stable connections — pair with a higher '
+                          'Max bitrate.',
+                      value: s.optConstantQuality,
+                      onChanged: (v) => s.optConstantQuality = v,
+                    ),
                     const SizedBox(height: 22),
                     const _SectionLabel(label: 'Codec'),
                     const SizedBox(height: 10),

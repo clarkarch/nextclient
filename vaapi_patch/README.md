@@ -1,5 +1,10 @@
 # GStreamer VAAPI decoder for flutter_webrtc (libwebrtc m144)
 
+> **Build guide:** for the daily incremental rebuild workflow (edit a `.cc` →
+> ninja → swap `.so` → rebuild app), see
+> [`../native/README.md`](../native/README.md). This file documents the patch
+> itself and the one-time full build.
+
 This patch gives your Flutter Linux app **VAAPI hardware H.264 decoding** with
 automatic fallback to the FFmpeg software decoder — the "switch" you asked for.
 

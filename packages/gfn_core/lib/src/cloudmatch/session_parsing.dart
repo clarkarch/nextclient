@@ -74,6 +74,108 @@ int? extractSeatSetupStep(Map<String, dynamic>? session) {
   return null;
 }
 
+/// Preferred ad media profile ordering (matches OpenNOW's
+/// GFN_AD_MEDIA_PROFILE_ORDER): MP4, WebM, then HLS.
+const List<String> _gfNAdMediaProfileOrder = const [
+  'mp4deinterlaced720p',
+  'webm',
+  'hlsadaptive',
+];
+
+/// Port of cloudmatchSessionParsing.ts `normalizeSessionAdInfo`.
+SessionAdInfo? normalizeSessionAdInfo(Map ad, int index) {
+  String? optStr(Object? v) {
+    if (v is! String) return null;
+    final t = v.trim();
+    return t.isNotEmpty ? t : null;
+  }
+
+  final adId = optStr(ad['adId']);
+
+  final rawMediaFiles = ad['adMediaFiles'];
+  final mediaFiles = <SessionAdMediaFile>[];
+  if (rawMediaFiles is List) {
+    for (final f in rawMediaFiles) {
+      if (f is! Map) continue;
+      final file = SessionAdMediaFile(
+        mediaFileUrl: optStr(f['mediaFileUrl']),
+        encodingProfile: optStr(f['encodingProfile']),
+      );
+      if (file.mediaFileUrl != null || file.encodingProfile != null) {
+        mediaFiles.add(file);
+      }
+    }
+    // Prefer encodingProfile: MP4 -> WebM -> HLS (unranked profiles sink last).
+    mediaFiles.sort((a, b) {
+      int rank(String? p) {
+        if (p == null) return 1 << 30;
+        final i = _gfNAdMediaProfileOrder.indexOf(p);
+        return i >= 0 ? i : 1 << 30;
+      }
+
+      return rank(a.encodingProfile) - rank(b.encodingProfile);
+    });
+  }
+
+  SessionAdMediaFile? preferred;
+  for (final f in mediaFiles) {
+    if (f.mediaFileUrl != null) {
+      preferred = f;
+      break;
+    }
+  }
+  final mediaUrl = preferred?.mediaFileUrl ??
+      optStr(ad['adUrl']) ??
+      optStr(ad['mediaUrl']) ??
+      optStr(ad['videoUrl']) ??
+      optStr(ad['url']);
+
+  final adUrl = optStr(ad['adUrl']);
+  final clickThroughUrl = optStr(ad['clickThroughUrl']);
+  final title = optStr(ad['title']);
+  final description = optStr(ad['description']);
+
+  final rawLength = ad['adLengthInSeconds'];
+  final adLengthInSeconds = (rawLength is num && rawLength.isFinite && rawLength > 0)
+      ? rawLength.toDouble()
+      : null;
+
+  // adLengthInSeconds is the confirmed live field (seconds -> ms). Fall back
+  // to legacy durationMs / durationInMs which are already in ms.
+  final durationMs = (adLengthInSeconds != null
+          ? (adLengthInSeconds * 1000).round()
+          : null) ??
+      toPositiveInt(ad['durationMs']) ??
+      toPositiveInt(ad['durationInMs']);
+
+  final rawAdState = ad['adState'];
+  final adState =
+      (rawAdState is num && rawAdState.isFinite) ? rawAdState.truncate() : null;
+
+  if (adId == null &&
+      mediaUrl == null &&
+      adUrl == null &&
+      mediaFiles.isEmpty &&
+      title == null &&
+      description == null) {
+    return null;
+  }
+
+  return SessionAdInfo(
+    adId: adId ?? 'ad-${index + 1}',
+    state: adState,
+    adState: adState,
+    adUrl: adUrl,
+    mediaUrl: mediaUrl,
+    adMediaFiles: mediaFiles,
+    clickThroughUrl: clickThroughUrl,
+    adLengthInSeconds: adLengthInSeconds,
+    durationMs: durationMs,
+    title: title,
+    description: description,
+  );
+}
+
 /// Port of extractAdState — surfaces queue ads from session fields.
 SessionAdState? extractAdState(Map<String, dynamic>? session) {
   if (session == null) return null;
@@ -102,33 +204,33 @@ SessionAdState? extractAdState(Map<String, dynamic>? session) {
     for (var i = 0; i < rawAds.length; i++) {
       final ad = rawAds[i];
       if (ad is! Map) continue;
-      final durationMs =
-          (ad['durationMs'] as num?)?.toInt() ??
-          ((ad['adLengthInSeconds'] as num?)?.toInt() ?? 0) * 1000;
-      ads.add(
-        SessionAdInfo(
-          adId: ad['adId'] as String? ?? 'ad-${i + 1}',
-          state: (ad['state'] as num?)?.toInt(),
-          adUrl: ad['adUrl'] as String?,
-          mediaUrl: ad['mediaUrl'] as String?,
-          clickThroughUrl: ad['clickThroughUrl'] as String?,
-          durationMs: durationMs > 0 ? durationMs : null,
-        ),
-      );
+      final normalized = normalizeSessionAdInfo(ad, i);
+      if (normalized != null) ads.add(normalized);
     }
   }
 
-  final opportunity = session['opportunity'];
-  final opp = opportunity is Map ? opportunity : null;
+  final rawOpportunity = session['opportunity'];
+  final opportunity = rawOpportunity is Map
+      ? SessionOpportunityInfo(
+          state: toOptionalString(rawOpportunity['state']),
+          queuePaused: toBoolean(rawOpportunity['queuePaused']),
+          gracePeriodSeconds: toPositiveInt(rawOpportunity['gracePeriodSeconds']),
+          message: toOptionalString(rawOpportunity['message']),
+          title: toOptionalString(rawOpportunity['title']),
+          description: toOptionalString(rawOpportunity['description']),
+        )
+      : null;
+
   final queuePaused =
-      toBool(opp?['queuePaused']) ??
-      (opp?['state'] is String
-          ? (opp!['state'] as String).toLowerCase() == 'graceperiodstart'
+      opportunity?.queuePaused ??
+      (opportunity?.state != null
+          ? opportunity!.state!.toLowerCase() == 'graceperiodstart'
           : null);
+  final gracePeriodSeconds = opportunity?.gracePeriodSeconds;
   final effectiveIsAdsRequired = sessionAdsRequired ?? ads.isNotEmpty;
   final message =
-      opp?['message'] as String? ??
-      opp?['description'] as String? ??
+      opportunity?.message ??
+      opportunity?.description ??
       (queuePaused == true
           ? 'Resume ads to stay in queue.'
           : effectiveIsAdsRequired == true
@@ -146,10 +248,15 @@ SessionAdState? extractAdState(Map<String, dynamic>? session) {
     isAdsRequired: effectiveIsAdsRequired,
     sessionAdsRequired: sessionAdsRequired,
     isQueuePaused: queuePaused,
-    gracePeriodSeconds: (opp?['gracePeriodSeconds'] as num?)?.toInt(),
+    gracePeriodSeconds: gracePeriodSeconds,
     message: message,
     sessionAds: ads,
     ads: ads,
+    opportunity: opportunity,
+    // Mark whether the server sent sessionAds=null (transient gap) so the
+    // renderer's mergeAdState can restore the previous ad list while NOT
+    // restoring it after an explicit client-side clear.
+    serverSentEmptyAds: session['sessionAds'] == null,
   );
 }
 

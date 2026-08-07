@@ -23,10 +23,16 @@
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/gst.h>
+#include <gst/va/gstvaallocator.h>
+#include <gst/va/gstvadisplay.h>
 #include <gst/video/video-frame.h>
 #include <gst/video/video-info.h>
+#include <va/va.h>
+#include <va/va_drmcommon.h>
 
 #include <glib.h>
+
+#include <unistd.h>  // close() / dup()
 
 #include <algorithm>
 #include <atomic>
@@ -52,6 +58,8 @@
 #include "api/video_codecs/sdp_video_format.h"
 #include "api/video_codecs/video_decoder.h"
 #include "modules/video_coding/include/video_error_codes.h"
+#include "api/make_ref_counted.h"
+#include "dmabuf_video_buffer.h"
 #include "rtc_base/logging.h"
 #include "vaapi_h264_bitstream.h"
 
@@ -59,6 +67,11 @@ namespace libwebrtc {
 namespace {
 
 constexpr char kDecoderImplementation[] = "GStreamerVaapiH264";
+
+// DRM_FORMAT_NV12 (fourcc 'NV12'). The whole-surface fourcc of the exported
+// NV12 frame; the GL renderer imports the two planes as R8 (Y) + GR88 (UV).
+// Hardcoded to avoid a libdrm dependency in the wrapper build.
+constexpr uint32_t kDrmFormatNv12 = 0x3231564e;
 
 bool ForceSoftwareDecoder() {
   const char* value = getenv("OPENNOW_DECODER");
@@ -160,6 +173,49 @@ const char* VaapiDecoderElement() {
 
 bool VaapiElementAvailable() {
   return VaapiDecoderElement() != nullptr;
+}
+
+// Whether the decoder element's src pad template offers the VAMemory caps
+// feature (VA surface-backed buffers). vah264dec advertises
+// video/x-raw(memory:VAMemory) alongside plain system-memory NV12; requesting
+// the feature in the caps filter makes appsink receive VA-backed buffers so
+// TryExportDmaBuf can export prime fds and the GL renderer takes the zero-copy
+// EGL-import path. Without it, negotiation settles on plain NV12, every
+// buffer has no VA surface, and every frame falls back to the CPU
+// NV12→I420+readback path (the "compositing via YUV plane upload" log line).
+// The check is a template caps intersection so drivers that do NOT offer the
+// feature keep the previous plain-NV12 pipeline instead of failing
+// negotiation.
+bool VaapiElementOffersVaMemory(const char* element_name) {
+  GstElementFactory* factory = gst_element_factory_find(element_name);
+  if (factory == nullptr) return false;
+  bool offers = false;
+  // vah264dec registers its src template statically (gst-inspect shows
+  // "video/x-raw(memory:VAMemory)" + plain "video/x-raw"), so the factory's
+  // static pad template list is available BEFORE the element type is
+  // instantiated — gst_element_factory_get_element_type() is G_TYPE_INVALID
+  // until then, so the class-based lookup would always miss.
+  const GList* templates =
+      gst_element_factory_get_static_pad_templates(factory);
+  for (const GList* it = templates; it != nullptr; it = it->next) {
+    const GstStaticPadTemplate* tmpl =
+        static_cast<const GstStaticPadTemplate*>(it->data);
+    if (tmpl == nullptr || tmpl->direction != GST_PAD_SRC) continue;
+    // GstStaticCaps is reference-counted like GstCaps; intersect its caps
+    // with the VAMemory feature caps to see if the src pad offers it. The
+    // getter takes non-const (it only reads — refcounts the static caps).
+    GstCaps* templ_caps = gst_static_caps_get(
+        const_cast<GstStaticCaps*>(&tmpl->static_caps));
+    GstCaps* va_caps = gst_caps_from_string("video/x-raw(memory:VAMemory)");
+    GstCaps* intersection = gst_caps_intersect(templ_caps, va_caps);
+    if (!gst_caps_is_empty(intersection)) offers = true;
+    gst_caps_unref(intersection);
+    gst_caps_unref(va_caps);
+    gst_caps_unref(templ_caps);
+    if (offers) break;
+  }
+  gst_object_unref(factory);
+  return offers;
 }
 
 class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
@@ -407,10 +463,24 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
     // the decoder's buffers flow straight to appsink. Converting NV12 -> I420
     // happens once, in OnSample, directly into the WebRTC I420Buffer — one CPU
     // pass instead of a videoconvert copy plus a second I420 memcpy.
+    //
+    // Zero-copy: when the element offers VAMemory, request it in the caps
+    // filter so appsink receives VA surface-backed NV12. TryExportDmaBuf then
+    // exports the surface to prime fds and the GL renderer imports them as
+    // EGLImages — the decoded frame never touches the CPU (the whole point of
+    // the zero-copy path). Falling back to plain NV12 (no VAMemory feature)
+    // forces every frame through the CPU path, which is what capped the
+    // stream at ~20 fps with "YUV plane upload (CPU readback)" in the logs.
+    const bool va_memory = VaapiElementOffersVaMemory(decoder_element);
     std::snprintf(pipeline_desc, sizeof(pipeline_desc),
                   "appsrc name=src ! h264parse ! %s ! "
-                  "video/x-raw,format=NV12 ! appsink name=sink",
-                  decoder_element);
+                  "video/x-raw%s,format=NV12 ! appsink name=sink",
+                  decoder_element, va_memory ? "(memory:VAMemory)" : "");
+    RTC_LOG(LS_INFO) << "GStreamer VAAPI pipeline: "
+                     << (va_memory ? "zero-copy (memory:VAMemory)"
+                                   : "CPU fallback (plain NV12)");
+    DecoderLog("configure: decoder=%s va_memory=%d", decoder_element,
+               va_memory ? 1 : 0);
     pipeline_ = gst_parse_launch(pipeline_desc, &error);
     if (pipeline_ == nullptr) {
       RTC_LOG(LS_ERROR) << "gst_parse_launch failed: "
@@ -596,6 +666,77 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
     return true;
   }
 
+  // Exports the decoded VA surface backing `buffer` to two DRM prime fds (Y
+  // plane + interleaved UV plane, NV12) and wraps them in a kNative
+  // DmaBufVideoBuffer that keeps the GstBuffer (and therefore the VA surface)
+  // alive until the raster thread has imported the frame as EGLImages.
+  //
+  // vah264dec (GStreamer >= 1.20) only advertises video/x-raw(memory:VAMemory)
+  // / plain NV12 on this machine — it will not negotiate DMABuf caps — so the
+  // zero-copy fds come from vaExportSurfaceHandle(DRM_PRIME_2, SEPARATE_LAYERS)
+  // instead of gst_dmabuf_memory_get_fd(). Returns nullptr when the buffer has
+  // no VA memory or the driver cannot export; OnSample() then uses the CPU
+  // NV12→I420 fallback.
+  webrtc::scoped_refptr<webrtc::VideoFrameBuffer> TryExportDmaBuf(
+      GstBuffer* buffer, const GstVideoInfo* info) {
+    const VASurfaceID surface = gst_va_buffer_get_surface(buffer);
+    if (surface == VA_INVALID_ID) return nullptr;
+    GstVaDisplay* va_display = gst_va_buffer_peek_display(buffer);
+    if (va_display == nullptr) return nullptr;
+    gst_object_ref(va_display);
+    VADisplay dpy =
+        static_cast<VADisplay>(gst_va_display_get_va_dpy(va_display));
+
+    VADRMPRIMESurfaceDescriptor desc;
+    std::memset(&desc, 0, sizeof(desc));
+    const VAStatus st = vaExportSurfaceHandle(
+        dpy, surface, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+        VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_SEPARATE_LAYERS,
+        &desc);
+    gst_object_unref(va_display);
+    if (st != VA_STATUS_SUCCESS) return nullptr;
+
+    // SEPARATE_LAYERS + NV12 => two single-plane layers: R8 (Y) then GR88 (UV).
+    if (desc.num_layers < 2 || desc.layers[0].num_planes < 1 ||
+        desc.layers[1].num_planes < 1) {
+      for (uint32_t i = 0; i < desc.num_objects; ++i) close(desc.objects[i].fd);
+      return nullptr;
+    }
+    const auto& y_layer = desc.layers[0];
+    const auto& uv_layer = desc.layers[1];
+    const uint32_t y_obj = y_layer.object_index[0];
+    const uint32_t uv_obj = uv_layer.object_index[0];
+    if (y_obj >= desc.num_objects || uv_obj >= desc.num_objects) {
+      for (uint32_t i = 0; i < desc.num_objects; ++i) close(desc.objects[i].fd);
+      return nullptr;
+    }
+    // A driver may back both layers with one object/fd; give each plane its
+    // own fd so DmaBufVideoBuffer's per-plane close() is unambiguous.
+    const int y_fd = desc.objects[y_obj].fd;
+    int uv_fd = desc.objects[uv_obj].fd;
+    if (y_fd < 0 || uv_fd < 0) {
+      if (y_fd >= 0) close(y_fd);
+      if (uv_fd >= 0 && uv_fd != y_fd) close(uv_fd);
+      return nullptr;
+    }
+    if (uv_fd == y_fd) {
+      uv_fd = dup(uv_fd);
+      if (uv_fd < 0) {
+        close(y_fd);
+        return nullptr;
+      }
+    }
+
+    const int width = GST_VIDEO_INFO_WIDTH(info);
+    const int height = GST_VIDEO_INFO_HEIGHT(info);
+    return webrtc::make_ref_counted<DmaBufVideoBuffer>(
+        y_fd, uv_fd, static_cast<int>(y_layer.offset[0]),
+        static_cast<int>(uv_layer.offset[0]),
+        static_cast<int>(y_layer.pitch[0]),
+        static_cast<int>(uv_layer.pitch[0]), width, height, kDrmFormatNv12,
+        desc.objects[y_obj].drm_format_modifier, buffer, *info);
+  }
+
   static GstFlowReturn OnSampleThunk(GstElement* sink, gpointer user_data) {
     return static_cast<GstVaapiVideoDecoder*>(user_data)->OnSample(sink);
   }
@@ -611,11 +752,6 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
       gst_sample_unref(sample);
       return GST_FLOW_OK;
     }
-    GstVideoFrame frame;
-    if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ)) {
-      gst_sample_unref(sample);
-      return GST_FLOW_OK;
-    }
 
     const int width = GST_VIDEO_INFO_WIDTH(&info);
     const int height = GST_VIDEO_INFO_HEIGHT(&info);
@@ -626,35 +762,58 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
                  static_cast<unsigned long long>(GST_BUFFER_PTS(buffer)),
                  width, height);
     }
-    const int y_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
-    const int uv_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 1);
-    const uint8_t* y = static_cast<const uint8_t*>(
-        GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
-    const uint8_t* uv = static_cast<const uint8_t*>(
-        GST_VIDEO_FRAME_PLANE_DATA(&frame, 1));
 
-    // NV12 -> I420 in a single pass, straight into the WebRTC I420Buffer. The
-    // pipeline already outputs NV12 (no videoconvert), so the interleaved U/V
-    // plane is de-interleaved once here instead of being converted to I420 and
-    // then memcpy'd again. This roughly halves the decode-output CPU traffic.
-    const int uv_height = (height + 1) / 2;
-    const int uv_width = (width + 1) / 2;
-    webrtc::scoped_refptr<webrtc::I420Buffer> i420 =
-        webrtc::I420Buffer::Create(width, height);
-    for (int row = 0; row < height; ++row) {
-      std::memcpy(i420->MutableDataY() + row * i420->StrideY(),
-                  y + row * y_stride, width);
-    }
-    for (int row = 0; row < uv_height; ++row) {
-      const uint8_t* src = uv + row * uv_stride;
-      uint8_t* out_u = i420->MutableDataU() + row * i420->StrideU();
-      uint8_t* out_v = i420->MutableDataV() + row * i420->StrideV();
-      for (int col = 0; col < uv_width; ++col) {
-        out_u[col] = src[col * 2];
-        out_v[col] = src[col * 2 + 1];
+    // --- Zero-copy path: export the VA surface to DRM prime fds -----------
+    //
+    // vah264dec (GStreamer >= 1.20) does not negotiate video/x-raw(memory:DMABuf)
+    // on this machine (it only offers VAMemory / plain NV12), so the dmabuf fds
+    // come from vaExportSurfaceHandle(DRM_PRIME_2) instead. The exported fds are
+    // wrapped in a kNative DmaBufVideoBuffer; the GL renderer imports them as
+    // EGLImages and the decoded frame never touches the CPU. The GstBuffer ref
+    // held by DmaBufVideoBuffer keeps the VA surface alive until the raster
+    // thread has sampled it (backpressure = one frame).
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> frame_buffer =
+        TryExportDmaBuf(buffer, &info);
+
+    if (frame_buffer == nullptr) {
+      // --- CPU fallback: NV12 -> I420 in a single pass ---------------------
+      //
+      // Only hit when the surface cannot be exported (no VA memory, driver
+      // without PRIME_2 export, or a non-NV12 layout). Keep this path exactly
+      // as before so the FFmpeg renderer-backend and any non-VAAPI session
+      // still work.
+      GstVideoFrame frame;
+      if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ)) {
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
       }
+      const int y_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+      const int uv_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 1);
+      const uint8_t* y = static_cast<const uint8_t*>(
+          GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+      const uint8_t* uv = static_cast<const uint8_t*>(
+          GST_VIDEO_FRAME_PLANE_DATA(&frame, 1));
+
+      const int uv_height = (height + 1) / 2;
+      const int uv_width = (width + 1) / 2;
+      webrtc::scoped_refptr<webrtc::I420Buffer> i420 =
+          webrtc::I420Buffer::Create(width, height);
+      for (int row = 0; row < height; ++row) {
+        std::memcpy(i420->MutableDataY() + row * i420->StrideY(),
+                    y + row * y_stride, width);
+      }
+      for (int row = 0; row < uv_height; ++row) {
+        const uint8_t* src = uv + row * uv_stride;
+        uint8_t* out_u = i420->MutableDataU() + row * i420->StrideU();
+        uint8_t* out_v = i420->MutableDataV() + row * i420->StrideV();
+        for (int col = 0; col < uv_width; ++col) {
+          out_u[col] = src[col * 2];
+          out_v[col] = src[col * 2 + 1];
+        }
+      }
+      gst_video_frame_unmap(&frame);
+      frame_buffer = i420;
     }
-    gst_video_frame_unmap(&frame);
 
     // Round-trip the PTS back to an RTP timestamp (90 kHz). The forward
     // conversion (Decode: rtp * 1e9 / 90000) truncates by < 1 ns, so rounding
@@ -686,7 +845,7 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
       }
     }
     webrtc::VideoFrame video_frame = webrtc::VideoFrame::Builder()
-        .set_video_frame_buffer(i420)
+        .set_video_frame_buffer(frame_buffer)
         .set_timestamp_rtp(rtp_timestamp)
         .set_timestamp_ms(render_time_ms)
         .set_rotation(webrtc::kVideoRotation_0)

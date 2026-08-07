@@ -241,6 +241,72 @@ class CloudMatchService {
     }
   }
 
+  /// Port of cloudmatch.ts reportSessionAd — reports an ad lifecycle event so
+  /// the server can advance/keep the user in the queue.
+  Future<SessionInfo> reportSessionAd(SessionAdReportRequest input) async {
+    final token = input.token;
+    if (token == null || token.isEmpty) {
+      throw StateError('Missing token for ad update');
+    }
+    final clientId = input.clientId ?? _uuidV4();
+    final deviceId = input.deviceId ?? _uuidV4();
+    final base = _resolvePollStopBase(input.zone, input.streamingBaseUrl, input.serverIp);
+    final url = '$base/v2/session/${input.sessionId}';
+    final clientTimestamp =
+        input.clientTimestamp ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+
+    final adUpdate = <String, Object?>{
+      'adId': input.adId,
+      'adAction': adActionWireCode(input.action),
+      'clientTimestamp': clientTimestamp,
+      if (input.watchedTimeInMs != null)
+        'watchedTimeInMs':
+            input.watchedTimeInMs! < 0 ? 0 : input.watchedTimeInMs!.round(),
+      if (input.pausedTimeInMs != null)
+        'pausedTimeInMs':
+            input.pausedTimeInMs! < 0 ? 0 : input.pausedTimeInMs!.round(),
+      if (input.cancelReason != null) 'cancelReason': input.cancelReason,
+    };
+    final requestBody = <String, Object?>{
+      'action': 6, // SESSION_MODIFY_ACTION_AD_UPDATE
+      'adUpdates': [adUpdate],
+    };
+
+    final response = await fetchCloudMatch(
+      client: client,
+      url: url,
+      method: 'PUT',
+      // Official browser requests include Origin/Referer on cross-origin ad
+      // updates.
+      headers: buildGfnCloudMatchHeaders(
+        GfnCloudMatchHeadersOptions(
+          token: token,
+          clientId: clientId,
+          deviceId: deviceId,
+          includeOrigin: true,
+        ),
+        isMac: isMac,
+      ),
+      body: jsonEncode(requestBody),
+    );
+
+    final text = _decodeBody(response);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw SessionError.fromResponse(response.statusCode, text);
+    }
+    final payload = CloudMatchResponse.fromJson(_decodeObject(text));
+    if (payload.requestStatus.statusCode != 1) {
+      throw SessionError.fromResponse(200, text);
+    }
+    return toSessionInfo(
+      zone: input.zone,
+      streamingBaseUrl: base,
+      payload: payload,
+      clientId: clientId,
+      deviceId: deviceId,
+    );
+  }
+
   /// Port of cloudmatch.ts getActiveSessions
   Future<List<ActiveSessionInfo>> getActiveSessions({
     required String token,

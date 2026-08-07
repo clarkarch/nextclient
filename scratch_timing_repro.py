@@ -136,13 +136,34 @@ def main():
 
     t = threading.Thread(target=pusher, daemon=True)
     t.start()
-    t.join(6)
-    time.sleep(2)
+    # The pusher finishes in well under a second (appsrc queues everything
+    # with block=False), so joining it does NOT wait for decode — reading the
+    # counter right after would report a healthy decoder as ~170/600
+    # (~21fps) and mislead everyone debugging. Instead, wait for the decoded
+    # count to plateau (no growth for a few seconds = all AUs drained or the
+    # pipeline stalled), then report the TRUE sustained throughput.
+    t0 = time.time()
+    last_count = -1
+    last_change = t0
+    while time.time() - t0 < 30:
+        time.sleep(0.5)
+        n = DECODED['n']
+        if n != last_count:
+            last_count = n
+            last_change = time.time()
+        elif time.time() - last_change > 2.0:
+            break
+    # Time to the last decoded-count change (excludes the 2s plateau wait) so
+    # the rate reflects decode throughput, not the stability check.
+    elapsed = last_change - t0
 
     state = pipeline.get_state(0)[1]
     non_ok = [r.value_nick for r in PUSH_RES if r != Gst.FlowReturn.OK]
-    print(f'RESULT decoded={DECODED["n"]} state={state.value_nick} '
-          f'push_non_ok={non_ok[:5]}', flush=True)
+    decoded = DECODED['n']
+    rate = decoded / elapsed if elapsed > 0 else 0.0
+    print(f'RESULT decoded={decoded} state={state.value_nick} '
+          f'push_non_ok={non_ok[:5]} elapsed={elapsed:.1f}s '
+          f'~{rate:.0f}fps', flush=True)
 
     bus.remove_signal_watch()
     loop.quit()

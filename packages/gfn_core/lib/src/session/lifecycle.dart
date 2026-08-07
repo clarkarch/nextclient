@@ -85,7 +85,7 @@ class SessionLifecycle {
         await Future<void>.delayed(const Duration(seconds: 1));
 
         final token = await getToken();
-        info = await cloudMatch.pollSession(SessionPollRequest(
+        final polled = await cloudMatch.pollSession(SessionPollRequest(
           token: token,
           streamingBaseUrl: request.streamingBaseUrl,
           serverIp: info.serverIp,
@@ -94,6 +94,10 @@ class SessionLifecycle {
           clientId: info.clientId,
           deviceId: info.deviceId,
         ));
+        // Poll responses may drop ad creatives (sessionAds=null after the
+        // first poll). Merge so queue ads don't vanish — matches OpenNOW's
+        // mergePolledSessionState.
+        info = mergePolledSessionState(_session!, polled);
         _session = info;
       }
 
