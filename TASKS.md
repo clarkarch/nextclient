@@ -1,7 +1,35 @@
-# Backlog — Low Priority
+# Tasks / Backlog
 
-> Nice-to-have, non-blocking tasks. Ordered roughly by impact. Each entry is
-> self-contained and can be picked up independently.
+> Self-contained tasks, ordered roughly by impact. Not all are low-priority —
+> each entry carries its own priority tag. Can be picked up independently.
+
+## Windows/macOS hardware video decode — MEDIUM
+
+**Goal:** Get GPU-accelerated H.264 decode on Windows and macOS. Today the
+libwebrtc path on those platforms decodes with CPU (FFmpeg software) and uses
+the CPU renderer — only Linux has hardware decode (VAAPI).
+
+**Status:** Linux has VAAPI via the custom libwebrtc build (Decoder=VAAPI,
+Renderer=GL). Windows/macOS currently ship the stock CPU path only; the UI now
+hides Decoder/Renderer options on non-Linux platforms (they're Linux-only).
+
+**Approach (sketch):**
+- Prefer building the existing native **GStreamer** transport
+  (`WEBRTCBIN`/`NVST` bridges are Linux `.so` today) for Windows/macOS and let
+  GStreamer pick its platform hardware decoder:
+  - Windows: `d3d11h264dec` (D3D11 Media Foundation), or NVDEC on NVIDIA GPUs.
+  - macOS: `avfoundation` / `vth264dec` (VideoToolbox, Metal-backed).
+  This reuses the decode/render pipeline already proven on Linux instead of
+  porting VAAPI (which doesn't exist outside Linux/Mesa).
+- Alternative (libwebrtc-only): add a platform `VideoDecoderFactory` per OS
+  (Windows DX11/MFT, macOS VideoToolbox) into the vendored libwebrtc build,
+  mirroring how `OPENNOW_DECODER` selects the factory on Linux.
+- Render path on Win/mac: keep CPU pixel-buffer (stock) or add a D3D11/Metal
+  texture upload for zero-copy.
+
+**Verify:** Decoder stats overlay should read a hardware decoder name (e.g.
+`D3D11H264` / `VideoToolboxH264`) instead of `FFmpegVideoDecoder` on each
+platform, with a meaningful decode-fps gain over software.
 
 ## Native custom-bitmap OS cursor (GTK plugin) — LOW
 

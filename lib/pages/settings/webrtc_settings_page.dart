@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../../main.dart';
@@ -360,6 +362,7 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
   Widget _engineCard(UserSettings s) {
     final usingLibwebrtc =
         s.streamTransport == StreamTransportKind.flutterWebrtc;
+    final isLinux = Platform.isLinux;
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -402,10 +405,11 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
               runSpacing: 8,
               children: [
                 for (final t in StreamTransportKind.values)
-                  NeonOptionChip(
-                    label: switch (t) {
-                      StreamTransportKind.flutterWebrtc =>
-                        'LIBWEBRTC (default)',
+                  if (t == StreamTransportKind.flutterWebrtc || isLinux)
+                    NeonOptionChip(
+                      label: switch (t) {
+                        StreamTransportKind.flutterWebrtc =>
+                          'LIBWEBRTC (default)',
                       StreamTransportKind.webrtcbinFfi => 'WEBRTCBIN (FFI)',
                       StreamTransportKind.nvstGstreamer => 'NVST (GStreamer)',
                     },
@@ -415,7 +419,7 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
               ],
             ),
           ),
-          if (usingLibwebrtc) ...[
+          if (usingLibwebrtc && isLinux) ...[
             const NeonSettingSection(label: 'Decoder'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -478,10 +482,15 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
-              child: const Text(
-                'Decoder and renderer options only apply to the LIBWEBRTC '
-                'transport — VAAPI/FFmpeg and CPU/GL are libwebrtc decode/render '
-                'paths.',
+              child: Text(
+                isLinux
+                    ? 'Decoder and renderer options only apply to the LIBWEBRTC '
+                          'transport — VAAPI/FFmpeg and CPU/GL are libwebrtc '
+                          'decode/render paths.'
+                    : 'Hardware decode/render options are Linux-only. On Windows '
+                          'and macOS the libwebrtc path uses CPU decode and the '
+                          'CPU renderer; GPU decode is a platform-native no-op '
+                          'here (see backlog).',
                 style: TextStyle(color: Neon.inkMuted, fontSize: 12),
               ),
             ),
