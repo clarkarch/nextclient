@@ -113,6 +113,41 @@ class RTCVideoRenderer extends ValueNotifier<RTCVideoValue>
     return super.dispose();
   }
 
+  /// Windows only: swaps the plugin texture from the D3D11 GPU renderer to
+  /// the CPU pixel-buffer renderer (the renderer watchdog's black-screen
+  /// fallback). The plugin unregisters the D3D11 texture, creates a CPU
+  /// renderer under a NEW texture id, and re-attaches the video track; this
+  /// renderer re-subscribes to the new texture's event channel, so the
+  /// existing RTCVideoView (a ValueListenableBuilder on this renderer)
+  /// follows the new texture id automatically. Returns true on success, false
+  /// when the backend was already CPU or the swap failed.
+  Future<bool> switchToCpuRenderer() async {
+    final id = _textureId;
+    if (id == null || _disposed) return false;
+    await _eventSubscription?.cancel();
+    _eventSubscription = null;
+    try {
+      final response = await WebRTC.invokeMethod('videoRendererSwitchToCpu', {
+        'textureId': id,
+      });
+      final newId = response?['textureId'];
+      if (newId is! int) return false;
+      _textureId = newId;
+      _eventSubscription = EventChannel('FlutterWebRTC/Texture$newId')
+          .receiveBroadcastStream()
+          .listen(eventListener, onError: errorListener);
+      // The plugin may already be delivering frames (and may have fired
+      // didFirstFrameRendered / didTextureChangeVideoSize) before this
+      // subscription attached. Notify the listeners so the RTCVideoView
+      // rebuilds against the new texture id immediately instead of waiting
+      // for the next event.
+      value = value.copyWith(renderVideo: renderVideo);
+      return true;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   void eventListener(dynamic event) {
     if (_disposed) return;
     final Map<dynamic, dynamic> map = event;

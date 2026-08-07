@@ -46,6 +46,12 @@ const FlutterDesktopPixelBuffer* FlutterVideoRenderer::CopyPixelBuffer(
 
     pixel_buffer_->buffer = rgb_buffer_.get();
     mutex_.unlock();
+#if defined(_WIN32)
+    // Count a successfully delivered pixel buffer as a composite so the
+    // renderer watchdog (getRendererStatus) can tell a working CPU path from
+    // a D3D11 path that decodes but never presents.
+    renderer_status_mark_composited();
+#endif
     return pixel_buffer_.get();
   }
   mutex_.unlock();
@@ -157,11 +163,15 @@ void FlutterVideoRendererManager::CreateVideoRendererTexture(
   }
 #endif
 #if defined(_WIN32)
-  if (FlutterVideoRendererD3D::IsEnabled()) {
+  if (FlutterVideoRendererD3D::IsEnabled() && D3d11RendererSelfTest()) {
     // GPU renderer: register a GpuSurfaceTexture (DXGI shared handle). The
     // engine binds the shared D3D11 texture via
     // EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE and composites it with no CPU
     // readback; ObtainDescriptor (raster thread) runs the YUV→RGB shader.
+    // D3d11RendererSelfTest() verifies device+shaders+shared-handle BEFORE
+    // committing to the path; on failure we fall through to the CPU renderer
+    // below instead of streaming a silent black texture.
+    renderer_status_set_backend("d3d11");
     auto texture = new RefCountedObject<FlutterVideoRendererD3D>();
     auto textureVariant = std::make_unique<flutter::TextureVariant>(
         flutter::GpuSurfaceTexture(
@@ -180,6 +190,12 @@ void FlutterVideoRendererManager::CreateVideoRendererTexture(
     result->Success(EncodableValue(params));
     return;
   }
+#endif
+#if defined(_WIN32)
+  // CPU renderer (either GL was not requested, or the D3D11 self-test failed
+  // — the stream stays visible on the CPU path and getRendererStatus reports
+  // the reason via the error string).
+  renderer_status_set_backend("cpu");
 #endif
   auto texture = new RefCountedObject<FlutterVideoRenderer>();
   auto textureVariant =
@@ -327,6 +343,52 @@ void FlutterVideoRendererManager::VideoRendererDispose(
 #endif
   result->Error("VideoRendererDisposeFailed",
                 "VideoRendererDispose() texture not found!");
+}
+
+void FlutterVideoRendererManager::VideoRendererSwitchToCpu(
+    int64_t texture_id, std::unique_ptr<MethodResultProxy> result) {
+#if defined(_WIN32)
+  auto dit = d3d_renderers_.find(texture_id);
+  if (dit == d3d_renderers_.end()) {
+    // Not a D3D renderer (CPU path already active) — nothing to switch.
+    result->Success(EncodableValue(EncodableMap{}));
+    return;
+  }
+  FlutterVideoRendererD3D* d3d = dit->second.get();
+  scoped_refptr<RTCVideoTrack> track = d3d->video_track();
+  d3d->SetVideoTrack(nullptr);
+  // Async unregister: the engine releases its reference (and stops touching
+  // the texture) before the callback runs, so erasing here can't race an
+  // in-flight composite on the raster thread.
+  base_->textures_->UnregisterTexture(texture_id,
+                                      [&, dit] { d3d_renderers_.erase(dit); });
+
+  // Create a CPU pixel-buffer renderer under a fresh texture id and re-attach
+  // the track, so streaming continues on the guaranteed-visible CPU path.
+  auto texture = new RefCountedObject<FlutterVideoRenderer>();
+  auto textureVariant =
+      std::make_unique<flutter::TextureVariant>(flutter::PixelBufferTexture(
+          [texture](size_t width,
+                    size_t height) -> const FlutterDesktopPixelBuffer* {
+            return texture->CopyPixelBuffer(width, height);
+          }));
+  const int64_t new_id =
+      base_->textures_->RegisterTexture(textureVariant.get());
+  texture->initialize(base_->textures_, base_->messenger_,
+                      base_->task_runner_, std::move(textureVariant), new_id);
+  renderers_[new_id] = texture;
+  if (track.get()) {
+    texture->SetVideoTrack(track);
+    texture->media_stream_id = d3d->media_stream_id;
+  }
+  renderer_status_set_backend("cpu");
+  renderer_status_set_error(nullptr);
+  EncodableMap params;
+  params[EncodableValue("textureId")] = EncodableValue(new_id);
+  result->Success(EncodableValue(params));
+#else
+  result->Error("videoRendererSwitchToCpu", "Windows only");
+#endif
 }
 
 }  // namespace flutter_webrtc_plugin

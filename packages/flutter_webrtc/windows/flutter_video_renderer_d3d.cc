@@ -10,10 +10,13 @@
 
 #include <d3dcompiler.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <string>
 
 namespace flutter_webrtc_plugin {
 
@@ -21,6 +24,117 @@ namespace flutter_webrtc_plugin {
 namespace {
 bool g_renderer_logging_enabled = false;
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Renderer health status (read by the Dart renderer watchdog)
+// ---------------------------------------------------------------------------
+namespace {
+std::atomic<const char*> g_status_backend{"cpu"};
+std::atomic<uint64_t> g_status_composited{0};
+std::mutex g_status_error_mu;
+std::string g_status_error;
+}  // namespace
+
+void renderer_status_set_backend(const char* backend) {
+  g_status_backend.store(backend != nullptr ? backend : "cpu");
+}
+
+void renderer_status_set_error(const char* error) {
+  std::lock_guard<std::mutex> lock(g_status_error_mu);
+  if (error == nullptr) {
+    g_status_error.clear();
+  } else {
+    g_status_error = error;
+  }
+}
+
+void renderer_status_mark_composited() {
+  g_status_composited.fetch_add(1, std::memory_order_relaxed);
+}
+
+const char* renderer_status_backend() { return g_status_backend.load(); }
+
+uint64_t renderer_status_composited() {
+  return g_status_composited.load(std::memory_order_relaxed);
+}
+
+std::string renderer_status_error() {
+  std::lock_guard<std::mutex> lock(g_status_error_mu);
+  return g_status_error;
+}
+
+namespace {
+// Defined below (after the shader/device helpers); the self-test needs it.
+bool EnsureQuadCompiled(D3d11Quad* quad);
+}  // namespace
+
+// Runs on the plugin thread at texture creation. Catches the D3D11 failures
+// that otherwise manifest as a silent black screen: device/shader init, shared
+// texture creation, and — the closest in-process proxy for the engine's ANGLE
+// import (EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE) — opening the shared handle
+// on a second device of the same driver type (hardware or WARP).
+bool D3d11RendererSelfTest() {
+  D3d11Quad* quad = d3d11_quad();
+  if (!EnsureQuadCompiled(quad)) {
+    renderer_status_set_error(quad->compile_error);
+    return false;
+  }
+
+  D3D11_TEXTURE2D_DESC td = {};
+  td.Width = 2;
+  td.Height = 2;
+  td.MipLevels = 1;
+  td.ArraySize = 1;
+  td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  td.SampleDesc.Count = 1;
+  td.Usage = D3D11_USAGE_DEFAULT;
+  td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+  td.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+  if (FAILED(quad->device->CreateTexture2D(&td, nullptr, &tex))) {
+    renderer_status_set_error("D3D11 self-test: CreateTexture2D failed");
+    return false;
+  }
+  Microsoft::WRL::ComPtr<IDXGIResource> dxgi;
+  HANDLE handle = nullptr;
+  if (FAILED(tex.As(&dxgi)) || FAILED(dxgi->GetSharedHandle(&handle)) ||
+      handle == nullptr) {
+    renderer_status_set_error(
+        "D3D11 self-test: legacy shared handle unavailable");
+    return false;
+  }
+
+  // Open the handle on a second device of the SAME driver type the renderer
+  // settled on (hardware or WARP) — what the engine's ANGLE compositor does
+  // per composite. A cross-device open failure here means the same will fail
+  // for ANGLE on this adapter/driver combo.
+  const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1,
+                                      D3D_FEATURE_LEVEL_11_0,
+                                      D3D_FEATURE_LEVEL_10_1,
+                                      D3D_FEATURE_LEVEL_10_0};
+  Microsoft::WRL::ComPtr<ID3D11Device> dev2;
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx2;
+  HRESULT hr = D3D11CreateDevice(
+      nullptr, quad->driver_type, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+      levels, sizeof(levels) / sizeof(levels[0]), D3D11_SDK_VERSION, &dev2,
+      nullptr, &ctx2);
+  if (FAILED(hr)) {
+    renderer_status_set_error("D3D11 self-test: second device failed");
+    return false;
+  }
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> opened;
+  hr = dev2->OpenSharedResource(handle, __uuidof(ID3D11Texture2D),
+                                reinterpret_cast<void**>(
+                                    opened.ReleaseAndGetAddressOf()));
+  if (FAILED(hr) || opened == nullptr) {
+    renderer_status_set_error(
+        "D3D11 self-test: OpenSharedResource failed (adapter mismatch?)");
+    return false;
+  }
+
+  renderer_status_set_error(nullptr);  // clear any stale error
+  return true;
+}
 
 void set_renderer_logging_enabled(bool enabled) {
   g_renderer_logging_enabled = enabled;
@@ -224,6 +338,9 @@ bool EnsureQuadCompiled(D3d11Quad* quad) {
     // driver. WARP (software rasterizer) still gives us the shared-texture
     // path — slower, but the GPU renderer works instead of going black.
     hr = create_device(D3D_DRIVER_TYPE_WARP);
+    if (SUCCEEDED(hr)) quad->driver_type = D3D_DRIVER_TYPE_WARP;
+  } else {
+    quad->driver_type = D3D_DRIVER_TYPE_HARDWARE;
   }
   if (FAILED(hr) || quad->device == nullptr || quad->ctx == nullptr) {
     std::snprintf(quad->compile_error, sizeof(quad->compile_error),
@@ -391,26 +508,32 @@ const FlutterDesktopGpuSurfaceDescriptor* FlutterVideoRendererD3D::ObtainDescrip
       last_rendered_width_ == w && last_rendered_height_ == h) {
     raster_cache_hits_++;
     FillDescriptor(w, h);
+    renderer_status_mark_composited();
     return &descriptor_;
   }
 
   const auto t_render_start = std::chrono::steady_clock::now();
   const bool ok = EnsureResources(w, h);
   bool rendered = false;
+  const void* native = nullptr;
   if (ok) {
 #if defined(LIBWEBRTC_D3D11_CUSTOM)
     // Zero-copy path first: if the frame carries a D3D11 texture descriptor
     // (custom libwebrtc kNative buffer), open the decoder's shared texture and
     // composite it with no CPU copy at all. Falls back to the I420 plane
     // upload for plain I420 frames (stock FFmpeg path).
-    const void* native = frame->NativeD3D11Handle();
+    native = frame->NativeD3D11Handle();
     if (native != nullptr) {
       const RtcD3D11TextureDescriptor* desc =
           static_cast<const RtcD3D11TextureDescriptor*>(native);
       rendered = RenderNativeFrame(desc, w, h);
     }
 #endif
-    if (!rendered) {
+    // kNative frames have no CPU I420 view — never feed their (null) planes
+    // to the upload path when the zero-copy import fails; skip the composite
+    // instead (the engine keeps the last good frame, and a fresh keyframe
+    // retries). Plain I420 frames take the upload path as before.
+    if (!rendered && native == nullptr) {
       rendered = RenderI420Frame(frame->DataY(), frame->StrideY(),
                                  frame->DataU(), frame->StrideU(),
                                  frame->DataV(), frame->StrideV(), w, h);
@@ -440,9 +563,23 @@ const FlutterDesktopGpuSurfaceDescriptor* FlutterVideoRendererD3D::ObtainDescrip
   }
 
   if (!rendered) {
+    // Record WHY the D3D11 path failed so the Dart watchdog's getRendererStatus
+    // can log it (and knows the path never produced a compositable frame).
+    if (!ok) {
+      D3d11Quad* quad = d3d11_quad();
+      renderer_status_set_error(
+          quad->compile_error[0] ? quad->compile_error
+                                 : "D3D11 resources unavailable");
+    } else if (native != nullptr) {
+      renderer_status_set_error(
+          "D3D11 zero-copy import failed (adapter mismatch?)");
+    } else {
+      renderer_status_set_error("D3D11 render pass failed");
+    }
     return nullptr;
   }
   FillDescriptor(w, h);
+  renderer_status_mark_composited();
   return &descriptor_;
 }
 

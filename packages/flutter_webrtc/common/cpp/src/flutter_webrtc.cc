@@ -48,6 +48,30 @@ void FlutterWebRTC::HandleMethodCall(
     set_renderer_logging_enabled(enabled);
     result->Success();
 #endif
+#if defined(_WIN32)
+  } else if (method_call.method_name().compare("getRendererStatus") == 0) {
+    // Renderer health for the Dart watchdog: which backend is actually
+    // active (d3d11 | cpu), how many frames were ever presented, and the
+    // last D3D11 failure reason (empty when healthy).
+    EncodableMap status;
+    status[EncodableValue("backend")] =
+        EncodableValue(renderer_status_backend());
+    status[EncodableValue("composited")] =
+        EncodableValue(static_cast<int64_t>(renderer_status_composited()));
+    status[EncodableValue("error")] =
+        EncodableValue(renderer_status_error());
+    result->Success(EncodableValue(status));
+  } else if (method_call.method_name().compare("videoRendererSwitchToCpu") ==
+             0) {
+    if (!method_call.arguments()) {
+      result->Error("Bad Arguments", "Null arguments received");
+      return;
+    }
+    const EncodableMap params =
+        GetValue<EncodableMap>(*method_call.arguments());
+    int64_t texture_id = findLongInt(params, "textureId");
+    VideoRendererSwitchToCpu(texture_id, std::move(result));
+#endif
   } else if (method_call.method_name().compare("createPeerConnection") == 0) {
     if (!method_call.arguments()) {
       result->Error("Bad Arguments", "Null arguments received");

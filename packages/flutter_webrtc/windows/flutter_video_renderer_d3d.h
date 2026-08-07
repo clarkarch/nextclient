@@ -34,6 +34,7 @@
 #include <dxgi.h>
 
 #include <mutex>
+#include <string>
 
 #include "flutter_common.h"
 #include "flutter_webrtc_base.h"
@@ -82,6 +83,11 @@ class FlutterVideoRendererD3D
   bool CheckVideoTrack(std::string mediaId);
 
   std::string media_stream_id;
+
+  // The currently attached video track, so the Dart renderer watchdog can
+  // re-attach it to the CPU renderer after a D3D11 -> CPU texture swap
+  // (VideoRendererSwitchToCpu). Null until SetVideoTrack is called.
+  scoped_refptr<RTCVideoTrack> video_track() const { return track_; }
 
   // Reads the OPENNOW_RENDERER env var: "gl" opts into the GPU renderer.
   static bool IsEnabled();
@@ -197,10 +203,40 @@ struct D3d11Quad {
   Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_nv12;
   Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
   bool compiled = false;
+  // Which D3D_DRIVER_TYPE actually created the device (hardware or WARP), so
+  // the self-test can open the shared handle on a matching second device.
+  D3D_DRIVER_TYPE driver_type = D3D_DRIVER_TYPE_HARDWARE;
   char compile_error[512] = {0};
 };
 
 D3d11Quad* d3d11_quad();
+
+// Verifies the D3D11 GPU renderer can actually produce a compositable shared
+// texture BEFORE the renderer is chosen at texture creation: creates the
+// device + compiles the shaders, makes a small shared RGBA texture, and opens
+// the shared handle on a second device of the same driver type (hardware or
+// WARP). On failure the caller falls back to the CPU pixel-buffer renderer so
+// the stream stays visible instead of going black, and the reason is recorded
+// via renderer_status_set_error() for the Dart watchdog's getRendererStatus.
+//
+// Threading: runs on the platform thread at texture creation, which is
+// serialized with the raster thread's first ObtainDescriptor (texture creation
+// happens before any frame flows), so it is safe to (re)initialize the shared
+// D3d11Quad device/context here. Do not call it from the raster thread or
+// while a stream is actively compositing.
+bool D3d11RendererSelfTest();
+
+// --- Renderer health status (read by the Dart renderer watchdog) ------------
+// The backend reflects what CreateVideoRendererTexture actually created; the
+// composited counter proves frames are being PRESENTED (not just decoded — a
+// D3D11 renderer can decode fine while the engine composites nothing, which
+// is the black-screen case).
+void renderer_status_set_backend(const char* backend);  // "d3d11" | "cpu"
+void renderer_status_set_error(const char* error);      // null clears
+void renderer_status_mark_composited();
+const char* renderer_status_backend();
+uint64_t renderer_status_composited();
+std::string renderer_status_error();
 
 }  // namespace flutter_webrtc_plugin
 

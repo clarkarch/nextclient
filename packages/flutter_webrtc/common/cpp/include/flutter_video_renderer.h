@@ -86,6 +86,14 @@ class FlutterVideoRendererManager {
   void VideoRendererDispose(int64_t texture_id,
                             std::unique_ptr<MethodResultProxy> result);
 
+  // Windows only: swaps an active D3D11 GPU renderer for a CPU pixel-buffer
+  // renderer — the renderer watchdog's black-screen fallback. Unregisters the
+  // D3D11 texture, creates a CPU renderer with a NEW texture id, re-attaches
+  // the video track, and returns the new id in the result map. A no-op (empty
+  // map) when the texture id is not a D3D renderer.
+  void VideoRendererSwitchToCpu(int64_t texture_id,
+                                std::unique_ptr<MethodResultProxy> result);
+
  private:
   FlutterWebRTCBase* base_;
   std::map<int64_t, scoped_refptr<FlutterVideoRenderer>> renderers_;
