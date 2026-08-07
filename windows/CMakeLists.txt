@@ -213,13 +213,12 @@ if(MSVC)
          "${_msvc_crt_dir}/vcruntime140*.dll"
          "${_msvc_crt_dir}/concrt140.dll")
     if(_msvc_runtime_dlls)
-      # Copy next to the exe after every build (covers both VS and Ninja
-      # generators, including `flutter run -d windows`).
-      add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${_msvc_runtime_dlls}
-                "$<TARGET_FILE_DIR:${BINARY_NAME}>")
-      # Also stage through install() so the bundle step picks them up.
+      # Stage through install() so the bundle step places the DLLs next to
+      # the exe. The Flutter template makes the install step part of the
+      # default build (CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD), so the
+      # release bundle at build/windows/x64/runner/Release is self-contained.
+      # (A TARGET-scoped add_custom_command can't be used here: the runner
+      # target is created in windows/runner/, a different directory scope.)
       install(FILES ${_msvc_runtime_dlls}
               DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
               COMPONENT Runtime)
