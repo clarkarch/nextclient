@@ -416,13 +416,13 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// How the Linux libwebrtc renderer delivers decoded frames to Flutter:
+  /// How the libwebrtc renderer delivers decoded frames to Flutter:
   /// [RendererBackend.cpu] (stock libyuv ConvertToARGB into a pixel buffer)
-  /// or [RendererBackend.gl] (Y/U/V planes uploaded as GL textures, YUV→RGB
-  /// in a fragment shader, composited by the engine with no CPU readback).
-  /// Applied via the `OPENNOW_RENDERER` env var read by the plugin when the
-  /// video texture is created. Defaults to [RendererBackend.cpu] until the
-  /// GL path is verified.
+  /// or [RendererBackend.gl] (Y/U/V planes uploaded as GPU textures, YUV→RGB
+  /// in a shader — GL on Linux, D3D11 shared-handle on Windows — composited
+  /// by the engine with no CPU readback). Applied via the `OPENNOW_RENDERER`
+  /// env var read by the plugin when the video texture is created. Defaults
+  /// to [RendererBackend.cpu] until the GPU path is verified.
   set rendererBackend(RendererBackend v) {
     if (_rendererBackend == v) return;
     _rendererBackend = v;
@@ -796,16 +796,17 @@ enum DecoderBackend {
   ffmpeg,
 }
 
-/// How decoded frames are pushed to the Flutter Linux texture/engine.
-/// A/B switch while the GPU shader renderer (FlTextureGL) is landed.
+/// How decoded frames are pushed to the Flutter texture/engine on the
+/// libwebrtc transport. A/B switch while the GPU shader renderers are landed.
 enum RendererBackend {
   /// Stock path: libyuv ConvertToARGB on the CPU, upload the ARGB pixel
   /// buffer to a Flutter texture. Works everywhere.
   cpu,
 
-  /// GPU path: upload Y/U/V planes as GL textures and run the YUV→RGB chroma
-  /// upsampling in a fragment shader (OpenNOW-style). The engine composites
-  /// the resulting texture directly — no CPU conversion or readback.
+  /// GPU path: upload Y/U/V planes as GPU textures and run the YUV→RGB chroma
+  /// upsampling in a shader (OpenNOW-style — GL on Linux, D3D11 on Windows).
+  /// The engine composites the resulting texture directly — no CPU conversion
+  /// or readback.
   gl,
 }
 

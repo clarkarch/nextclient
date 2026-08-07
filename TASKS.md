@@ -5,31 +5,36 @@
 
 ## Windows/macOS hardware video decode — MEDIUM
 
-**Goal:** Get GPU-accelerated H.264 decode on Windows and macOS. Today the
-libwebrtc path on those platforms decodes with CPU (FFmpeg software) and uses
-the CPU renderer — only Linux has hardware decode (VAAPI).
+**Goal:** Get GPU-accelerated H.264 decode and zero-copy presentation on
+Windows and macOS. Only Linux has the full hardware path today (VAAPI decode +
+zero-copy dmabuf render).
 
-**Status:** Linux has VAAPI via the custom libwebrtc build (Decoder=VAAPI,
-Renderer=GL). Windows/macOS currently ship the stock CPU path only; the UI now
-hides Decoder/Renderer options on non-Linux platforms (they're Linux-only).
+**Status (Windows):**
+- ✅ **Renderer half landed** (`flutter_video_renderer_d3d.{h,cc}`): the
+  libwebrtc path can now present with a GPU shader — Y/U/V planes uploaded as
+  D3D11 textures (1.5 B/px), YUV→RGB in an HLSL pixel shader, composited by
+  the engine via a DXGI shared-handle `GpuSurfaceTexture`
+  (`EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE`) with no CPU readback. This fixes
+  the 28–33 UI fps CPU-render bottleneck (issue #1 log) using the **stock**
+  prebuilt libwebrtc — no custom build needed. Enabled via Settings → Client
+  → Renderer → GPU (shader YUV→RGB) (`OPENNOW_RENDERER=gl`).
+- ⏳ **Decoder half scaffolded** (`d3d11_patch/`): the zero-copy ABI hook
+  (`RTCVideoFrame::NativeD3D11Handle` + `D3d11VideoBuffer`), the decoder
+  factory wiring, and the CMake vendoring marker (`D3D11_CUSTOM.txt` →
+  `LIBWEBRTC_D3D11_CUSTOM`) are in place; the shipped `d3d11_video_decoder.cc`
+  is a delegating stub (FFmpeg) until a D3D11VA decoder lands (recommended:
+  GStreamer `d3d11h264dec`, the element `nvst_bridge` already uses). Decode is
+  not the bottleneck (FFmpeg keeps up at 59 fps), so this is optional.
 
-**Approach (sketch):**
-- Prefer building the existing native **GStreamer** transport
-  (`WEBRTCBIN`/`NVST` bridges are Linux `.so` today) for Windows/macOS and let
-  GStreamer pick its platform hardware decoder:
-  - Windows: `d3d11h264dec` (D3D11 Media Foundation), or NVDEC on NVIDIA GPUs.
-  - macOS: `avfoundation` / `vth264dec` (VideoToolbox, Metal-backed).
-  This reuses the decode/render pipeline already proven on Linux instead of
-  porting VAAPI (which doesn't exist outside Linux/Mesa).
-- Alternative (libwebrtc-only): add a platform `VideoDecoderFactory` per OS
-  (Windows DX11/MFT, macOS VideoToolbox) into the vendored libwebrtc build,
-  mirroring how `OPENNOW_DECODER` selects the factory on Linux.
-- Render path on Win/mac: keep CPU pixel-buffer (stock) or add a D3D11/Metal
-  texture upload for zero-copy.
+**Remaining:** macOS Metal renderer (analogous `flutter_video_renderer_metal`,
+`CVPixelBuffer`/Metal texture via the engine's macOS texture path) + macOS
+hardware decoder (VideoToolbox).
 
-**Verify:** Decoder stats overlay should read a hardware decoder name (e.g.
-`D3D11H264` / `VideoToolboxH264`) instead of `FFmpegVideoDecoder` on each
-platform, with a meaningful decode-fps gain over software.
+**Verify (Windows):** Decoder stats overlay should read a hardware decoder
+name (e.g. `D3D11H264`) instead of `FFmpegVideoDecoder` once the decoder lands,
+and the `[d3drender] compositing via zero-copy D3D11 texture` log line means
+frames never touch the CPU. With the stock build, `[d3drender] compositing via
+YUV plane upload + GPU shader` + UI fps at display rate is the win.
 
 ## Native custom-bitmap OS cursor (GTK plugin) — LOW
 

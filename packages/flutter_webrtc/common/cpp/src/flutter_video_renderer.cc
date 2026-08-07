@@ -4,6 +4,9 @@
 #include "flutter_video_renderer_gl.h"
 #include "flutter/texture_registrar_impl.h"
 #endif
+#if defined(_WIN32)
+#include "flutter_video_renderer_d3d.h"
+#endif
 
 namespace flutter_webrtc_plugin {
 
@@ -153,6 +156,31 @@ void FlutterVideoRendererManager::CreateVideoRendererTexture(
     return;
   }
 #endif
+#if defined(_WIN32)
+  if (FlutterVideoRendererD3D::IsEnabled()) {
+    // GPU renderer: register a GpuSurfaceTexture (DXGI shared handle). The
+    // engine binds the shared D3D11 texture via
+    // EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE and composites it with no CPU
+    // readback; ObtainDescriptor (raster thread) runs the YUV→RGB shader.
+    auto texture = new RefCountedObject<FlutterVideoRendererD3D>();
+    auto textureVariant = std::make_unique<flutter::TextureVariant>(
+        flutter::GpuSurfaceTexture(
+            kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle,
+            [texture](size_t width,
+                      size_t height) -> const FlutterDesktopGpuSurfaceDescriptor* {
+              return texture->ObtainDescriptor(width, height);
+            }));
+    auto texture_id = base_->textures_->RegisterTexture(textureVariant.get());
+    texture->initialize(base_->textures_, base_->messenger_,
+                        base_->task_runner_, std::move(textureVariant),
+                        texture_id);
+    d3d_renderers_[texture_id] = texture;
+    EncodableMap params;
+    params[EncodableValue("textureId")] = EncodableValue(texture_id);
+    result->Success(EncodableValue(params));
+    return;
+  }
+#endif
   auto texture = new RefCountedObject<FlutterVideoRenderer>();
   auto textureVariant =
       std::make_unique<flutter::TextureVariant>(flutter::PixelBufferTexture(
@@ -225,6 +253,30 @@ void FlutterVideoRendererManager::VideoRendererSetSrcObject(
     }
   }
 #endif
+#if defined(_WIN32)
+  auto dit = d3d_renderers_.find(texture_id);
+  if (dit != d3d_renderers_.end()) {
+    FlutterVideoRendererD3D* renderer = dit->second.get();
+    if (stream.get()) {
+      auto video_tracks = stream->video_tracks();
+      if (video_tracks.size() > 0) {
+        if (track_id == std::string()) {
+          renderer->SetVideoTrack(video_tracks[0]);
+        } else {
+          for (auto track : video_tracks.std_vector()) {
+            if (track->id().std_string() == track_id) {
+              renderer->SetVideoTrack(track);
+              break;
+            }
+          }
+        }
+        renderer->media_stream_id = stream_id;
+      }
+    } else {
+      renderer->SetVideoTrack(nullptr);
+    }
+  }
+#endif
 }
 
 void FlutterVideoRendererManager::VideoRendererDispose(
@@ -233,7 +285,10 @@ void FlutterVideoRendererManager::VideoRendererDispose(
   auto it = renderers_.find(texture_id);
   if (it != renderers_.end()) {
     it->second->SetVideoTrack(nullptr);
-#if defined(_WINDOWS)
+#if defined(_WIN32)
+    // Async unregister: the engine releases its reference (and stops touching
+    // the texture) before the callback runs, so erasing here can't race an
+    // in-flight composite on the raster thread.
     base_->textures_->UnregisterTexture(texture_id,
                                         [&, it] { renderers_.erase(it); });
 #else
@@ -243,6 +298,20 @@ void FlutterVideoRendererManager::VideoRendererDispose(
     result->Success();
     return;
   }
+#if defined(_WIN32)
+  auto dit = d3d_renderers_.find(texture_id);
+  if (dit != d3d_renderers_.end()) {
+    dit->second->SetVideoTrack(nullptr);
+    // Async unregister: the engine releases its reference to the shared D3D11
+    // texture before the callback runs, so erasing here can't race an
+    // in-flight composite on the raster thread.
+    base_->textures_->UnregisterTexture(texture_id, [&, dit] {
+      d3d_renderers_.erase(dit);
+    });
+    result->Success();
+    return;
+  }
+#endif
 #if defined(__linux__)
   auto glit = gl_renderers_.find(texture_id);
   if (glit != gl_renderers_.end()) {

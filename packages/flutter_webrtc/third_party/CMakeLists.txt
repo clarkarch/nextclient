@@ -127,6 +127,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS "${LIBWEBRTC_THIRD_PARTY_DIR}/l
   # A libwebrtc has been vendored into third_party/libwebrtc already (the
   # next_client custom VAAPI build). Never download or overwrite it.
   message(STATUS "libwebrtc: using vendored ${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc (linux custom VAAPI)")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND EXISTS "${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc/lib/libwebrtc.dll" AND EXISTS "${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc/lib/D3D11_CUSTOM.txt")
+  # A custom D3D11 libwebrtc build (d3d11_patch/) has been vendored into
+  # third_party/libwebrtc already (the marker file is created by
+  # d3d11_patch/apply_patch.sh). Never download or overwrite it.
+  message(STATUS "libwebrtc: using vendored ${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc (windows custom D3D11)")
 elseif(NOT EXISTS "${ZIPFILE}")
   message(NOTICE "download: ${DOWNLOAD_URL}")
   file(MAKE_DIRECTORY "${LIBWEBRTC_THIRD_PARTY_DIR}/downloads")

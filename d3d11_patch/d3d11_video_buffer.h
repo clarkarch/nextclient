@@ -1,0 +1,67 @@
+// d3d11_video_buffer.h
+//
+// A webrtc::VideoFrameBuffer whose storage is a D3D11 NV12 texture shared
+// with the renderer through a legacy DXGI shared handle (see
+// RtcD3D11TextureDescriptor in rtc_video_frame.h). type() is kNative: there
+// is no CPU pixel data. The Windows renderer reads the descriptor via
+// RTCVideoFrame::NativeD3D11Handle(), opens the handle on its own D3D11
+// device (ID3D11Device::OpenSharedResource), and composites the NV12 texture
+// through a shader — decode → composite with zero CPU copies (the Windows
+// analog of vaapi_patch's DmaBufVideoBuffer).
+//
+// The decoder creates the texture with D3D11_RESOURCE_MISC_SHARED and keeps
+// it alive for the whole lifetime of this buffer (the texture ref is owned by
+// the decoder; the shared handle stays valid as long as the resource lives).
+// ToI420() returns nullptr — GPU-resident frames have no trivial CPU view;
+// consumers that need CPU pixels must use the stock I420 path (choose the
+// OPENNOW_RENDERER=cpu renderer with the builtin FFmpeg decoder, or have the
+// decoder keep a CPU-readable staging copy).
+#ifndef LIBWEBRTC_SRC_D3D11_VIDEO_BUFFER_H_
+#define LIBWEBRTC_SRC_D3D11_VIDEO_BUFFER_H_
+
+#include <cstdint>
+
+#include "api/video/video_frame_buffer.h"
+#include "rtc_video_frame.h"
+
+namespace libwebrtc {
+
+// kNative D3D11 frame envelope (Windows zero-copy path). The decoder exports
+// the decoded NV12 surface's legacy shared handle into the descriptor; the
+// renderer opens it on its own device and converts it GPU-side.
+class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
+ public:
+  D3d11VideoBuffer(void* shared_handle, int width, int height, int stride_y,
+                   int stride_uv);
+
+  ~D3d11VideoBuffer() override = default;
+
+  webrtc::VideoFrameBuffer::Type type() const override {
+    return webrtc::VideoFrameBuffer::Type::kNative;
+  }
+
+  int width() const override { return width_; }
+  int height() const override { return height_; }
+
+  // Native frame — no trivial I420 view.
+  const webrtc::I420BufferInterface* GetI420() const override {
+    return nullptr;
+  }
+
+  // CPU fallback: not available for GPU-resident frames (see header docs).
+  webrtc::scoped_refptr<webrtc::I420BufferInterface> ToI420() override {
+    return nullptr;
+  }
+
+  // Returns the ABI-stable descriptor the renderer opens.
+  const RtcD3D11TextureDescriptor* d3d11_desc() const { return &desc_; }
+
+ private:
+  RtcD3D11TextureDescriptor desc_;
+  int width_ = 0;
+  int height_ = 0;
+};
+
+}  // namespace libwebrtc
+
+#endif  // LIBWEBRTC_SRC_D3D11_VIDEO_BUFFER_H_

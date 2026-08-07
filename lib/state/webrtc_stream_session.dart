@@ -167,11 +167,12 @@ class WebRtcStreamSession implements StreamTransport {
     onStatus?.call(message);
   }
 
-  /// Mirrors the Verbose-logs setting onto the native GL video renderer, whose
-  /// [glrender] stderr diagnostics bypass the in-app LogSink. Best-effort: the
-  /// Linux GL renderer may not be built, and the call must not fail the stream.
+  /// Mirrors the Verbose-logs setting onto the native GPU video renderer,
+  /// whose [glrender]/[d3drender] stderr diagnostics bypass the in-app
+  /// LogSink. Best-effort: the GPU renderer may not be built, and the call
+  /// must not fail the stream.
   Future<void> _applyRendererLogging(bool enabled) async {
-    if (!Platform.isLinux) return;
+    if (!Platform.isLinux && !Platform.isWindows) return;
     try {
       const channel = MethodChannel('FlutterWebRTC.Method');
       await channel

@@ -6,6 +6,9 @@ if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
   cmake_policy(SET CMP0135 NEW)
 endif()
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # Add the libwebrtc dependency
 include("${CMAKE_CURRENT_SOURCE_DIR}/../third_party/CMakeLists.txt")
 
@@ -32,6 +35,7 @@ add_library(${PLUGIN_NAME} SHARED
   "application_loopback_capturer.cc"
   "loopback_capturer_factory.cc"
   "flutter_webrtc_plugin.cc"
+  "flutter_video_renderer_d3d.cc"
   "task_runner_windows.cc"
 )
 
@@ -55,6 +59,9 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   flutter
   flutter_wrapper_plugin
   "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/lib/libwebrtc.dll.lib"
+  d3d11.lib
+  d3dcompiler.lib
+  dxgi.lib
   avrt.lib
   ksuser.lib
   mmdevapi.lib
@@ -63,6 +70,15 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   uuid.lib
   winmm.lib
 )
+
+# A custom D3D11 libwebrtc build (see d3d11_patch/) is vendored when the
+# D3D11_CUSTOM marker sits next to the DLL. That build implements
+# RTCVideoFrame::NativeD3D11Handle(), so the renderer compiles its zero-copy
+# kNative texture path; without the marker (stock prebuilt DLL) the renderer
+# only uses the I420 plane-upload path.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/lib/D3D11_CUSTOM.txt")
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE LIBWEBRTC_D3D11_CUSTOM)
+endif()
 
 # List of absolute paths to libraries that should be bundled with the plugin
 set(flutter_webrtc_bundled_libraries

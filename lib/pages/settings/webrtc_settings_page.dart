@@ -355,14 +355,13 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
         < 0 => 'Every event sent as-is — minimal latency, most packets',
         0 => 'Auto: 2–20 ms tuned from SCTP backpressure',
         _ => 'Fixed $ms ms batch — fewer packets, up to +$ms ms',
-      };
-
-/// Client-side engine selection (which WebRTC engine / decode / render path
+      };  /// Client-side engine selection (which WebRTC engine / decode / render path
   /// carries the stream). All local, tagged EXPERIMENTAL.
   Widget _engineCard(UserSettings s) {
     final usingLibwebrtc =
         s.streamTransport == StreamTransportKind.flutterWebrtc;
     final isLinux = Platform.isLinux;
+    final isWindows = Platform.isWindows;
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -449,13 +448,16 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                 ],
               ),
             ),
+          ],
+          if (usingLibwebrtc && (isLinux || isWindows)) ...[
             const NeonSettingSection(label: 'Renderer'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14),
               child: const Text(
-                'How the Linux libwebrtc path hands decoded frames to Flutter. '
-                'GL uses a shader (no CPU readback); CPU is the stock ARGB '
-                'convert.',
+                'How the libwebrtc path hands decoded frames to Flutter. GPU '
+                'uploads the Y/U/V planes and converts YUV→RGB in a shader '
+                '(no CPU readback — GL on Linux, D3D11 on Windows); CPU is '
+                'the stock ARGB convert.',
                 style: TextStyle(color: Neon.inkMuted, fontSize: 12),
               ),
             ),
@@ -470,7 +472,8 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                     NeonOptionChip(
                       label: switch (r) {
                         RendererBackend.cpu => 'CPU (ARGB convert)',
-                        RendererBackend.gl => 'GL (shader YUV→RGB)',
+                        RendererBackend.gl =>
+                          'GPU (shader YUV→RGB)',
                       },
                       selected: r == s.rendererBackend,
                       onTap: () => s.rendererBackend = r,
@@ -478,19 +481,19 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                 ],
               ),
             ),
-          ] else ...[
+          ],
+          if (!usingLibwebrtc || (!isLinux && !isWindows)) ...[
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
               child: Text(
                 isLinux
                     ? 'Decoder and renderer options only apply to the LIBWEBRTC '
-                          'transport — VAAPI/FFmpeg and CPU/GL are libwebrtc '
+                          'transport — VAAPI/FFmpeg and CPU/GPU are libwebrtc '
                           'decode/render paths.'
-                    : 'Hardware decode/render options are Linux-only. On Windows '
-                          'and macOS the libwebrtc path uses CPU decode and the '
-                          'CPU renderer; GPU decode is a platform-native no-op '
-                          'here (see backlog).',
+                    : 'Decoder and renderer options only apply to the '
+                          'LIBWEBRTC transport on Linux and Windows. macOS '
+                          'uses CPU decode and the CPU renderer.',
                 style: TextStyle(color: Neon.inkMuted, fontSize: 12),
               ),
             ),

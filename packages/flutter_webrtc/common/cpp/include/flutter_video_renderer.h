@@ -16,6 +16,9 @@ using namespace libwebrtc;
 #if defined(__linux__)
 class FlutterVideoRendererGL;
 #endif
+#if defined(_WIN32)
+class FlutterVideoRendererD3D;
+#endif
 
 class FlutterVideoRenderer
     : public RTCVideoRenderer<scoped_refptr<RTCVideoFrame>>,
@@ -91,6 +94,14 @@ class FlutterVideoRendererManager {
   // register FlTextureGL through the raw engine C API, not the client-wrapper
   // TextureVariant map the CPU renderers use.
   std::map<int64_t, scoped_refptr<FlutterVideoRendererGL>> gl_renderers_;
+#endif
+#if defined(_WIN32)
+  // GPU-resident renderers (OPENNOW_RENDERER=gl). They register a
+  // GpuSurfaceTexture (DXGI shared handle) through the client-wrapper
+  // TextureRegistrar, same API as the CPU renderers, so they could live in
+  // renderers_ — kept separate to mirror the Linux GL split and keep the
+  // CPU map's OnFrame/dispose paths untouched.
+  std::map<int64_t, scoped_refptr<FlutterVideoRendererD3D>> d3d_renderers_;
 #endif
 };
 

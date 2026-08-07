@@ -26,9 +26,21 @@ native/
       out-release/Linux-x64/# is_debug=false build ← THE ONE THAT MATTERS
   depot_tools/              # gclient (Chromium tooling)
   gst_bridge/ nvst_bridge/  # FFI bridges (separate Makefile builds)
-vaapi_patch/                # patch sources: apply_patch.sh copies them into the wrapper
+vaapi_patch/                # patch sources: apply_patch.sh copies them into the wrapper (Linux)
+d3d11_patch/                # Windows counterpart: D3D11 zero-copy ABI + decoder factory hook
+d3d11_patch/rtc_video_frame.h  # adds NativeD3D11Handle() to the RTCVideoFrame ABI
 packages/flutter_webrtc/third_party/libwebrtc/lib/libwebrtc.so   # vendored .so the plugin links
 ```
+
+**Windows note:** the Windows plugin links a **stock** prebuilt
+`libwebrtc.dll` (downloaded by `third_party/CMakeLists.txt`) — no custom build
+is required for the GPU renderer (D3D11 shared-handle presentation,
+`OPENNOW_RENDERER=gl`, lands in `flutter_video_renderer_d3d.cc`). A custom
+D3D11 build (hardware decode + frames that never touch the CPU) is optional:
+apply `d3d11_patch/apply_patch.sh` to a Windows wrapper checkout, vendor the
+dll into `third_party/libwebrtc/lib/` alongside a `D3D11_CUSTOM.txt` marker
+(CMake then skips the download and defines `LIBWEBRTC_D3D11_CUSTOM`). See
+[`../d3d11_patch/README.md`](../d3d11_patch/README.md).
 
 The flow is: edit `vaapi_patch/*.cc` → `apply_patch.sh` copies it into
 `native/libwebrtc_build/src/libwebrtc/src/` → `ninja` recompiles → copy the new

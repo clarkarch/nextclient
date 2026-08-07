@@ -6,6 +6,9 @@
 #if defined(__linux__)
 #include "flutter_video_renderer_gl.h"
 #endif
+#if defined(_WIN32)
+#include "flutter_video_renderer_d3d.h"
+#endif
 
 namespace flutter_webrtc_plugin {
 
@@ -38,7 +41,7 @@ void FlutterWebRTC::HandleMethodCall(
       initLoggerCallback(severity);
     }
     result->Success();
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
   } else if (method_call.method_name().compare("setRendererLoggingEnabled") ==
              0) {
     const bool enabled = GetValue<bool>(*method_call.arguments());
