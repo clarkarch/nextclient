@@ -111,13 +111,13 @@ def patch(path: str) -> bool:
 
     # 3) configs += [ ":gstreamer" ] on Linux, after the external_config
     #    public_configs line that precedes the sources list.
-    cfg_anchor = "  public_configs = [ \\\":external_config\\\" ]\\n"
+    cfg_anchor = ':external_config" ]\n'
     cfg_add = (
-        "  public_configs = [ \\\":external_config\\\" ]\\n"
-        "\\n"
-        "  if (is_linux) {\\n"
-        '    configs += [ ":gstreamer" ]\\n'
-        "  }\\n"
+        ':external_config" ]\n'
+        '\n'
+        '  if (is_linux) {\n'
+        '    configs += [ ":gstreamer" ]\n'
+        '  }\n'
     )
     if 'configs += [ ":gstreamer" ]' in src:
         print("  [skip] gstreamer configs already present")

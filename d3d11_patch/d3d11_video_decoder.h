@@ -5,21 +5,25 @@
 // built-in FFmpeg software decoder whenever D3D11VA is unavailable,
 // initialization fails, or OPENNOW_DECODER=software is set.
 //
-// The zero-copy contract is already in place: decoded NV12 surfaces must be
+// The zero-copy contract is already in place: decoded NV12 surfaces are
+// exported to a legacy DXGI shared handle
+// (gst_d3d11_memory_get_resource_handle + IDXGIResource::GetSharedHandle;
+// note gst_d3d11_memory_export was removed in gst-plugins-bad 1.22) and
 // wrapped in a libwebrtc::D3d11VideoBuffer (d3d11_video_buffer.h) — a kNative
-// VideoFrameBuffer carrying the texture's legacy DXGI shared handle — so the
-// Windows renderer (FlutterVideoRendererD3D, OPENNOW_RENDERER=gl) opens the
-// texture on its own device and composites it with no CPU copy. Frames that
-// are NOT wrapped stay on the I420 plane-upload path, so a factory that only
+// VideoFrameBuffer carrying the texture's shared handle — so the Windows
+// renderer (FlutterVideoRendererD3D, OPENNOW_RENDERER=gl) opens the texture
+// on its own device and composites it with no CPU copy. Export succeeds only
+// when the element allocates D3D11_RESOURCE_MISC_SHARED textures (stock
+// d3d11h264dec does not), so frames that are NOT wrapped (CPU NV12->I420
+// fallback) stay on the I420 plane-upload path, and a factory that only
 // hardware-decodes *some* frames is safe.
 //
-// The shipped d3d11_video_decoder.cc is a delegating stub (returns `fallback`,
-// the builtin FFmpeg factory) so the patch builds end-to-end before the real
-// decoder lands. Recommended implementation: reuse the same GStreamer
-// d3d11h264dec element the app's native nvst_bridge already uses on Windows
-// (gst-plugins-bad, GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY buffers) and export
-// each decoded surface's ID3D11Texture2D as a legacy shared handle
-// (IDXGIResource::GetSharedHandle) into the D3d11VideoBuffer.
+// The decoder is backed by the same GStreamer d3d11h264dec element the app's
+// native nvst_bridge uses on Windows (gst-plugins-bad,
+// GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY buffers). Requires a GStreamer runtime
+// with the d3d11 plugin on the client machine and a custom libwebrtc Windows
+// build that links it (see README.md + native/README.md for the wrapper build
+// flow; the GStreamer Windows runtime must be bundled with the app).
 #ifndef LIBWEBRTC_SRC_D3D11_VIDEO_DECODER_H_
 #define LIBWEBRTC_SRC_D3D11_VIDEO_DECODER_H_
 

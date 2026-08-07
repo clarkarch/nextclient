@@ -39,6 +39,7 @@ cp "$HERE/d3d11_video_buffer.h"     "$WRAPPER/src/"
 cp "$HERE/d3d11_video_buffer.cc"    "$WRAPPER/src/"
 cp "$HERE/d3d11_video_decoder.h"    "$WRAPPER/src/"
 cp "$HERE/d3d11_video_decoder.cc"   "$WRAPPER/src/"
+cp "$HERE/h264_bitstream.h"         "$WRAPPER/src/"
 
 echo "==> Patching BUILD.gn"
 python3 "$HERE/patch_build_gn.py" "$WRAPPER/BUILD.gn"

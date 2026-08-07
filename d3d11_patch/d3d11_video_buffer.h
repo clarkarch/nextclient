@@ -9,9 +9,15 @@
 // through a shader — decode → composite with zero CPU copies (the Windows
 // analog of vaapi_patch's DmaBufVideoBuffer).
 //
-// The decoder creates the texture with D3D11_RESOURCE_MISC_SHARED and keeps
-// it alive for the whole lifetime of this buffer (the texture ref is owned by
-// the decoder; the shared handle stays valid as long as the resource lives).
+// The decoder exports the texture's legacy shared handle via
+// gst_d3d11_memory_get_resource_handle + IDXGIResource::GetSharedHandle (the
+// texture must have been created with D3D11_RESOURCE_MISC_SHARED for the
+// export to succeed; stock d3d11h264dec textures are not shared, so the
+// decoder CPU-falls-back) and keeps it alive for the whole lifetime of this
+// buffer: the constructor takes an optional GstBuffer ref (the GStreamer
+// buffer owns the GstD3D11Memory, which in turn keeps the D3D11 texture
+// alive) that is released when the buffer is destroyed — so the shared handle
+// stays valid exactly as long as the frame is referenced.
 // ToI420() returns nullptr — GPU-resident frames have no trivial CPU view;
 // consumers that need CPU pixels must use the stock I420 path (choose the
 // OPENNOW_RENDERER=cpu renderer with the builtin FFmpeg decoder, or have the
@@ -20,6 +26,8 @@
 #define LIBWEBRTC_SRC_D3D11_VIDEO_BUFFER_H_
 
 #include <cstdint>
+
+#include <gst/gst.h>
 
 #include "api/video/video_frame_buffer.h"
 #include "rtc_video_frame.h"
@@ -32,9 +40,9 @@ namespace libwebrtc {
 class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
  public:
   D3d11VideoBuffer(void* shared_handle, int width, int height, int stride_y,
-                   int stride_uv);
+                   int stride_uv, GstBuffer* buffer = nullptr);
 
-  ~D3d11VideoBuffer() override = default;
+  ~D3d11VideoBuffer() override;
 
   webrtc::VideoFrameBuffer::Type type() const override {
     return webrtc::VideoFrameBuffer::Type::kNative;
@@ -60,6 +68,10 @@ class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
   RtcD3D11TextureDescriptor desc_;
   int width_ = 0;
   int height_ = 0;
+  // Ref'd GstBuffer (owns the GstD3D11Memory -> D3D11 texture). Keeps the
+  // shared handle valid until the frame is released. Null for frames created
+  // without a GStreamer buffer (e.g. tests).
+  GstBuffer* buffer_ = nullptr;
 };
 
 }  // namespace libwebrtc

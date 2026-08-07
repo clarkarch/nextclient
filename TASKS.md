@@ -18,13 +18,20 @@ zero-copy dmabuf render).
   the 28–33 UI fps CPU-render bottleneck (issue #1 log) using the **stock**
   prebuilt libwebrtc — no custom build needed. Enabled via Settings → Client
   → Renderer → GPU (shader YUV→RGB) (`OPENNOW_RENDERER=gl`).
-- ⏳ **Decoder half scaffolded** (`d3d11_patch/`): the zero-copy ABI hook
+- ✅ **Decoder half implemented** (`d3d11_patch/`): the zero-copy ABI hook
   (`RTCVideoFrame::NativeD3D11Handle` + `D3d11VideoBuffer`), the decoder
-  factory wiring, and the CMake vendoring marker (`D3D11_CUSTOM.txt` →
-  `LIBWEBRTC_D3D11_CUSTOM`) are in place; the shipped `d3d11_video_decoder.cc`
-  is a delegating stub (FFmpeg) until a D3D11VA decoder lands (recommended:
-  GStreamer `d3d11h264dec`, the element `nvst_bridge` already uses). Decode is
-  not the bottleneck (FFmpeg keeps up at 59 fps), so this is optional.
+  factory wiring, the CMake vendoring marker (`D3D11_CUSTOM.txt` →
+  `LIBWEBRTC_D3D11_CUSTOM`) and the real D3D11VA decoder (GStreamer
+  `d3d11h264dec`, `OPENNOW_DECODER=software` A/B switch, FFmpeg fallback) are
+  in place. **Activation still requires** a Windows custom libwebrtc build
+  that links a GStreamer runtime with the d3d11 plugin (bundled with the
+  app); until then the stock prebuilt dll uses FFmpeg, which is the fallback
+  by design. Zero-copy caveat: the shared-handle export needs the decoder
+  element to allocate `MISC_SHARED` textures; stock `d3d11h264dec` doesn't,
+  so the decoder exports via `gst_d3d11_memory_get_resource_handle` +
+  `IDXGIResource::GetSharedHandle` and CPU-falls-back (hardware decode still
+  runs) until a shared-texture element exists. Decode is not the bottleneck
+  (FFmpeg keeps up at 59 fps), so this is an optimization, not a blocker.
 
 **Remaining:** macOS Metal renderer (analogous `flutter_video_renderer_metal`,
 `CVPixelBuffer`/Metal texture via the engine's macOS texture path) + macOS

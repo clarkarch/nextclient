@@ -29,19 +29,45 @@ anything else keeps the stock CPU path). With Verbose logs on, the renderer
 logs `[d3drender] raster avg … ms/frame` once per second so the GPU half can
 be blamed correctly instead of decode.
 
-## The decoder half (optional, for true zero-copy)
+## The decoder half (for true zero-copy + the hardware-decode switch)
 
 Decode is *not* the bottleneck (FFmpeg keeps up at 59 fps), but hardware
-decode + GPU-resident frames removes the last CPU copy. The contract is ready:
+decode + GPU-resident frames removes the last CPU copy and gives Windows a
+real hardware-decode switch. The contract is in place and the decoder is
+implemented:
 
 1. A custom libwebrtc build implements `RTCVideoFrame::NativeD3D11Handle()`
    (added to the ABI in `rtc_video_frame.h`), returning an
    `RtcD3D11TextureDescriptor` for frames decoded into a D3D11 NV12 texture.
-2. The Windows renderer (compiled with `LIBWEBRTC_D3D11_CUSTOM`, defined by
+2. `d3d11_video_decoder.cc` is now the real thing: a GStreamer
+   `d3d11h264dec` (D3D11VA) pipeline that decodes each access unit, exports
+   each decoded NV12 surface's texture to a legacy DXGI shared handle
+   (`gst_d3d11_memory_get_resource_handle` + `IDXGIResource::GetSharedHandle`
+   — note `gst_d3d11_memory_export` was removed in gst-plugins-bad 1.22's C++
+   port and no longer exists) and wraps it in a `D3d11VideoBuffer` (kNative)
+   that keeps the GStreamer buffer (and thus the texture) alive. Export only
+   succeeds when the element allocates `D3D11_RESOURCE_MISC_SHARED` textures
+   — stock `d3d11h264dec` does not, so on a stock runtime every frame takes
+   the CPU NV12→I420 fallback (hardware decode still runs); a custom element
+   with `MISC_SHARED` textures lights the zero-copy path up with no code
+   change. Any failure (or `OPENNOW_DECODER=software`) delegates to the
+   builtin FFmpeg decoder — the same structure as vaapi_patch.
+3. The Windows renderer (compiled with `LIBWEBRTC_D3D11_CUSTOM`, defined by
    CMake when the `D3D11_CUSTOM.txt` marker sits next to the dll) opens the
    decoder's shared handle with `ID3D11Device::OpenSharedResource` and
    composites the NV12 planes through the shader — decode → composite with no
    CPU copy at all.
+
+**Activation:** the decoder only runs in a *custom-built* libwebrtc that (a)
+is built for Windows from this patch and (b) links a GStreamer runtime with
+`d3d11h264dec` (gst-plugins-bad) that must ship with the app. Until then the
+stock prebuilt dll keeps using the FFmpeg software decoder — that's the
+fallback by design. **Zero-copy caveat:** the shared-handle export requires
+the decoder element to allocate `D3D11_RESOURCE_MISC_SHARED` textures. Stock
+`d3d11h264dec` does not (its pool uses `GST_D3D11_ALLOCATION_FLAG_TEXTURE_ARRAY`),
+so with it the export fails and frames take the CPU NV12→I420 fallback — the
+decoder still delivers D3D11VA hardware decode; only the final CPU copy
+remains until an element with `MISC_SHARED` textures exists.
 
 ### Applying the patch to a libwebrtc wrapper checkout
 
@@ -66,18 +92,20 @@ CMake then skips the stock download and defines `LIBWEBRTC_D3D11_CUSTOM`.
 
 ### What the shipped decoder file is
 
-`d3d11_video_decoder.cc` is a **delegating stub** (returns the builtin FFmpeg
-factory) so the patched build compiles and runs end-to-end before the real
-decoder lands. The recommended implementation is the same GStreamer
-`d3d11h264dec` element the app's native `nvst_bridge` already uses on Windows
-(gst-plugins-bad, `GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY` buffers): export each
-decoded surface's `ID3D11Texture2D` as a legacy shared handle
-(`IDXGIResource::GetSharedHandle`, texture created with
-`D3D11_RESOURCE_MISC_SHARED`) into a `libwebrtc::D3d11VideoBuffer` (kNative),
-honor `OPENNOW_DECODER=software` for A/B tests, and fall back to the builtin
-decoder on any failure — exactly the vaapi_patch structure. Frames that are
-not wrapped stay on the I420 plane-upload path, so a partial implementation is
-safe.
+`d3d11_video_decoder.cc` implements the GStreamer `d3d11h264dec` (D3D11VA)
+decoder the `nvst_bridge` also uses on Windows (gst-plugins-bad,
+`GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY` buffers): it exports each decoded
+surface's shared handle (`gst_d3d11_memory_get_resource_handle` +
+`IDXGIResource::GetSharedHandle`; `gst_d3d11_memory_export` was removed in
+the 1.22 C++ port) into a `libwebrtc::D3d11VideoBuffer` (kNative, holds a
+GstBuffer ref so the texture outlives the frame), honors
+`OPENNOW_DECODER=software` for A/B tests, and falls back to the builtin
+FFmpeg decoder on any failure — exactly the vaapi_patch structure. Frames
+that are not wrapped (CPU NV12→I420 fallback — always, with stock
+`d3d11h264dec`, whose textures are not `MISC_SHARED`) stay on the I420
+plane-upload path, so a partial implementation is safe. The H.264
+AVCC→Annex-B + SPS/PPS re-injection converter lives in `h264_bitstream.h` (a
+copy of vaapi_patch's, dependency-free; mirrored test in `test/`).
 
 ### Env-var switch
 
