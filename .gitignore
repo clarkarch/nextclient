@@ -43,6 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
 
 # Local cache databases
 .freebuff/
@@ -53,3 +54,7 @@ app.*.map.json
 /native/libwebrtc_build/
 /native/libwebrtc-vaapi/
 /native/depot_tools/
+
+# Extracted mdk/fvp plugin source (hosted pub dep) — scratch copy, not part of
+# the repo.
+/fvp/

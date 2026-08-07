@@ -41,13 +41,6 @@ sudo pacman -S --needed gn ninja clang lld base-devel \
 # VAAPI decoding is built into gst-plugins-bad (>= 1.20) as the `vah264dec`
 # element. You already have it if `gst-inspect-1.0 vah264dec` prints details.
 
-# 7.2 GB RAM is tight for the final giant .so link — add swap FIRST:
-sudo fallocate -l 8G /swapfile
-sudo chmod 600 /swapfile
-sudo mkswap /swapfile
-sudo swapon /swapfile
-free -h | head -2   # verify
-
 # Verify VAAPI decode actually works on this machine (element is `vah264dec`
 # on GStreamer >= 1.20 / modern Arch, `vaapih264dec` on old gstreamer-vaapi):
 gst-inspect-1.0 vah264dec 2>&1 | head -3      # must print "Factory Details"
@@ -109,7 +102,7 @@ cd native/libwebrtc_build/src
 export ARCH=x64
 gn gen out-debug/Linux-$ARCH --args="target_os=\"linux\" target_cpu=\"$ARCH\" is_debug=true rtc_include_tests=false rtc_use_h264=true ffmpeg_branding=\"Chrome\" is_component_build=false use_rtti=true use_custom_libcxx=false rtc_enable_protobuf=false"
 ninja -C out-debug/Linux-x64 -j2 libwebrtc
-# ~1–3 h on 2 cores. OOM → ninja -j1 or more swap.
+# ~1–3 hours.
 ```
 
 ### 5. Swap the custom .so into the flutter_webrtc plugin
