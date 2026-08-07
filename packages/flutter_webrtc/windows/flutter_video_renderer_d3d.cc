@@ -249,8 +249,22 @@ FlutterVideoRendererD3D::~FlutterVideoRendererD3D() {
 }
 
 bool FlutterVideoRendererD3D::IsEnabled() {
+#if defined(_WIN32)
+  // MSVC deprecates std::getenv (C4996) and the Flutter Windows build treats
+  // warnings as errors (/WX), so use the safe _dupenv_s variant here. (The
+  // Linux GL renderer can keep std::getenv — GCC/Clang don't emit C4996.)
+  char* value = nullptr;
+  size_t len = 0;
+  if (_dupenv_s(&value, &len, "OPENNOW_RENDERER") != 0 || value == nullptr) {
+    return false;
+  }
+  const bool enabled = std::strcmp(value, "gl") == 0;
+  std::free(value);
+  return enabled;
+#else
   const char* value = std::getenv("OPENNOW_RENDERER");
   return value != nullptr && std::strcmp(value, "gl") == 0;
+#endif
 }
 
 void FlutterVideoRendererD3D::initialize(TextureRegistrar* registrar,
