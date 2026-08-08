@@ -8,12 +8,12 @@
 
 NEXTCLIENT is a from-scratch Dart/Flutter rewrite of the OpenNOW Electron
 client, built around a custom-built, hardware-accelerated streaming pipeline
-(VAAPI zero-copy decode and render on Linux) and a dark neon UI.
+(VAAPI zero-copy on Linux) and a dark neon UI.
 
 > [!WARNING]
 > Under active development. Expect rough edges, especially around the native
 > hardware-decode transports.
->
+
 > [!IMPORTANT]
 > NEXTCLIENT is an independent community project and is not affiliated with,
 > endorsed by, or sponsored by NVIDIA. NVIDIA and GeForce NOW are trademarks
@@ -65,30 +65,35 @@ client, built around a custom-built, hardware-accelerated streaming pipeline
 | Web | ❌ Not built — the app depends on `dart:ffi`, GStreamer, and native plugins |
 
 CI (`build.yml`) builds **Linux, Windows, and Android** on every push; a
-macOS job exists in the matrix but is unverified (no Mac hardware), and web
+macOS job exists in the matrix but is unverified (I have no Mac ), and web
 is deliberately excluded.
 
 ## Architecture
 
 ```
-lib/                          Flutter app (Dart)
-  pages/                      home, library, game details, login, launcher
-                              (play flow + store picker + queue picker), settings,
-                              stream, log viewer
-  state/                      session controller, user settings, stream
-                              transports, mouse/keyboard input, cursor overlay,
-                              stats, physical gamepad, title-bar controller
-  widgets/                    neon UI kit, gamepad widgets, stream widgets
-  theme/neon.dart             neon theme + animated background styles
-packages/gfn_core/            pure-Dart GFN API client (auth, catalog,
-                              cloud-match, signaling, session, subscription)
-packages/flutter_webrtc/      vendored fork, patched for VAAPI decode +
-                              GPU-shader video renderer
-packages/pointer_lock/        vendored pointer-lock plugin (mouse capture)
-native/                       libwebrtc build tree + FFI bridges
-vaapi_patch/                  Linux wrapper patch (VAAPI decoder, dmabuf)
-d3d11_patch/                  Windows wrapper patch (D3D11 decoder)
-.github/workflows/            build matrix + custom-libwebrtc Windows CI
+.
+├── lib/                         Flutter app (Dart)
+│   ├── pages/                   home, library, game details, login, launcher
+│   │                            (play flow + store picker + queue picker), settings,
+│   │                            stream, log viewer
+│   ├── state/                   session controller, user settings, stream
+│   │                            transports, mouse/keyboard input, cursor overlay,
+│   │                            stats, physical gamepad, title-bar controller
+│   ├── widgets/                 neon UI kit, gamepad widgets, stream widgets
+│   ├── theme/neon.dart          neon theme + animated background styles
+│   └── utils/                   shared helpers (friendly error messages)
+├── packages/
+│   ├── gfn_core/                pure-Dart GFN API client (auth, catalog,
+│   │                            cloud-match, signaling, session, subscription)
+│   ├── flutter_webrtc/          vendored fork, patched for VAAPI decode +
+│   │                            GPU-shader video renderer
+│   └── pointer_lock/            vendored pointer-lock plugin (mouse capture)
+├── native/                      libwebrtc build tree + FFI bridges
+│   ├── gst_bridge/              GStreamer webrtcbin bridge over dart:ffi
+│   └── nvst_bridge/             classic NVST UDP video bridge
+├── vaapi_patch/                 Linux wrapper patch (VAAPI decoder, dmabuf)
+├── d3d11_patch/                 Windows wrapper patch (D3D11 decoder)
+└── .github/workflows/           build matrix + custom-libwebrtc Windows CI
 ```
 
 ### Streaming pipeline
