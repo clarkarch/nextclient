@@ -5,7 +5,8 @@ import '../theme/neon.dart';
 
 /// Show a modern neon snackbar. [isError] tints it red; when [copyable], a
 /// copy button is appended so error text can be grabbed for bug reports.
-/// Optionally pass [actionLabel] + [onAction] for an action button.
+/// Optionally pass [actionLabel] + [onAction] for an action button, plus a
+/// destructive [altActionLabel] + [altOnAction] for a secondary (e.g. Kill).
 void showNeonSnackbar(
   BuildContext context,
   String message, {
@@ -13,6 +14,8 @@ void showNeonSnackbar(
   bool copyable = true,
   String? actionLabel,
   VoidCallback? onAction,
+  String? altActionLabel,
+  VoidCallback? altOnAction,
   Duration? duration,
 }) {
   final messenger = ScaffoldMessenger.of(context);
@@ -21,9 +24,7 @@ void showNeonSnackbar(
     SnackBar(
       behavior: SnackBarBehavior.floating,
       duration: duration ?? Duration(seconds: isError ? 6 : 3),
-      backgroundColor: isError
-          ? Neon.error.withValues(alpha: 0.16)
-          : Neon.bgC,
+      backgroundColor: isError ? Neon.error.withValues(alpha: 0.16) : Neon.bgC,
       content: Row(
         children: [
           if (isError) ...[
@@ -49,6 +50,28 @@ void showNeonSnackbar(
               ),
               child: Text(
                 actionLabel.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
+          ],
+          if (altActionLabel != null && altOnAction != null) ...[
+            const SizedBox(width: 4),
+            TextButton(
+              onPressed: () {
+                messenger.hideCurrentSnackBar();
+                altOnAction();
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: Neon.error,
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+              child: Text(
+                altActionLabel.toUpperCase(),
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,

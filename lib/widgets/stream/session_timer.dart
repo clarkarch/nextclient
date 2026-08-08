@@ -4,9 +4,16 @@ import 'package:flutter/material.dart';
 
 import '../../theme/neon.dart';
 
-/// Session timer showing elapsed streaming time since this widget mounted.
+/// Session timer showing elapsed streaming time.
+///
+/// [startedAt] pins the start so the elapsed time survives rebuilds and
+/// remounts (e.g. the stream chrome toggling the widget out of the tree; a
+/// fresh `initState` would otherwise reset the clock every time the UI was
+/// shown). Defaults to mount time when not supplied.
 class SessionTimer extends StatefulWidget {
-  const SessionTimer({super.key});
+  final DateTime? startedAt;
+
+  const SessionTimer({super.key, this.startedAt});
 
   @override
   State<SessionTimer> createState() => _SessionTimerState();
@@ -20,7 +27,10 @@ class _SessionTimerState extends State<SessionTimer> {
   @override
   void initState() {
     super.initState();
-    _startedAt = DateTime.now();
+    _startedAt = widget.startedAt ?? DateTime.now();
+    // Compute immediately so the first frame shows the real elapsed time
+    // instead of flashing 00:00:00 until the first tick.
+    _elapsed = DateTime.now().difference(_startedAt);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() {

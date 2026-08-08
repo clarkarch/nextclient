@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="100%" height="100%">
+  <defs>
+    <!-- Dark Cyber Pitch Background -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#010206"/>
+      <stop offset="50%" stop-color="#030a16"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+
+    <!-- Electric Cyan #7DF9FF Dominant Gradient (Less Dark Area) -->
+    <linearGradient id="electric-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7DF9FF"/>
+      <stop offset="65%" stop-color="#00E5FF"/>
+      <stop offset="85%" stop-color="#0088cc"/>
+      <stop offset="100%" stop-color="#004477"/>
+    </linearGradient>
+
+    <!-- Soft Ambient Backlight -->
+    <radialGradient id="ambient-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7DF9FF" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Toned Down Glow Filter -->
+    <filter id="soft-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background Card (Sharp Corners) -->
+  <rect width="800" height="800" fill="url(#bg-grad)"/>
+
+  <!-- High-Tech Grid Pattern -->
+  <g opacity="0.04">
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <rect width="40" height="40" fill="none"/>
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#7DF9FF" stroke-width="1"/>
+    </pattern>
+    <rect width="800" height="800" fill="url(#grid)"/>
+  </g>
+
+  <!-- Soft Ambient Light -->
+  <circle cx="400" cy="400" r="280" fill="url(#ambient-glow)" />
+
+  <!-- Main "N" Logo Group -->
+  <g transform="translate(10, 0)">
+    <!-- Layer 1: Subtle Neon Bloom -->
+    <path d="M 230,580 L 230,220 L 310,220 L 490,480 L 490,220 L 570,220 L 570,580 L 490,580 L 310,320 L 310,580 Z"
+          fill="url(#electric-blue)"
+          filter="url(#soft-glow)"
+          opacity="0.4" />
+
+    <!-- Layer 2: Clean Electric Blue Shape (No Strokes) -->
+    <path d="M 230,580 L 230,220 L 310,220 L 490,480 L 490,220 L 570,220 L 570,580 L 490,580 L 310,320 L 310,580 Z"
+          fill="url(#electric-blue)" />
+  </g>
+</svg>

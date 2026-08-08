@@ -35,9 +35,7 @@ class SettingsPage extends StatelessWidget {
   });
 
   void _open(BuildContext context, Widget page) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => page),
-    );
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
   }
 
   @override
@@ -50,7 +48,11 @@ class SettingsPage extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SectionHeader(title: 'Settings'),
+              SectionHeader(
+                title: 'Settings',
+                actionLabel: 'Reset',
+                onAction: () => _confirmReset(context),
+              ),
               _advancedToggleCard(),
               const SizedBox(height: 14),
               // Main settings are always visible; the Advanced Settings section
@@ -95,10 +97,7 @@ class SettingsPage extends StatelessWidget {
             icon: Icons.high_quality,
             title: 'Stream',
             subtitle: _qualitySummary(),
-            onTap: () => _open(
-              context,
-              StreamQualityPage(services: services),
-            ),
+            onTap: () => _open(context, StreamQualityPage(services: services)),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
           const Divider(height: 1),
@@ -133,18 +132,7 @@ class SettingsPage extends StatelessWidget {
             icon: Icons.palette_outlined,
             title: 'UI',
             subtitle: _uiSummary(),
-            onTap: () => _open(
-              context,
-              UiSettingsPage(services: services),
-            ),
-            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
-          ),
-          const Divider(height: 1),
-          NeonSettingTile(
-            icon: Icons.restart_alt,
-            title: 'Reset settings',
-            subtitle: 'Restore all defaults (keeps account)',
-            onTap: () => _confirmReset(context),
+            onTap: () => _open(context, UiSettingsPage(services: services)),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
         ],
@@ -174,10 +162,7 @@ class SettingsPage extends StatelessWidget {
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text(
-              'Reset',
-              style: TextStyle(color: Neon.error),
-            ),
+            child: const Text('Reset', style: TextStyle(color: Neon.error)),
           ),
         ],
       ),
@@ -195,13 +180,10 @@ class SettingsPage extends StatelessWidget {
       'Settings reset to defaults',
     );
     if (context.mounted) {
-      showNeonSnackbar(
-        context,
-        'Settings reset to defaults',
-        copyable: false,
-      );
+      showNeonSnackbar(context, 'Settings reset to defaults', copyable: false);
     }
   }
+
   /// Lower-level categories only relevant to tinkerers, hidden behind the
   /// Advanced Settings toggle (client transport, logging, Performance,
   /// Debug). Experimental options now live inside their own pages, marked with
@@ -215,10 +197,7 @@ class SettingsPage extends StatelessWidget {
             icon: Icons.computer,
             title: 'Client',
             subtitle: 'Transport · renderer · input · cursor overlay',
-            onTap: () => _open(
-              context,
-              WebRtcSettingsPage(services: services),
-            ),
+            onTap: () => _open(context, WebRtcSettingsPage(services: services)),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
           const Divider(height: 1),
@@ -240,10 +219,8 @@ class SettingsPage extends StatelessWidget {
             icon: Icons.speed,
             title: 'Performance',
             subtitle: _perfSummary(),
-            onTap: () => _open(
-              context,
-              PerformanceSettingsPage(services: services),
-            ),
+            onTap: () =>
+                _open(context, PerformanceSettingsPage(services: services)),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
           const Divider(height: 1),
@@ -251,10 +228,7 @@ class SettingsPage extends StatelessWidget {
             icon: Icons.bug_report_outlined,
             title: 'Debug',
             subtitle: 'Cursor overlay diagnostics',
-            onTap: () => _open(
-              context,
-              DebugSettingsPage(services: services),
-            ),
+            onTap: () => _open(context, DebugSettingsPage(services: services)),
             trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
           ),
         ],

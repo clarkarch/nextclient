@@ -4,6 +4,7 @@ import 'dart:io' show File, Platform;
 import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:gfn_core/gfn_core.dart';
 import 'package:http/http.dart' as http;
@@ -16,6 +17,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'state/session_controller.dart';
 import 'state/user_settings.dart';
+import 'theme/neon.dart';
 
 /// Set by the stream page while a stream is live. Invoked when the OS asks
 /// the window to close (Alt+F4 / WM close / title-bar X) so the cloud session,
@@ -90,7 +92,7 @@ Future<void> main() async {
   // never renders.
   final isDesktop =
       Platform.isLinux || Platform.isMacOS || Platform.isWindows;
-  if (isDesktop) {
+if (isDesktop) {
     // Restores the OS cursor after a hot restart during development (pointer
     // lock plugin requirement).
     await pointerLock.ensureInitialized();
@@ -103,6 +105,24 @@ Future<void> main() async {
     // engine under the live native video stack, which crashes on Linux
     // (SIGSEGV / corrupted double-linked list).
     await installWindowCloseHandler();
+  } else {
+    // Solid system bars (Android/iOS): the app content never renders behind
+    // the status bar / nav bar. The stream page flips to immersive
+    // (true fullscreen, bars hidden) while in-game and restores them after.
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Neon.bgA,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: Neon.bgA,
+        systemNavigationBarIconBrightness: Brightness.light,
+        systemNavigationBarDividerColor: Colors.transparent,
+      ),
+    );
   }
   runApp(const DebugShellApp());
 }

@@ -25,6 +25,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyAdvancedMode = 'settings.advancedMode';
   static const _keyStreamGamepad = 'settings.stream.gamepad';
   static const _keyStreamGamepadScale = 'settings.stream.gamepadScale';
+  static const _keyStreamGamepadOpacity = 'settings.stream.gamepadOpacity';
   static const _keyStreamShowFps = 'settings.stream.showFps';
   static const _keyWebrtcIceTransport = 'settings.webrtc.iceTransport';
   static const _keyWebrtcIcePoolSize = 'settings.webrtc.icePoolSize';
@@ -59,6 +60,8 @@ class UserSettings extends ChangeNotifier {
   static const _keyInputSamplingMs = 'settings.input.mouseSamplingMs';
   static const _keyInputCursorOverlay = 'settings.input.cursorOverlay';
   static const _keyInputCursorNative = 'settings.input.cursorNative';
+  static const _keyInputTouchMode = 'settings.input.touchMode';
+  static const _keyInputTouchEnabled = 'settings.input.touchEnabled';
   // --- Debug diagnostics (advanced) --------------------------------------
   static const _keyDebugCursorOverlayBox = 'settings.debug.cursorOverlayBox';
 
@@ -83,6 +86,7 @@ class UserSettings extends ChangeNotifier {
   bool _advancedMode = false;
   bool _streamGamepad = false;
   double _streamGamepadScale = 1.0;
+  double _streamGamepadOpacity = 1.0;
   bool _streamShowFps = false;
   WebrtcIceTransportPolicy _webrtcIceTransport = WebrtcIceTransportPolicy.all;
   int _webrtcIcePoolSize = 0;
@@ -114,6 +118,8 @@ class UserSettings extends ChangeNotifier {
   int _inputMouseSamplingMs = -1; // -1 = immediate (proven path; adaptive = 0)
   bool _inputCursorOverlay = true;
   bool _inputCursorNative = true;
+  TouchInputMode _inputTouchMode = TouchInputMode.relative;
+  bool _inputTouchEnabled = true;
   bool _debugCursorOverlayBox = false;
 
   UserSettings(this._prefs) {
@@ -135,6 +141,11 @@ class UserSettings extends ChangeNotifier {
   bool get advancedMode => _advancedMode;
   bool get streamGamepad => _streamGamepad;
   double get streamGamepadScale => _streamGamepadScale;
+
+  /// Gamepad overlay opacity (0.2–1.0, 1.0 = fully opaque). Tweaked live
+  /// from the stream settings sidebar so the pad can sit semi-transparent
+  /// over the video.
+  double get streamGamepadOpacity => _streamGamepadOpacity;
   bool get streamShowFps => _streamShowFps;
   WebrtcIceTransportPolicy get webrtcIceTransport => _webrtcIceTransport;
   int get webrtcIcePoolSize => _webrtcIcePoolSize;
@@ -199,6 +210,17 @@ class UserSettings extends ChangeNotifier {
   /// placement/size can be inspected while the actual bitmap decode is being
   /// tuned. Off by default (pure diagnostics).
   bool get debugCursorOverlayBox => _debugCursorOverlayBox;
+
+  /// How a touch/finger on the surface maps to the game cursor:
+  /// [TouchInputMode.absolute] pins the pointer to the exact touched spot
+  /// (direct touch), [TouchInputMode.relative] streams deltas like a laptop
+  /// trackpad.
+  TouchInputMode get inputTouchMode => _inputTouchMode;
+
+  /// Master switch for touch input on the stream surface. Off ignores touches
+  /// entirely (they still enter the game, but never click or move the cursor),
+  /// useful when playing with an external mouse/keyboard on a touch screen.
+  bool get inputTouchEnabled => _inputTouchEnabled;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -310,6 +332,14 @@ class UserSettings extends ChangeNotifier {
     if (_streamGamepadScale == clamped) return;
     _streamGamepadScale = clamped;
     _prefs.setDouble(_keyStreamGamepadScale, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadOpacity(double v) {
+    final clamped = v.clamp(0.2, 1.0);
+    if (_streamGamepadOpacity == clamped) return;
+    _streamGamepadOpacity = clamped;
+    _prefs.setDouble(_keyStreamGamepadOpacity, clamped);
     notifyListeners();
   }
 
@@ -547,6 +577,20 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set inputTouchMode(TouchInputMode v) {
+    if (_inputTouchMode == v) return;
+    _inputTouchMode = v;
+    _save(_keyInputTouchMode, v.name);
+    notifyListeners();
+  }
+
+  set inputTouchEnabled(bool v) {
+    if (_inputTouchEnabled == v) return;
+    _inputTouchEnabled = v;
+    _save(_keyInputTouchEnabled, v);
+    notifyListeners();
+  }
+
   StreamSettings buildStreamSettings() {
     return StreamSettings(
       resolution: _resolution,
@@ -588,6 +632,8 @@ class UserSettings extends ChangeNotifier {
     _streamGamepad = _prefs.getBool(_keyStreamGamepad) ?? _streamGamepad;
     _streamGamepadScale =
         _prefs.getDouble(_keyStreamGamepadScale) ?? _streamGamepadScale;
+    _streamGamepadOpacity =
+        _prefs.getDouble(_keyStreamGamepadOpacity) ?? _streamGamepadOpacity;
     _streamShowFps = _prefs.getBool(_keyStreamShowFps) ?? _streamShowFps;
     _webrtcIceTransport = WebrtcIceTransportPolicy
             .values.asNameMap()[_prefs.getString(_keyWebrtcIceTransport)] ??
@@ -660,6 +706,13 @@ class UserSettings extends ChangeNotifier {
         _prefs.getBool(_keyInputCursorOverlay) ?? _inputCursorOverlay;
     _inputCursorNative =
         _prefs.getBool(_keyInputCursorNative) ?? _inputCursorNative;
+    _inputTouchMode = TouchInputMode.values.asNameMap()[
+            _prefs.getString(_keyInputTouchMode)] ??
+        _inputTouchMode;
+    _inputTouchEnabled =
+        _prefs.getBool(_keyInputTouchEnabled) ?? _inputTouchEnabled;
+    _inputTouchEnabled =
+        _prefs.getBool(_keyInputTouchEnabled) ?? _inputTouchEnabled;
     _debugCursorOverlayBox =
         _prefs.getBool(_keyDebugCursorOverlayBox) ?? _debugCursorOverlayBox;
     BackgroundGlow.current.value = _backgroundStyle;
@@ -703,6 +756,7 @@ class UserSettings extends ChangeNotifier {
     _advancedMode = false;
     _streamGamepad = false;
     _streamGamepadScale = 1.0;
+    _streamGamepadOpacity = 1.0;
     _streamShowFps = false;
     _webrtcIceTransport = WebrtcIceTransportPolicy.all;
     _webrtcIcePoolSize = 0;
@@ -732,6 +786,8 @@ class UserSettings extends ChangeNotifier {
     _inputMouseSamplingMs = -1;
     _inputCursorOverlay = true;
     _inputCursorNative = true;
+    _inputTouchMode = TouchInputMode.relative;
+    _inputTouchEnabled = true;
     _debugCursorOverlayBox = false;
     BackgroundGlow.current.value = _backgroundStyle;
     notifyListeners();
@@ -753,6 +809,7 @@ class UserSettings extends ChangeNotifier {
     _keyAdvancedMode,
     _keyStreamGamepad,
     _keyStreamGamepadScale,
+    _keyStreamGamepadOpacity,
     _keyStreamShowFps,
     _keyWebrtcIceTransport,
     _keyWebrtcIcePoolSize,
@@ -782,6 +839,8 @@ class UserSettings extends ChangeNotifier {
     _keyInputSamplingMs,
     _keyInputCursorOverlay,
     _keyInputCursorNative,
+    _keyInputTouchMode,
+    _keyInputTouchEnabled,
     _keyDebugCursorOverlayBox,
   ];
 }
@@ -850,4 +909,15 @@ enum StreamRecoveryProfile {
   /// Shallow NACK window + prefer fresh keyframes over deep retransmit:
   /// lowest latency, but more visible artifacts under sustained loss.
   latency,
+}
+
+/// Touch input mapping used on the stream surface (mobile / touchscreens).
+enum TouchInputMode {
+  /// Direct touch: the cursor jumps to the exact spot under the finger
+  /// (absolute coordinates) and taps are clicks.
+  absolute,
+
+  /// Trackpad-style: drags move the cursor by relative deltas from the last
+  /// position (like a laptop touchpad).
+  relative,
 }

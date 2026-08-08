@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:gfn_core/gfn_core.dart';
 
 import '../../main.dart';
+import '../../pages/stream/stream_page.dart';
 import '../../theme/neon.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/neon_switch.dart';
+import 'ads_tester_page.dart';
 
 /// Debug diagnostics: client-side toggles for inspecting the in-game cursor
 /// overlay without trial-and-error run→edit→rebuild loops.
@@ -26,6 +29,46 @@ class DebugSettingsPage extends StatelessWidget {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
+                NeonSettingTile(
+                  icon: Icons.play_circle_outline,
+                  title: 'Streaming UI demo',
+                  subtitle:
+                      'Open the stream surface on a fake session (no queue, no server)',
+                  trailing: const Icon(
+                    Icons.chevron_right,
+                    color: Neon.inkMuted,
+                  ),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => StreamPage(
+                          services: services,
+                          game: const CatalogGame(
+                            id: 'demo',
+                            title: 'Streaming UI Demo',
+                          ),
+                          demoMode: true,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const Divider(height: 1),
+                NeonSettingTile(
+                  icon: Icons.movie_outlined,
+                  title: 'Ads tester',
+                  subtitle: 'Play an ad media URL via fvp (no session needed)',
+                  trailing: const Icon(
+                    Icons.chevron_right,
+                    color: Neon.inkMuted,
+                  ),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AdsTesterPage()),
+                    );
+                  },
+                ),
+                const Divider(height: 1),
                 NeonSettingTile(
                   icon: Icons.mouse,
                   title: 'Native cursor',
@@ -60,8 +103,7 @@ class DebugSettingsPage extends StatelessWidget {
                     'cursors always use the client-drawn overlay.\n\n'
                     'Cursor overlay box puts a translucent box at the rendered '
                     'cursor to inspect its bounding box and tracking.',
-                    style:
-                        const TextStyle(color: Neon.inkMuted, fontSize: 12),
+                    style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
                   ),
                 ),
               ],

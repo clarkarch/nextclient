@@ -187,15 +187,46 @@ class _ShellState extends State<Shell> {
         if (!mounted) return;
         showNeonSnackbar(
           context,
-          'Active session found (appId ${first.appId}). Resume it?',
+          'Active session found (appId ${first.appId}). Resume or kill it?',
           actionLabel: 'Resume',
+          altActionLabel: 'Kill',
           copyable: false,
           duration: _resumePromptDuration,
           onAction: () => _resumeActiveSession(first),
+          altOnAction: () => _terminateActiveSession(first),
         );
       });
     } catch (e) {
       debugPrint('[resume] check failed: $e');
+    }
+  }
+
+  /// Terminates the remotely-active session instead of resuming it, so the
+  /// spot is freed and no process keeps running on the server.
+  Future<void> _terminateActiveSession(ActiveSessionInfo info) async {
+    try {
+      final session = await widget.services.auth.ensureValidSession();
+      if (session == null) return;
+      final token = session.tokens.idToken ?? session.tokens.accessToken;
+      await widget.services.cloudMatch.stopSession(
+        SessionStopRequest(
+          token: token,
+          streamingBaseUrl: info.streamingBaseUrl,
+          serverIp: info.serverIp,
+          zone: '',
+          sessionId: info.sessionId,
+        ),
+      );
+      widget.services.logSink.log(
+        LogLevel.info,
+        'app',
+        'Terminated active session (appId ${info.appId})',
+      );
+      if (!mounted) return;
+      showNeonSnackbar(context, 'Session terminated', copyable: false);
+    } catch (e) {
+      debugPrint('[resume] terminate failed: $e');
+      widget.services.logSink.log(LogLevel.warn, 'app', 'Terminate failed: $e');
     }
   }
 

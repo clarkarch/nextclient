@@ -151,25 +151,32 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
     final zones = _views.values.where((v) => !v.nuked).toList();
     if (zones.isEmpty) return;
     setState(() => _pinging = true);
-    final regions = zones
-        .map((v) => StreamRegion(name: v.zoneId, url: v.routingUrl))
-        .toList();
-    final results = await pingRegions(regions);
-    if (!mounted) return;
-    final byUrl = {for (final r in results) r.url: r.pingMs};
-    setState(() {
-      _views = {
-        for (final e in _views.entries)
-          e.key: _ZoneView(
-            zoneId: e.value.zoneId,
-            zone: e.value.zone,
-            routingUrl: e.value.routingUrl,
-            pingMs: byUrl[e.value.routingUrl],
-            nuked: e.value.nuked,
-          ),
-      };
-      _pinging = false;
-    });
+    try {
+      final regions = zones
+          .map((v) => StreamRegion(name: v.zoneId, url: v.routingUrl))
+          .toList();
+      final results = await pingRegions(regions);
+      if (!mounted) return;
+      final byUrl = {for (final r in results) r.url: r.pingMs};
+      setState(() {
+        _views = {
+          for (final e in _views.entries)
+            e.key: _ZoneView(
+              zoneId: e.value.zoneId,
+              zone: e.value.zone,
+              routingUrl: e.value.routingUrl,
+              pingMs: byUrl[e.value.routingUrl],
+              nuked: e.value.nuked,
+            ),
+        };
+        _pinging = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      // A failed ping must not leave the modal stuck on the loading state;
+      // the rows are still usable with the fetched queue data.
+      setState(() => _pinging = false);
+    }
   }
 
   List<_ZoneView> get _eligible =>
@@ -301,7 +308,7 @@ class _PrintedWasteModalState extends State<PrintedWasteModal> {
   }
 
   Widget _body() {
-    if (_loading) {
+    if (_loading || _pinging) {
       return const Padding(
         padding: EdgeInsets.all(40),
         child: Center(
@@ -583,10 +590,11 @@ class _RecommendCard extends StatelessWidget {
                     label: '${view.pingMs}ms',
                     tone: _pingTone(view.pingMs!),
                   ),
-                NeonChip(
-                  label: 'Q${view.zone.queuePosition ?? '--'}',
-                  tone: _queueTone(view.zone.queuePosition ?? 999),
-                ),
+                if (view.zone.queuePosition != null)
+                  NeonChip(
+                    label: 'Q${view.zone.queuePosition}',
+                    tone: _queueTone(view.zone.queuePosition!),
+                  ),
               ],
             ),
             const SizedBox(height: 6),
@@ -603,15 +611,13 @@ class _RecommendCard extends StatelessWidget {
   }
 
   NeonChipTone _queueTone(int q) {
-    if (q <= 5) return NeonChipTone.success;
-    if (q <= 15) return NeonChipTone.violet;
+    if (q <= 15) return NeonChipTone.success;
     if (q <= 30) return NeonChipTone.warning;
     return NeonChipTone.error;
   }
 
   NeonChipTone _pingTone(int ms) {
-    if (ms < 30) return NeonChipTone.success;
-    if (ms < 80) return NeonChipTone.violet;
+    if (ms < 80) return NeonChipTone.success;
     if (ms < 150) return NeonChipTone.warning;
     return NeonChipTone.error;
   }
@@ -694,7 +700,7 @@ class _ZoneRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final q = view.zone.queuePosition ?? 999;
+    final q = view.zone.queuePosition;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(10),
@@ -776,15 +782,17 @@ class _ZoneRow extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-            const SizedBox(width: 12),
-            Text(
-              'Q:$q',
-              style: TextStyle(
-                color: _queueColor(q),
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
+            if (q != null) ...[
+              const SizedBox(width: 12),
+              Text(
+                'Q:$q',
+                style: TextStyle(
+                  color: _queueColor(q),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
-            ),
+            ],
             const SizedBox(width: 12),
             SizedBox(
               width: 44,
@@ -801,15 +809,13 @@ class _ZoneRow extends StatelessWidget {
   }
 
   Color _queueColor(int q) {
-    if (q <= 5) return Neon.success;
-    if (q <= 15) return Neon.violet;
+    if (q <= 15) return Neon.success;
     if (q <= 30) return Neon.warning;
     return Neon.error;
   }
 
   Color _pingColor(int ms) {
-    if (ms < 30) return Neon.success;
-    if (ms < 80) return Neon.violet;
+    if (ms < 80) return Neon.success;
     if (ms < 150) return Neon.warning;
     return Neon.error;
   }

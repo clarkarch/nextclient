@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Solid dark backdrop for the adaptive launcher icon so the logo sits on
+         the neon-night background with no white mask around it. -->
+    <color name="ic_launcher_background">#070D24</color>
+</resources>

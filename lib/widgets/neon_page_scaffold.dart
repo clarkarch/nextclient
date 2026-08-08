@@ -82,26 +82,33 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
       fit: StackFit.expand,
       children: [
         NeonBackground(style: style),
-        Column(
-          children: [
-            if (widget.header != null)
-              widget.header!
-            else if (widget.title != null ||
-                widget.showBack ||
-                (widget.actions != null && widget.actions!.isNotEmpty))
-              _TopBar(
-                title: widget.title,
-                showBack: widget.showBack,
-                actions: widget.actions ?? const [],
+        // Content stays inside the status-bar / notch inset (the background
+        // behind it is still edge-to-edge). The bottom is left to each page's
+        // own bottom-ish UI (bottom nav handles its inset itself).
+        SafeArea(
+          top: true,
+          bottom: false,
+          child: Column(
+            children: [
+              if (widget.header != null)
+                widget.header!
+              else if (widget.title != null ||
+                  widget.showBack ||
+                  (widget.actions != null && widget.actions!.isNotEmpty))
+                _TopBar(
+                  title: widget.title,
+                  showBack: widget.showBack,
+                  actions: widget.actions ?? const [],
+                ),
+              Expanded(
+                child: Scrollbar(
+                  controller: _controller,
+                  thumbVisibility: true,
+                  child: _scrollView(),
+                ),
               ),
-            Expanded(
-              child: Scrollbar(
-                controller: _controller,
-                thumbVisibility: true,
-                child: _scrollView(),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ],
     );

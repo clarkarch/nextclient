@@ -46,20 +46,36 @@ class VirtualGamepad extends StatefulWidget {
   /// Callback for home button.
   final VoidCallback? onHomePressed;
 
+  /// Callback when start/select/home is released (held buttons stay down until
+  /// the finger lifts — Start/Select typically act on the edge, bumpers/triggers
+  /// stream their full axis while held).
+  final VoidCallback? onStartReleased;
+  final VoidCallback? onSelectReleased;
+  final VoidCallback? onHomeReleased;
+
   /// Callback for left bumper (LB).
   final VoidCallback? onLeftBumperPressed;
+
+  /// Callback when the left bumper is released.
+  final VoidCallback? onLeftBumperReleased;
 
   /// Callback for right bumper (RB).
   final VoidCallback? onRightBumperPressed;
 
+  /// Callback when the right bumper is released.
+  final VoidCallback? onRightBumperReleased;
+
   /// Callback for left trigger (LT).
   final VoidCallback? onLeftTriggerPressed;
+
+  /// Callback when the left trigger is released.
+  final VoidCallback? onLeftTriggerReleased;
 
   /// Callback for right trigger (RT).
   final VoidCallback? onRightTriggerPressed;
 
-  /// Background color for the gamepad area.
-  final Color backgroundColor;
+  /// Callback when the right trigger is released.
+  final VoidCallback? onRightTriggerReleased;
 
   /// Padding around the gamepad.
   final EdgeInsets padding;
@@ -80,11 +96,17 @@ class VirtualGamepad extends StatefulWidget {
     this.onStartPressed,
     this.onSelectPressed,
     this.onHomePressed,
+    this.onStartReleased,
+    this.onSelectReleased,
+    this.onHomeReleased,
     this.onLeftBumperPressed,
+    this.onLeftBumperReleased,
     this.onRightBumperPressed,
+    this.onRightBumperReleased,
     this.onLeftTriggerPressed,
+    this.onLeftTriggerReleased,
     this.onRightTriggerPressed,
-    this.backgroundColor = Colors.transparent,
+    this.onRightTriggerReleased,
     this.padding = const EdgeInsets.all(16.0),
     this.scale = 1.0,
   });
@@ -97,8 +119,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
   /// Calculate adaptive scale based on screen size.
   double get _adaptiveScale {
     final screenSize = MediaQuery.of(context).size;
-    final shortestSide =
-        screenSize.width < screenSize.height ? screenSize.width : screenSize.height;
+    final shortestSide = screenSize.width < screenSize.height
+        ? screenSize.width
+        : screenSize.height;
     // Base scale on shortest side, normalized to 400px reference.
     final baseScale = shortestSide / 400;
     return (baseScale.clamp(0.5, 1.5) * widget.scale).clamp(0.4, 2.0);
@@ -118,54 +141,50 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(28),
-        color: widget.backgroundColor,
-        border: Border.all(color: Neon.outlineSoft),
-      ),
-      child: Padding(
-        padding: widget.padding,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildShoulderButtons(),
-            SizedBox(height: 12 * _adaptiveScale),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildLeftSide(),
-                SizedBox(width: _centerSpacing),
-                _buildRightSide(),
-              ],
-            ),
-            SizedBox(height: 16 * _adaptiveScale),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _MenuButton(
-                  label: 'SELECT',
-                  size: _menuButtonSize,
-                  onPressed: widget.onSelectPressed,
-                ),
-                SizedBox(width: 16 * _adaptiveScale),
-                _MenuButton(
-                  label: 'START',
-                  size: _menuButtonSize,
-                  onPressed: widget.onStartPressed,
-                ),
-                SizedBox(width: 16 * _adaptiveScale),
-                _MenuButton(
-                  icon: Icons.home_rounded,
-                  size: _menuButtonSize * 0.9,
-                  onPressed: widget.onHomePressed,
-                  isHome: true,
-                ),
-              ],
-            ),
-          ],
-        ),
+    return Padding(
+      padding: widget.padding,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildShoulderButtons(),
+          SizedBox(height: 12 * _adaptiveScale),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildLeftSide(),
+              SizedBox(width: _centerSpacing),
+              _buildRightSide(),
+            ],
+          ),
+          SizedBox(height: 16 * _adaptiveScale),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _MenuButton(
+                label: 'SELECT',
+                size: _menuButtonSize,
+                onPressed: widget.onSelectPressed,
+                onReleased: widget.onSelectReleased,
+              ),
+              SizedBox(width: 16 * _adaptiveScale),
+              _MenuButton(
+                label: 'START',
+                size: _menuButtonSize,
+                onPressed: widget.onStartPressed,
+                onReleased: widget.onStartReleased,
+              ),
+              SizedBox(width: 16 * _adaptiveScale),
+              _MenuButton(
+                icon: Icons.home_rounded,
+                size: _menuButtonSize * 0.9,
+                onPressed: widget.onHomePressed,
+                onReleased: widget.onHomeReleased,
+                isHome: true,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -181,11 +200,13 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               width: _triggerButtonWidth,
               height: _triggerButtonHeight,
               onPressed: widget.onLeftTriggerPressed,
+              onReleased: widget.onLeftTriggerReleased,
             ),
             _TriggerButton(
               width: _triggerButtonWidth,
               height: _triggerButtonHeight,
               onPressed: widget.onRightTriggerPressed,
+              onReleased: widget.onRightTriggerReleased,
             ),
           ],
         ),
@@ -198,12 +219,14 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               width: _shoulderButtonWidth,
               height: _shoulderButtonHeight,
               onPressed: widget.onLeftBumperPressed,
+              onReleased: widget.onLeftBumperReleased,
             ),
             _ShoulderButton(
               label: 'RB',
               width: _shoulderButtonWidth,
               height: _shoulderButtonHeight,
               onPressed: widget.onRightBumperPressed,
+              onReleased: widget.onRightBumperReleased,
             ),
           ],
         ),
@@ -279,6 +302,7 @@ class _MenuButton extends StatefulWidget {
   final IconData? icon;
   final double size;
   final VoidCallback? onPressed;
+  final VoidCallback? onReleased;
   final bool isHome;
 
   const _MenuButton({
@@ -286,6 +310,7 @@ class _MenuButton extends StatefulWidget {
     this.icon,
     required this.size,
     this.onPressed,
+    this.onReleased,
     this.isHome = false,
   });
 
@@ -299,12 +324,19 @@ class _MenuButtonState extends State<_MenuButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => setState(() => _isPressed = true),
-      onTapUp: (_) {
-        setState(() => _isPressed = false);
+      onTapDown: (_) {
+        setState(() => _isPressed = true);
         widget.onPressed?.call();
       },
-      onTapCancel: () => setState(() => _isPressed = false),
+      onTapUp: (_) {
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
+      onTapCancel: () {
+        if (!_isPressed) return;
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 100),
         width: widget.size,
@@ -324,9 +356,11 @@ class _MenuButtonState extends State<_MenuButton> {
               blurRadius: _isPressed ? 4 : 6,
               offset: Offset(0, _isPressed ? 1 : 3),
             ),
-            if (widget.isHome && _isPressed)
+            if (_isPressed)
               BoxShadow(
-                color: Neon.accent.withValues(alpha: 0.3),
+                color: (widget.isHome ? Neon.accent : Neon.violet).withValues(
+                  alpha: 0.35,
+                ),
                 blurRadius: 8,
               ),
           ],
@@ -359,12 +393,14 @@ class _ShoulderButton extends StatefulWidget {
   final double width;
   final double height;
   final VoidCallback? onPressed;
+  final VoidCallback? onReleased;
 
   const _ShoulderButton({
     required this.label,
     required this.width,
     required this.height,
     this.onPressed,
+    this.onReleased,
   });
 
   @override
@@ -377,12 +413,19 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => setState(() => _isPressed = true),
-      onTapUp: (_) {
-        setState(() => _isPressed = false);
+      onTapDown: (_) {
+        setState(() => _isPressed = true);
         widget.onPressed?.call();
       },
-      onTapCancel: () => setState(() => _isPressed = false),
+      onTapUp: (_) {
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
+      onTapCancel: () {
+        if (!_isPressed) return;
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 80),
         width: widget.width,
@@ -390,13 +433,21 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
         decoration: BoxDecoration(
           color: _isPressed ? Neon.cardHover : Neon.bgC,
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Neon.outline, width: 1),
+          border: Border.all(
+            color: _isPressed ? Neon.violet : Neon.outline,
+            width: 1,
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: _isPressed ? 0.2 : 0.35),
               blurRadius: _isPressed ? 3 : 5,
               offset: Offset(0, _isPressed ? 1 : 2),
             ),
+            if (_isPressed)
+              BoxShadow(
+                color: Neon.violet.withValues(alpha: 0.35),
+                blurRadius: 8,
+              ),
           ],
         ),
         child: Center(
@@ -421,11 +472,13 @@ class _TriggerButton extends StatefulWidget {
   final double width;
   final double height;
   final VoidCallback? onPressed;
+  final VoidCallback? onReleased;
 
   const _TriggerButton({
     required this.width,
     required this.height,
     this.onPressed,
+    this.onReleased,
   });
 
   @override
@@ -438,12 +491,19 @@ class _TriggerButtonState extends State<_TriggerButton> {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTapDown: (_) => setState(() => _isPressed = true),
-      onTapUp: (_) {
-        setState(() => _isPressed = false);
+      onTapDown: (_) {
+        setState(() => _isPressed = true);
         widget.onPressed?.call();
       },
-      onTapCancel: () => setState(() => _isPressed = false),
+      onTapUp: (_) {
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
+      onTapCancel: () {
+        if (!_isPressed) return;
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 80),
         width: widget.width,
@@ -462,7 +522,10 @@ class _TriggerButtonState extends State<_TriggerButton> {
             bottomLeft: Radius.circular(4),
             bottomRight: Radius.circular(4),
           ),
-          border: Border.all(color: Neon.outline, width: 1),
+          border: Border.all(
+            color: _isPressed ? Neon.accent : Neon.outline,
+            width: 1,
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: _isPressed ? 0.2 : 0.35),
@@ -476,6 +539,11 @@ class _TriggerButtonState extends State<_TriggerButton> {
               offset: const Offset(0, 2),
               spreadRadius: -1,
             ),
+            if (_isPressed)
+              BoxShadow(
+                color: Neon.accent.withValues(alpha: 0.4),
+                blurRadius: 8,
+              ),
           ],
         ),
         child: Center(
