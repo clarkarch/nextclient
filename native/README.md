@@ -85,6 +85,79 @@ grep -c 'memory:VAMemory' packages/flutter_webrtc/third_party/libwebrtc/lib/libw
 grep -c 'memory:VAMemory' build/linux/x64/release/bundle/lib/libwebrtc.so
 ```
 
+## Windows daily rebuild (incremental — the common case)
+
+Same flow as Linux, but for the **D3D11 decoder** (`d3d11_patch/`): you changed
+`d3d11_patch/d3d11_video_decoder.cc` (or any of the d3d11 sources) and want it
+in the Windows app. The checkout is the same wrapper — the d3d11 sources are
+`WEBRTC_WIN`/`_WIN32`-guarded, so they compile to empty stubs on Linux and the
+patch can be staged into the SAME checkout the VAAPI patch uses (layered). The
+dll itself must be built on Windows (MSVC + a GStreamer runtime with the d3d11
+plugin), but ninja only recompiles the changed files there too.
+
+```bash
+# 1. Stage the d3d11 patch into the wrapper (idempotent; layers on vaapi)
+bash d3d11_patch/apply_patch.sh \
+     native/libwebrtc_build/src/libwebrtc \
+     packages/flutter_webrtc/third_party/libwebrtc
+
+# 2. Incremental build on WINDOWS (only changed sources + relink)
+#    gn gen once with target_os="win", then:
+ninja -C out-release/Windows-x64 libwebrtc
+
+# 3. Swap the dll + import lib into the plugin. The plugin's CMakeLists guard
+#    (dll + D3D11_CUSTOM.txt marker present) then skips the stock download and
+#    defines LIBWEBRTC_D3D11_CUSTOM for the zero-copy renderer path.
+cp out-release/Windows-x64/libwebrtc.dll     packages/flutter_webrtc/third_party/libwebrtc/lib/
+cp out-release/Windows-x64/libwebrtc.dll.lib packages/flutter_webrtc/third_party/libwebrtc/lib/
+rm -f packages/flutter_webrtc/third_party/downloads/libwebrtc-win-*.zip
+
+# 4. Rebuild the app
+flutter build windows --release
+```
+
+**Also required at runtime:** the app must ship a GStreamer MSVC runtime that
+includes the `d3d11h264dec` element (gst-plugins-bad) — the decoder is
+GStreamer-backed. Without it the decoder factory falls back to the builtin
+FFmpeg decoder (stats overlay reads `FFmpegVideoDecoder`). Verify with the
+`[d3drender] compositing via zero-copy D3D11 texture` log line + a decoder name
+other than `FFmpegVideoDecoder` in the stats overlay.
+
+On Linux, staging the d3d11 patch compiles as empty stubs (see the header
+comments — the fields are `_WIN32`-guarded so clang's `-Wunused-private-field`
+under `-Werror` doesn't fire on the stub build); a successful Linux ninja run
+validates the patch layers cleanly but produces no d3d11 code in the `.so`.
+
+### GitHub Actions does the Windows dll build for you
+
+The repo ships a dedicated workflow, `.github/workflows/libwebrtc-windows.yml`,
+that runs the whole dll build on a `windows-2022` runner (the same recipe the
+upstream webrtc-sdk/libwebrtc repo uses) with the d3d11 patch applied:
+
+- **When:** manual `workflow_dispatch` (recommended), tag pushes `v*`, and a
+  weekly schedule. It is NOT part of the per-push build matrix — a full
+  gclient sync + ninja build takes 1–3 h, so it is opt-in only.
+- **What it does:** gclient-syncs `m144_release`, clones the wrapper at the
+  pinned commit, applies the four upstream patches + `d3d11_patch`, installs
+  the GStreamer MSVC runtime **and** devel MSI (pkg-config files), `gn gen`s
+  with `target_os="win"`, builds `libwebrtc`, then vendors
+  `libwebrtc.dll` + `.lib` + the `D3D11_CUSTOM.txt` marker into
+  `packages/flutter_webrtc/third_party/libwebrtc/lib/`.
+- **Commit-back:** on manual dispatch (or tags) it commits the vendored dll
+  back into the repo, mirroring how the Linux `.so` is committed. Once the
+  dll + marker are in-tree, the ordinary `build.yml` Windows job skips the
+  stock download (the `third_party/CMakeLists.txt` guard) and builds the app
+  with the zero-copy decoder. A second `validate-windows-app` job then runs
+  `flutter build windows --release` against the freshly-built dll to prove the
+  `LIBWEBRTC_D3D11_CUSTOM` renderer path links.
+- **The marker alone is safe:** `packages/flutter_webrtc/windows/CMakeLists.txt`
+  defines `LIBWEBRTC_D3D11_CUSTOM` only when BOTH the dll and the marker exist
+  (mirroring `third_party/CMakeLists.txt`), so a marker committed without the
+  dll cannot break the stock build.
+
+Note: building WebRTC in CI consumes ~10 GB of disk and 7 GB RAM — GitHub's
+`windows-2022` runner is the smallest that comfortably fits it.
+
 ## Why out-release and not out-debug
 
 Two build dirs exist with different GN args:

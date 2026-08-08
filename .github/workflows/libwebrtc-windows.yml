@@ -1,0 +1,225 @@
+# Builds the custom D3D11 libwebrtc.dll (see d3d11_patch/) on a Windows
+# runner and vendors it into packages/flutter_webrtc/third_party/libwebrtc/lib/
+# so the Windows app links the zero-copy decoder instead of the stock prebuilt
+# dll (which only has the FFmpeg software path).
+#
+# The recipe mirrors what upstream webrtc-sdk/libwebrtc's own
+# .github/workflows/webrtc-builds.yml does (windows-2022, DEPOT_TOOLS_WIN_
+# TOOLCHAIN=0, gn.bat + ninja) with the next_client d3d11_patch applied on top
+# and the vendored artifacts committed back into the repo (the same pattern the
+# Linux VAAPI .so uses: a committed binary under third_party/libwebrtc/lib/).
+#
+# This is a heavy job (gclient sync ~10GB + a 1-3h ninja build), so it is NOT
+# part of the per-push build.yml matrix — it runs on manual dispatch, release
+# tags and a weekly schedule. Once the dll + D3D11_CUSTOM.txt marker land in
+# the repo, the ordinary build.yml Windows job automatically picks them up
+# (third_party/CMakeLists.txt skips the stock download when both exist).
+
+name: libwebrtc-windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_vendor:
+        description: >-
+          Commit the built libwebrtc.dll + .lib + D3D11_CUSTOM.txt marker back
+          into the repo so subsequent Windows app builds use it (needs write
+          access; if the branch is protected the push fails but the artifact is
+          still uploaded).
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "0 3 * * 1" # weekly sanity build (no commit back)
+
+permissions:
+  contents: write # only the optional commit-back step uses it
+
+concurrency:
+  group: libwebrtc-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WEBRTC_BRANCH: m144_release
+  WRAPPER_COMMIT: 8586c07c4c0a82f645cb0867913d43593a9e9466 # pinned upstream wrapper
+  GST_VERSION: "1.24.13"
+
+jobs:
+  build-libwebrtc:
+    name: Build custom libwebrtc.dll
+    runs-on: windows-2022
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GStreamer MSVC runtime + dev (pkg-config files)
+        # The d3d11 patch links the wrapper against GStreamer
+        # (gstreamer-d3d11-1.0.pc only ships in the -devel installer; the
+        # runtime installer provides gstd3d11.dll with d3d11h264dec).
+        shell: pwsh
+        run: |
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GST_VERSION/msvc"
+          Invoke-WebRequest -Uri "$base/gstreamer-1.0-msvc-x86_64-$env:GST_VERSION.msi" -OutFile "$env:TEMP\gst-runtime.msi"
+          Invoke-WebRequest -Uri "$base/gstreamer-1.0-devel-msvc-x86_64-$env:GST_VERSION.msi" -OutFile "$env:TEMP\gst-devel.msi"
+          Start-Process msiexec -ArgumentList "/i", "$env:TEMP\gst-runtime.msi", "/qn", "/norestart" -Wait
+          Start-Process msiexec -ArgumentList "/i", "$env:TEMP\gst-devel.msi", "/qn", "/norestart" -Wait
+          $gst = "C:\gstreamer\1.0\msvc_x86_64"
+          "PKG_CONFIG_PATH=$gst\lib\pkgconfig" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$gst\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          Write-Host "GStreamer installed to $gst"
+
+      - name: Create build tree + .gclient
+        shell: bash
+        run: |
+          mkdir -p native/libwebrtc_build
+          cat > native/libwebrtc_build/.gclient <<'EOF'
+          solutions = [
+            {
+              "name"        : 'src',
+              "url"         : 'https://github.com/webrtc-sdk/webrtc.git@m144_release',
+              "deps_file"   : 'DEPS',
+              "managed"     : False,
+              "custom_deps" : { },
+              "custom_vars" : { },
+            },
+          ]
+          target_os  = ['win']
+          EOF
+
+      - name: Install depot_tools
+        shell: bash
+        run: |
+          cd native/libwebrtc_build
+          if [ ! -d depot_tools ]; then
+            git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          fi
+          echo "$PWD/depot_tools" >> "$GITHUB_PATH"
+
+      - name: Checkout webrtc src (m144_release) + gclient sync
+        shell: bash
+        run: |
+          cd native/libwebrtc_build
+          if [ ! -d src/.git ]; then
+            git clone https://github.com/webrtc-sdk/webrtc.git src
+          fi
+          cd src
+          git checkout -f "$WEBRTC_BRANCH" || git checkout -f origin/"$WEBRTC_BRANCH"
+          git clean -df
+          cd ..
+          # depot_tools not yet on PATH for this shell; call via explicit path
+          ./depot_tools/gclient.bat sync --with_branch_heads --jobs=8
+
+      - name: Clone wrapper + apply upstream patches
+        shell: bash
+        run: |
+          cd native/libwebrtc_build/src
+          if [ ! -d libwebrtc/.git ]; then
+            git clone https://github.com/webrtc-sdk/libwebrtc
+          fi
+          cd libwebrtc
+          git checkout -f "$WRAPPER_COMMIT"
+          cd ../..
+          git apply libwebrtc/patches/custom_audio_source_m144.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
+          git apply libwebrtc/patches/add_libwebrtc_build_target.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
+          git apply libwebrtc/patches/fix_desktop_capture_compile.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
+          git apply libwebrtc/patches/fix_emplace.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
+
+      - name: Apply d3d11 patch
+        shell: bash
+        run: |
+          bash d3d11_patch/apply_patch.sh \
+            native/libwebrtc_build/src/libwebrtc \
+            packages/flutter_webrtc/third_party/libwebrtc
+
+      - name: gn gen + ninja libwebrtc
+        shell: bash
+        env:
+          DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+        run: |
+          export PATH="$PWD/native/libwebrtc_build/depot_tools:$PATH"
+          cd native/libwebrtc_build/src
+          gn gen out-release/Windows-x64 --args='is_debug=false is_clang=true target_cpu="x64" use_custom_libcxx=false rtc_libvpx_build_vp9=true enable_libaom=true rtc_include_tests=false rtc_build_examples=false rtc_build_tools=false is_component_build=false rtc_enable_protobuf=false rtc_use_h264=true ffmpeg_branding="Chrome" use_rtti=true symbol_level=0 enable_iterator_debugging=false'
+          ninja -C out-release/Windows-x64 libwebrtc
+
+      - name: Vendor dll + .lib into the plugin
+        shell: bash
+        run: |
+          set -e
+          OUT=native/libwebrtc_build/src/out-release/Windows-x64
+          LIB=packages/flutter_webrtc/third_party/libwebrtc/lib
+          ls -la "$OUT"/libwebrtc.dll "$OUT"/libwebrtc.dll.lib
+          cp "$OUT"/libwebrtc.dll "$LIB"/libwebrtc.dll
+          cp "$OUT"/libwebrtc.dll.lib "$LIB"/libwebrtc.dll.lib
+          touch "$LIB"/D3D11_CUSTOM.txt # apply_patch.sh already created it; ensure present
+          rm -f packages/flutter_webrtc/third_party/downloads/libwebrtc-win-*.zip
+
+      - name: Upload vendored dll artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libwebrtc-windows-custom
+          path: |
+            packages/flutter_webrtc/third_party/libwebrtc/lib/libwebrtc.dll
+            packages/flutter_webrtc/third_party/libwebrtc/lib/libwebrtc.dll.lib
+            packages/flutter_webrtc/third_party/libwebrtc/lib/D3D11_CUSTOM.txt
+          if-no-files-found: error
+
+      - name: Commit vendored dll back to the repo
+        if: >-
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.commit_vendor == 'true')
+          || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add packages/flutter_webrtc/third_party/libwebrtc/lib/libwebrtc.dll \
+                  packages/flutter_webrtc/third_party/libwebrtc/lib/libwebrtc.dll.lib \
+                  packages/flutter_webrtc/third_party/libwebrtc/lib/D3D11_CUSTOM.txt
+          if git diff --cached --quiet; then
+            echo "vendored dll unchanged; nothing to commit"
+          else
+            git commit -m "build(windows): vendor custom D3D11 libwebrtc.dll
+
+            Built by the libwebrtc-windows workflow from d3d11_patch/ against
+            webrtc m144_release (wrapper ${WRAPPER_COMMIT}). Enables the
+            zero-copy D3D11 decoder path (LIBWEBRTC_D3D11_CUSTOM) in the
+            Windows plugin."
+            git push
+          fi
+
+  validate-windows-app:
+    name: Validate Windows app links the custom dll
+    needs: build-libwebrtc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libwebrtc-windows-custom
+          path: custom-dll
+
+      - name: Place vendored dll into the plugin
+        shell: bash
+        run: |
+          set -e
+          LIB=packages/flutter_webrtc/third_party/libwebrtc/lib
+          mkdir -p "$LIB"
+          cp custom-dll/libwebrtc.dll "$LIB/"
+          cp custom-dll/libwebrtc.dll.lib "$LIB/"
+          cp custom-dll/D3D11_CUSTOM.txt "$LIB/"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.7"
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build Windows app against the custom dll
+        # The plugin's windows/CMakeLists.txt defines LIBWEBRTC_D3D11_CUSTOM
+        # (marker + dll present) so the renderer compiles the NativeD3D11Handle
+        # zero-copy path; a link success proves the custom dll ABI matches.
+        run: flutter build windows --release

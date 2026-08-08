@@ -42,10 +42,17 @@ cp "$HERE/d3d11_video_decoder.cc"   "$WRAPPER/src/"
 cp "$HERE/h264_bitstream.h"         "$WRAPPER/src/"
 
 echo "==> Patching BUILD.gn"
-python3 "$HERE/patch_build_gn.py" "$WRAPPER/BUILD.gn"
+# Windows runners often lack a `python3` on PATH (only `python`); pick
+# whichever interpreter exists so the patch applies identically in CI.
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+else
+  PY=python
+fi
+"$PY" "$HERE/patch_build_gn.py" "$WRAPPER/BUILD.gn"
 
 echo "==> Patching rtc_peerconnection_factory_impl.cc"
-python3 "$HERE/patch_factory.py" "$WRAPPER/src/rtc_peerconnection_factory_impl.cc"
+"$PY" "$HERE/patch_factory.py" "$WRAPPER/src/rtc_peerconnection_factory_impl.cc"
 
 echo "==> Marking the app's third_party/libwebrtc as a custom build"
 if [[ -d "$LIBWEBRTC_APP_DIR/lib" ]]; then

@@ -71,12 +71,15 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   winmm.lib
 )
 
-# A custom D3D11 libwebrtc build (see d3d11_patch/) is vendored when the
-# D3D11_CUSTOM marker sits next to the DLL. That build implements
-# RTCVideoFrame::NativeD3D11Handle(), so the renderer compiles its zero-copy
-# kNative texture path; without the marker (stock prebuilt DLL) the renderer
-# only uses the I420 plane-upload path.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/lib/D3D11_CUSTOM.txt")
+# A custom D3D11 libwebrtc build (see d3d11_patch/) is vendored when BOTH the
+# DLL and the D3D11_CUSTOM marker sit in third_party/libwebrtc/lib — mirror the
+# guard in third_party/CMakeLists.txt exactly. The marker alone must NOT enable
+# LIBWEBRTC_D3D11_CUSTOM: it would compile the renderer's NativeD3D11Handle()
+# zero-copy path against the STOCK prebuilt DLL, whose RTCVideoFrame vtable has
+# no such slot (undefined behavior). Without the custom build (marker and/or
+# DLL missing) the renderer only uses the I420 plane-upload path.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/lib/D3D11_CUSTOM.txt"
+    AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/libwebrtc/lib/libwebrtc.dll")
   target_compile_definitions(${PLUGIN_NAME} PRIVATE LIBWEBRTC_D3D11_CUSTOM)
 endif()
 

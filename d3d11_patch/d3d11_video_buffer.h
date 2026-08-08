@@ -84,8 +84,12 @@ class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
   // decode texture into a MISC_SHARED copy and transfers ownership here, so
   // the exported shared handle stays valid exactly as long as this frame
   // buffer. Null for the direct-export path (texture owned by the GstBuffer)
-  // and tests.
+  // and tests. Windows-only: on other platforms the field is absent entirely
+  // (guarded) so clang's -Wunused-private-field under -Werror can't fire on
+  // the stub build — the only read lives in the _WIN32 destructor.
+#if defined(_WIN32)
   ID3D11Texture2D* owned_texture_ = nullptr;
+#endif
 };
 
 }  // namespace libwebrtc

@@ -10,8 +10,12 @@ D3d11VideoBuffer::D3d11VideoBuffer(void* shared_handle, int width, int height,
                                    int stride_y, int stride_uv,
                                    GstBuffer* buffer,
                                    ID3D11Texture2D* owned_texture)
-    : width_(width), height_(height), buffer_(buffer),
-      owned_texture_(owned_texture) {
+    : width_(width), height_(height), buffer_(buffer)
+#if defined(_WIN32)
+      ,
+      owned_texture_(owned_texture)
+#endif
+{
   if (buffer_ != nullptr) {
     // Keep the GStreamer buffer (and therefore the GstD3D11Memory + the D3D11
     // texture it wraps) alive for the whole lifetime of this frame buffer —
