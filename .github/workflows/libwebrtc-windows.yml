@@ -126,7 +126,9 @@ jobs:
           fi
           cd libwebrtc
           git checkout -f "$WRAPPER_COMMIT"
-          cd ../..
+          cd ..
+          # Back in native/libwebrtc_build/src, where the wrapper lives at
+          # ./libwebrtc (with its patches/ dir) — the tree git apply patches.
           git apply libwebrtc/patches/custom_audio_source_m144.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
           git apply libwebrtc/patches/add_libwebrtc_build_target.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
           git apply libwebrtc/patches/fix_desktop_capture_compile.patch -v --ignore-space-change --ignore-whitespace --whitespace=nowarn
