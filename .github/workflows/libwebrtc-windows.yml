@@ -103,6 +103,16 @@ jobs:
             git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
           fi
           echo "$PWD/depot_tools" >> "$GITHUB_PATH"
+
+      - name: Install standalone ninja
+        # depot_tools' ninja wrapper needs python3 on PATH (not guaranteed on
+        # the runner); upstream downloads the official ninja-win.zip release and
+        # prepends it, so `ninja` resolves to a real binary. Mirror that.
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/latest/download/ninja-win.zip" -OutFile "$env:TEMP\ninja.zip"
+          Expand-Archive -Path "$env:TEMP\ninja.zip" -DestinationPath "${{ github.workspace }}\ninja"
+          "${{ github.workspace }}\ninja" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Checkout webrtc src (m144_release) + gclient sync
         shell: bash
         run: |
