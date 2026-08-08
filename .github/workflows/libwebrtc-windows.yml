@@ -50,6 +50,14 @@ jobs:
     name: Build custom libwebrtc.dll
     runs-on: windows-2022
     timeout-minutes: 360
+    # Use the runner's installed VS 2022 instead of Google's internal Windows
+    # toolchain. gclient sync's DEPS hooks run build/vs_toolchain.py update,
+    # which by default tries to download the Google-internal toolchain from GCS
+    # (anonymous access is denied -> 401 -> sync fails). Setting this at the job
+    # level (as upstream webrtc-sdk/libwebrtc's libwebrtc_win_build.cmd does)
+    # makes those hooks fall back to the locally installed Visual Studio.
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +103,6 @@ jobs:
             git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
           fi
           echo "$PWD/depot_tools" >> "$GITHUB_PATH"
-
       - name: Checkout webrtc src (m144_release) + gclient sync
         shell: bash
         run: |
@@ -134,8 +141,6 @@ jobs:
 
       - name: gn gen + ninja libwebrtc
         shell: bash
-        env:
-          DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
         run: |
           export PATH="$PWD/native/libwebrtc_build/depot_tools:$PATH"
           cd native/libwebrtc_build/src
@@ -191,7 +196,7 @@ jobs:
   validate-windows-app:
     name: Validate Windows app links the custom dll
     needs: build-libwebrtc
-    runs-on: windows-latest
+    runs-on: windows-2022 # same VS as the build job, so link validation matches
     steps:
       - uses: actions/checkout@v4
 
