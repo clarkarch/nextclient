@@ -47,6 +47,35 @@ void FlutterWebRTC::HandleMethodCall(
     const bool enabled = GetValue<bool>(*method_call.arguments());
     set_renderer_logging_enabled(enabled);
     result->Success();
+  } else if (method_call.method_name().compare("setVideoShaderSettings") ==
+             0) {
+    // Video shader filter settings. Values keep the UI-facing ranges; the
+    // native renderer normalizes them for the post-processing shader. Stored
+    // process-wide so it applies to the live renderer (and any later one)
+    // without re-initializing the texture.
+    if (!method_call.arguments()) {
+      result->Error("Bad Arguments", "Null arguments received");
+      return;
+    }
+    const EncodableMap params =
+        GetValue<EncodableMap>(*method_call.arguments());
+    auto clamp = [](int64_t v, int64_t lo, int64_t hi, int64_t fb) {
+      if (v < lo || v > hi) return static_cast<int>(fb);
+      return static_cast<int>(v);
+    };
+    VideoShaderSettingsState state;
+    state.enabled = findBoolean(params, "enabled");
+    state.sharpen = clamp(findLongInt(params, "sharpen"), 0, 100, 40);
+    state.sharpenAdaptive = findBoolean(params, "sharpenAdaptive");
+    state.saturation =
+        clamp(findLongInt(params, "saturation"), 0, 200, 100);
+    state.contrast = clamp(findLongInt(params, "contrast"), 50, 150, 100);
+    state.brightness =
+        clamp(findLongInt(params, "brightness"), 50, 150, 100);
+    state.vibrance = clamp(findLongInt(params, "vibrance"), 0, 100, 0);
+    state.grain = clamp(findLongInt(params, "filmGrain"), 0, 100, 0);
+    set_video_shader_settings(state);
+    result->Success();
 #endif
 #if defined(_WIN32)
   } else if (method_call.method_name().compare("getRendererStatus") == 0) {

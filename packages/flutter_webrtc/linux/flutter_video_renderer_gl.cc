@@ -29,6 +29,25 @@ void set_renderer_logging_enabled(bool enabled) {
 
 bool renderer_logging_enabled() { return g_renderer_logging_enabled; }
 
+// ---- Video shader filter settings (port of OpenNOW's videoShader.ts) ------
+namespace {
+std::mutex g_shader_settings_mu;
+VideoShaderSettingsState g_shader_settings;
+uint64_t g_shader_version = 0;
+const auto g_start_time = std::chrono::steady_clock::now();
+}  // namespace
+
+void set_video_shader_settings(const VideoShaderSettingsState& settings) {
+  std::lock_guard<std::mutex> lock(g_shader_settings_mu);
+  g_shader_settings = settings;
+  g_shader_settings.version = ++g_shader_version;
+}
+
+VideoShaderSettingsState video_shader_settings_snapshot() {
+  std::lock_guard<std::mutex> lock(g_shader_settings_mu);
+  return g_shader_settings;
+}
+
 // ---------------------------------------------------------------------------
 // Shaders (same GLSL dialect as the engine's fl_compositor_opengl shaders so
 // they compile on both desktop GL and GLES contexts).
@@ -72,6 +91,88 @@ static const char* kFragmentShader =
     "    y + 1.770 * u,\n"
     "    1.0\n"
     "  );\n"
+    "}\n";
+
+// Post-processing fragment shader (downgraded to GLSL ES 1.00 to match the
+// other shaders here so it compiles on both desktop GL and GLES contexts):
+// CAS-style contrast-adaptive sharpening (or a uniform unsharp mask when
+// u_sharpen_adaptive is off), brightness/contrast/saturation/vibrance color
+// grading, and animated film grain. Samples the YUV→RGB result texture with
+// texel offsets, so it runs as a second full-screen pass into post_tex_.
+static const char* kPostFragmentShader =
+    "#ifdef GL_ES\n"
+    "precision mediump float;\n"
+    "#endif\n"
+    "uniform sampler2D u_frame;\n"
+    "uniform vec2 u_texel_size;\n"
+    "uniform float u_sharpen;\n"
+    "uniform float u_sharpen_adaptive;\n"
+    "uniform float u_saturation;\n"
+    "uniform float u_contrast;\n"
+    "uniform float u_brightness;\n"
+    "uniform float u_vibrance;\n"
+    "uniform float u_grain;\n"
+    "uniform float u_time;\n"
+    "varying vec2 tc;\n"
+    "float luma(vec3 c) {\n"
+    "  return dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+    "}\n"
+    "float hash(vec2 p) {\n"
+    "  vec3 p3 = fract(vec3(p.xyx) * 0.1031);\n"
+    "  p3 += dot(p3, p3.yzx + 33.33);\n"
+    "  return fract((p3.x + p3.y) * p3.z);\n"
+    "}\n"
+    "vec3 cas_sharpen(vec2 uv, vec3 center, float amount) {\n"
+    "  vec3 n = texture2D(u_frame, uv + vec2(0.0, -u_texel_size.y)).rgb;\n"
+    "  vec3 s = texture2D(u_frame, uv + vec2(0.0,  u_texel_size.y)).rgb;\n"
+    "  vec3 w = texture2D(u_frame, uv + vec2(-u_texel_size.x, 0.0)).rgb;\n"
+    "  vec3 e = texture2D(u_frame, uv + vec2( u_texel_size.x, 0.0)).rgb;\n"
+    "  vec3 mn = min(center, min(min(n, s), min(w, e)));\n"
+    "  vec3 mx = max(center, max(max(n, s), max(w, e)));\n"
+    "  vec3 amp = clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-5)), 0.0, 1.0);\n"
+    "  amp = sqrt(amp);\n"
+    "  float peak = mix(-0.125, -0.2, amount);\n"
+    "  vec3 weight = amp * peak;\n"
+    "  vec3 result = (center + (n + s + w + e) * weight) / (1.0 + 4.0 * weight);\n"
+    "  return clamp(result, mn, mx);\n"
+    "}\n"
+    "vec3 sharpen_uniform(vec2 uv, vec3 center, float amount) {\n"
+    "  vec3 n = texture2D(u_frame, uv + vec2(0.0, -u_texel_size.y)).rgb;\n"
+    "  vec3 s = texture2D(u_frame, uv + vec2(0.0,  u_texel_size.y)).rgb;\n"
+    "  vec3 w = texture2D(u_frame, uv + vec2(-u_texel_size.x, 0.0)).rgb;\n"
+    "  vec3 e = texture2D(u_frame, uv + vec2( u_texel_size.x, 0.0)).rgb;\n"
+    "  vec3 blur = (n + s + w + e) * 0.25;\n"
+    "  // Plain unsharp mask: same strength everywhere. k matches the CAS edge\n"
+    "  // response (1x..4x of the center-minus-blur delta) so the two modes\n"
+    "  // feel comparable at the same slider value, minus the edge gating.\n"
+    "  float k = 1.0 + 3.0 * amount;\n"
+    "  return clamp(center + (center - blur) * k, 0.0, 1.0);\n"
+    "}\n"
+    "void main() {\n"
+    "  vec3 color = texture2D(u_frame, tc).rgb;\n"
+    "  if (u_sharpen > 0.001) {\n"
+    "    if (u_sharpen_adaptive > 0.5) {\n"
+    "      color = cas_sharpen(tc, color, u_sharpen);\n"
+    "    } else {\n"
+    "      color = sharpen_uniform(tc, color, u_sharpen);\n"
+    "    }\n"
+    "  }\n"
+    "  color *= u_brightness;\n"
+    "  color = (color - 0.5) * u_contrast + 0.5;\n"
+    "  float l = luma(color);\n"
+    "  color = mix(vec3(l), color, u_saturation);\n"
+    "  if (u_vibrance > 0.001) {\n"
+    "    float maxC = max(color.r, max(color.g, color.b));\n"
+    "    float minC = min(color.r, min(color.g, color.b));\n"
+    "    float sat = maxC - minC;\n"
+    "    float boost = u_vibrance * (1.0 - sat);\n"
+    "    color = mix(vec3(luma(color)), color, 1.0 + boost);\n"
+    "  }\n"
+    "  if (u_grain > 0.001) {\n"
+    "    float g = hash(gl_FragCoord.xy + fract(u_time) * 1024.0) - 0.5;\n"
+    "    color += g * u_grain * 0.12 * (0.3 + 0.7 * luma(color));\n"
+    "  }\n"
+    "  gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n"
     "}\n";
 
 // NV12 variant for the zero-copy dmabuf path: the interleaved UV plane lives
@@ -303,18 +404,31 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
   const int w = frame->width();
   const int h = frame->height();
 
+  // Snapshot the shader filter settings for this composite. The post pass
+  // (and which texture the engine gets) depends on it; the version is part of
+  // the frame-cache key so a slider change re-renders without a new frame.
+  const VideoShaderSettingsState shader = video_shader_settings_snapshot();
+  const bool post_active = shader.active();
+  // Whether the engine actually receives post_tex_ this composite. True when
+  // the filter is requested AND the post pass ran (it can fail to compile);
+  // the failure path hands over the unfiltered rgb_tex_ instead.
+  bool output_post = post_active;
+
   // Frame cache: the engine re-composites the scene for UI repaints (stats
   // overlay tick, session timer, chrome hover) that carry the SAME decoded
   // frame. Re-running the full-screen YUV→RGB pass + ~20 GL state queries for
   // those costs real raster-thread time on a weak iGPU — return the
-  // already-rendered texture untouched instead (the engine samples rgb_tex_
-  // again as-is). The frame pointer is the identity key: every decoded frame
-  // is a new RTCVideoFrame object, and OnFrame swaps frame_ per video frame.
+  // already-rendered texture untouched instead (the engine samples it again
+  // as-is). The frame pointer is the identity key: every decoded frame is a
+  // new RTCVideoFrame object, and OnFrame swaps frame_ per video frame. The
+  // shader version joins the key so live filter edits re-render immediately.
   if (rendered_once_ && last_rendered_frame_ == frame &&
-      last_rendered_width_ == w && last_rendered_height_ == h) {
+      last_rendered_width_ == w && last_rendered_height_ == h &&
+      last_rendered_shader_version_ == shader.version &&
+      last_rendered_post_active_ == post_active) {
     raster_cache_hits_++;
     *target = GL_TEXTURE_2D;
-    *name = rgb_tex_;
+    *name = post_active ? post_tex_ : rgb_tex_;
     *width = w;
     *height = h;
     return name;
@@ -379,11 +493,28 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
                               : "YUV plane upload (CPU readback)");
       }
     }
+    // Post-processing stage: run OpenNOW's filter pass over the YUV→RGB
+    // result when the settings have a visible effect. The engine then
+    // composites post_tex_ instead of rgb_tex_. A filter failure (shader
+    // compile) falls back to the unfiltered rgb_tex_ so the stream stays
+    // visible.
+    bool post_rendered = false;
+    if (post_active) {
+      post_rendered = RenderPostPass(w, h);
+      if (!post_rendered && renderer_logging_enabled()) {
+        std::fprintf(stderr,
+                     "[glrender] video shader filter unavailable — "
+                     "compositing unfiltered\n");
+      }
+    }
+    output_post = post_active && post_rendered;
     // Frame-cache bookkeeping (only on success; timing is taken over the whole
     // pass after the state restore below).
     last_rendered_frame_ = frame;
     last_rendered_width_ = w;
     last_rendered_height_ = h;
+    last_rendered_shader_version_ = shader.version;
+    last_rendered_post_active_ = output_post;
     rendered_once_ = true;
   }
 
@@ -430,7 +561,7 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
     return nullptr;
   }
   *target = GL_TEXTURE_2D;
-  *name = rgb_tex_;
+  *name = output_post ? post_tex_ : rgb_tex_;
   *width = w;
   *height = h;
   return name;
@@ -513,6 +644,36 @@ bool FlutterVideoRendererGL::EnsureGlResources(int width, int height) {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            rgb_tex_, 0);
+
+    // Post-processing render target (video shader filter output). Allocated
+    // lazily with the rest of the pipeline; only actually drawn into when the
+    // filter settings are active.
+    if (post_tex_ == 0) {
+      glGenTextures(1, &post_tex_);
+      glBindTexture(GL_TEXTURE_2D, post_tex_);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, post_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, nullptr);
+    if (post_fbo_ == 0) {
+      glGenFramebuffers(1, &post_fbo_);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, post_fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           post_tex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+      std::fprintf(stderr,
+                   "[flutter_webrtc] GL renderer: post FBO incomplete after "
+                   "resize (%#x)\n",
+                   glCheckFramebufferStatus(GL_FRAMEBUFFER));
+      return false;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
       std::fprintf(stderr,
                    "[flutter_webrtc] GL renderer: FBO incomplete after "
@@ -668,6 +829,114 @@ bool FlutterVideoRendererGL::CompileNv12ShaderProgram() {
   glUniform1i(quad->uniform_y_nv12, 0);
   glUniform1i(quad->uniform_uv_nv12, 1);
   quad->nv12_compiled = true;
+  return true;
+}
+
+bool FlutterVideoRendererGL::CompilePostShaderProgram() {
+  GlQuad* quad = gl_quad();
+  GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vs, 1, &kVertexShader, nullptr);
+  glCompileShader(vs);
+  GLint ok = GL_FALSE;
+  glGetShaderiv(vs, GL_COMPILE_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetShaderInfoLog(vs, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL post vertex shader failed: %s\n", log);
+    glDeleteShader(vs);
+    return false;
+  }
+
+  GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fs, 1, &kPostFragmentShader, nullptr);
+  glCompileShader(fs);
+  glGetShaderiv(fs, GL_COMPILE_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetShaderInfoLog(fs, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL post fragment shader failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return false;
+  }
+
+  quad->program_post = glCreateProgram();
+  glAttachShader(quad->program_post, vs);
+  glAttachShader(quad->program_post, fs);
+  glLinkProgram(quad->program_post);
+  glGetProgramiv(quad->program_post, GL_LINK_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetProgramInfoLog(quad->program_post, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "[flutter_webrtc] GL post program link failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glDeleteProgram(quad->program_post);
+    quad->program_post = 0;
+    return false;
+  }
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+
+  glUseProgram(quad->program_post);
+  quad->uniform_post_frame = glGetUniformLocation(quad->program_post, "u_frame");
+  quad->uniform_post_texel_size =
+      glGetUniformLocation(quad->program_post, "u_texel_size");
+  quad->uniform_post_sharpen =
+      glGetUniformLocation(quad->program_post, "u_sharpen");
+  quad->uniform_post_sharpen_adaptive =
+      glGetUniformLocation(quad->program_post, "u_sharpen_adaptive");
+  quad->uniform_post_saturation =
+      glGetUniformLocation(quad->program_post, "u_saturation");
+  quad->uniform_post_contrast =
+      glGetUniformLocation(quad->program_post, "u_contrast");
+  quad->uniform_post_brightness =
+      glGetUniformLocation(quad->program_post, "u_brightness");
+  quad->uniform_post_vibrance =
+      glGetUniformLocation(quad->program_post, "u_vibrance");
+  quad->uniform_post_grain = glGetUniformLocation(quad->program_post, "u_grain");
+  quad->uniform_post_time = glGetUniformLocation(quad->program_post, "u_time");
+  glUniform1i(quad->uniform_post_frame, 0);
+  quad->post_compiled = true;
+  return true;
+}
+
+bool FlutterVideoRendererGL::RenderPostPass(int width, int height) {
+  GlQuad* quad = gl_quad();
+  if (!quad->post_compiled && !CompilePostShaderProgram()) {
+    // Filter unavailable (shader compile failed). Return false so the caller
+    // hands the engine the unfiltered rgb_tex_ instead of a black post_tex_.
+    return false;
+  }
+  const VideoShaderSettingsState s = video_shader_settings_snapshot();
+  glDisable(GL_BLEND);
+  glDisable(GL_SCISSOR_TEST);
+  glBindFramebuffer(GL_FRAMEBUFFER, post_fbo_);
+  glViewport(0, 0, width, height);
+  glUseProgram(quad->program_post);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, rgb_tex_);
+  glUniform1i(quad->uniform_post_frame, 0);
+  glUniform2f(quad->uniform_post_texel_size, 1.0f / width, 1.0f / height);
+  glUniform1f(quad->uniform_post_sharpen, s.sharpen / 100.0f);
+  glUniform1f(quad->uniform_post_sharpen_adaptive,
+              s.sharpenAdaptive ? 1.0f : 0.0f);
+  glUniform1f(quad->uniform_post_saturation, s.saturation / 100.0f);
+  glUniform1f(quad->uniform_post_contrast, s.contrast / 100.0f);
+  glUniform1f(quad->uniform_post_brightness, s.brightness / 100.0f);
+  glUniform1f(quad->uniform_post_vibrance, s.vibrance / 100.0f);
+  glUniform1f(quad->uniform_post_grain, s.grain / 100.0f);
+  const double elapsed_s = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - g_start_time)
+                               .count();
+  glUniform1f(quad->uniform_post_time, static_cast<float>(elapsed_s));
+  glBindVertexArray(quad->vao);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  glBindVertexArray(0);
   return true;
 }
 

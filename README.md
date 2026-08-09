@@ -25,6 +25,10 @@ client, built around a custom-built, hardware-accelerated streaming pipeline
 
 - **Catalog** — browse the GFN catalog (GraphQL), featured carousel, search,
   recently played, and game-details pages with store-variant pickers.
+- **Stream shader filters** — live GPU post-processing on the stream video:
+  CAS sharpening (edge-aware, or a uniform unsharp mask), saturation,
+  contrast, brightness, vibrance, and animated film grain, adjustable during
+  a session (GPU renderer path).
 - **Sign-in** — browser-based OAuth with a local redirect server (PKCE) plus a
   device-login flow; tokens are persisted and auto-refreshed.
 - **Sessions** — launch with live lifecycle feedback
@@ -139,6 +143,48 @@ Release builds:
 flutter build linux --release
 flutter build windows --release
 flutter build apk          # Android
+```
+
+### Incremental release rebuilds (Linux)
+
+`flutter build linux --release` is a full build. Once it has run at least once
+(the `build/linux/x64/release` dir exists), you can rebuild **just one
+plugin's native code** in place with ninja — release (optimized) mode, not
+debug:
+
+```bash
+# After editing C++ in a plugin (e.g. packages/flutter_webrtc), rebuild only
+# that plugin's .so inside the release build tree:
+ninja -C build/linux/x64/release flutter_webrtc_plugin
+#   [4/4] Linking CXX shared library plugins/flutter_webrtc/libflutter_webrtc_plugin.so
+
+# Then a quick `flutter build` re-bundles the fresh .so into the app
+# (ninja is incremental, so this finishes fast):
+flutter build linux --release
+```
+
+- Targets are named `<plugin>_plugin` (e.g. `flutter_webrtc_plugin`,
+  `pointer_lock_plugin`); list them with
+  `ninja -C build/linux/x64/release -t targets all | grep plugin`.
+- Always use `build/linux/x64/release` — the release app ships the release
+  artifacts, so rebuilding `build/linux/x64/debug` does nothing for it.
+- This covers **native (C++)** plugin changes. Dart-only changes still need a
+  `flutter build` / `flutter run` (that path is incremental too — the kernel
+  snapshot is cached).
+- The custom libwebrtc `.so` itself (VAAPI decode) builds separately, in
+  `native/libwebrtc_build/` — see [`native/README.md`](native/README.md).
+
+**Troubleshooting `file INSTALL cannot find …/build/lib/libapp.so`** — the
+Dart AOT snapshot is missing. Usually caused by interrupting a build
+(Ctrl+C) mid-kernel-snapshot (leaves a 0-byte `app.dill` that the incremental
+check treats as fresh) or by the `_phony_` assemble marker leaking into the
+build tree — it must never exist (see `linux/flutter/CMakeLists.txt`).
+Quick fix, keeps the build incremental:
+
+```bash
+rm build/linux/x64/release/flutter/_phony_
+rm -rf .dart_tool/flutter_build/<current-build-id>   # or just: flutter clean
+flutter build linux --release
 ```
 
 > [!NOTE]

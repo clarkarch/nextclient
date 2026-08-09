@@ -25,6 +25,25 @@ namespace {
 bool g_renderer_logging_enabled = false;
 }  // namespace
 
+// ---- Video shader filter settings (port of OpenNOW's videoShader.ts) ------
+namespace {
+std::mutex g_shader_settings_mu;
+VideoShaderSettingsState g_shader_settings;
+uint64_t g_shader_version = 0;
+const auto g_start_time = std::chrono::steady_clock::now();
+}  // namespace
+
+void set_video_shader_settings(const VideoShaderSettingsState& settings) {
+  std::lock_guard<std::mutex> lock(g_shader_settings_mu);
+  g_shader_settings = settings;
+  g_shader_settings.version = ++g_shader_version;
+}
+
+VideoShaderSettingsState video_shader_settings_snapshot() {
+  std::lock_guard<std::mutex> lock(g_shader_settings_mu);
+  return g_shader_settings;
+}
+
 // ---------------------------------------------------------------------------
 // Renderer health status (read by the Dart renderer watchdog)
 // ---------------------------------------------------------------------------
@@ -214,6 +233,92 @@ float4 ps_nv12(VSOut i) : SV_TARGET {
 }
 )";
 
+// Post-processing pixel shader in HLSL 4.0: CAS-style contrast-adaptive
+// sharpening (or a uniform unsharp mask when sharpen_adaptive is off),
+// brightness/contrast/saturation/vibrance color grading, and animated film
+// grain. Samples the intermediate RGBA (YUV→RGB) texture with texel offsets;
+// the uniforms arrive via a per-frame constant buffer (register b0).
+static const char* kPostPixelShader = R"(
+Texture2D rgba_tex : register(t0);
+SamplerState samp : register(s0);
+cbuffer PostParams : register(b0) {
+  float2 texel_size;
+  float sharpen;
+  float saturation;
+  float contrast;
+  float brightness;
+  float vibrance;
+  float grain;
+  float time;
+  float sharpen_adaptive;
+};
+struct VSOut {
+  float4 pos : SV_POSITION;
+  float2 uv : TEXCOORD0;
+};
+float luma(float3 c) {
+  return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+float hash(float2 p) {
+  float3 p3 = frac(float3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return frac((p3.x + p3.y) * p3.z);
+}
+float3 cas_sharpen(float2 uv, float3 center, float amount) {
+  float3 n = rgba_tex.Sample(samp, uv + float2(0.0, -texel_size.y)).rgb;
+  float3 s = rgba_tex.Sample(samp, uv + float2(0.0,  texel_size.y)).rgb;
+  float3 w = rgba_tex.Sample(samp, uv + float2(-texel_size.x, 0.0)).rgb;
+  float3 e = rgba_tex.Sample(samp, uv + float2( texel_size.x, 0.0)).rgb;
+  float3 mn = min(center, min(min(n, s), min(w, e)));
+  float3 mx = max(center, max(max(n, s), max(w, e)));
+  float3 amp = clamp(min(mn, 1.0 - mx) / max(mx, 1e-5), 0.0, 1.0);
+  amp = sqrt(amp);
+  float peak = lerp(-0.125, -0.2, amount);
+  float3 weight = amp * peak;
+  float3 result = (center + (n + s + w + e) * weight) / (1.0 + 4.0 * weight);
+  return clamp(result, mn, mx);
+}
+float3 sharpen_uniform(float2 uv, float3 center, float amount) {
+  float3 n = rgba_tex.Sample(samp, uv + float2(0.0, -texel_size.y)).rgb;
+  float3 s = rgba_tex.Sample(samp, uv + float2(0.0,  texel_size.y)).rgb;
+  float3 w = rgba_tex.Sample(samp, uv + float2(-texel_size.x, 0.0)).rgb;
+  float3 e = rgba_tex.Sample(samp, uv + float2( texel_size.x, 0.0)).rgb;
+  float3 blur = (n + s + w + e) * 0.25;
+  // Plain unsharp mask: same strength everywhere. k matches the CAS edge
+  // response (1x..4x of the center-minus-blur delta) so the two modes feel
+  // comparable at the same slider value, minus the edge gating.
+  float k = 1.0 + 3.0 * amount;
+  return saturate(center + (center - blur) * k);
+}
+float4 ps_post(VSOut i) : SV_TARGET {
+  float3 color = rgba_tex.Sample(samp, i.uv).rgb;
+  if (sharpen > 0.001) {
+    if (sharpen_adaptive > 0.5) {
+      color = cas_sharpen(i.uv, color, sharpen);
+    } else {
+      color = sharpen_uniform(i.uv, color, sharpen);
+    }
+  }
+  color *= brightness;
+  color = (color - 0.5) * contrast + 0.5;
+  float l = luma(color);
+  color = lerp(float3(l, l, l), color, saturation);
+  if (vibrance > 0.001) {
+    float maxC = max(color.r, max(color.g, color.b));
+    float minC = min(color.r, min(color.g, color.b));
+    float sat = maxC - minC;
+    float boost = vibrance * (1.0 - sat);
+    color = lerp(float3(luma(color), luma(color), luma(color)), color,
+                 1.0 + boost);
+  }
+  if (grain > 0.001) {
+    float g = hash(i.pos.xy + frac(time) * 1024.0) - 0.5;
+    color += g * grain * 0.12 * (0.3 + 0.7 * luma(color));
+  }
+  return float4(saturate(color), 1.0);
+}
+)";
+
 namespace {
 
 D3d11Quad g_quad;
@@ -294,6 +399,37 @@ bool CompileProgram(D3d11Quad* quad) {
   if (FAILED(hr)) {
     std::snprintf(quad->compile_error, sizeof(quad->compile_error),
                   "CreatePixelShader(NV12) failed (hr=%#lx)",
+                  static_cast<unsigned long>(hr));
+    return false;
+  }
+
+  // Post-processing (video shader filter) pixel shader + constant buffer.
+  // Compiled unconditionally (cheap, once per process) so a later filter
+  // enable never has to re-init mid-stream; the self-test validates it too.
+  ID3DBlob* ps_post_blob = nullptr;
+  if (!CompileShader("flutter_webrtc_ps_post", kPostPixelShader, "ps_post",
+                     "ps_4_0", &ps_post_blob, quad->compile_error,
+                     sizeof(quad->compile_error))) {
+    return false;
+  }
+  hr = quad->device->CreatePixelShader(ps_post_blob->GetBufferPointer(),
+                                       ps_post_blob->GetBufferSize(), nullptr,
+                                       &quad->ps_post);
+  ps_post_blob->Release();
+  if (FAILED(hr)) {
+    std::snprintf(quad->compile_error, sizeof(quad->compile_error),
+                  "CreatePixelShader(post) failed (hr=%#lx)",
+                  static_cast<unsigned long>(hr));
+    return false;
+  }
+  D3D11_BUFFER_DESC cbd = {};
+  cbd.ByteWidth = sizeof(PostShaderParams);
+  cbd.Usage = D3D11_USAGE_DEFAULT;
+  cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+  hr = quad->device->CreateBuffer(&cbd, nullptr, &quad->post_cb);
+  if (FAILED(hr)) {
+    std::snprintf(quad->compile_error, sizeof(quad->compile_error),
+                  "CreateBuffer(post cb) failed (hr=%#lx)",
                   static_cast<unsigned long>(hr));
     return false;
   }
@@ -499,13 +635,21 @@ const FlutterDesktopGpuSurfaceDescriptor* FlutterVideoRendererD3D::ObtainDescrip
   const int w = frame->width();
   const int h = frame->height();
 
+  // Snapshot the shader filter settings for this composite. The post pass
+  // (and which texture the engine samples) depends on it; the version joins
+  // the frame-cache key so a live slider change re-renders immediately.
+  const VideoShaderSettingsState shader = video_shader_settings_snapshot();
+  const bool post_active = shader.active();
+
   // Frame cache: the engine re-composites the scene for UI repaints (stats
   // overlay tick, session timer, chrome hover) that carry the SAME decoded
   // frame. Re-running the full-screen YUV→RGB pass for those costs real
   // raster-thread time on a weak iGPU — return the already-rendered texture
   // untouched instead (the engine samples the shared surface again as-is).
   if (rendered_once_ && last_rendered_frame_ == frame &&
-      last_rendered_width_ == w && last_rendered_height_ == h) {
+      last_rendered_width_ == w && last_rendered_height_ == h &&
+      last_rendered_shader_version_ == shader.version &&
+      last_rendered_post_active_ == post_active) {
     raster_cache_hits_++;
     FillDescriptor(w, h);
     renderer_status_mark_composited();
@@ -526,7 +670,7 @@ const FlutterDesktopGpuSurfaceDescriptor* FlutterVideoRendererD3D::ObtainDescrip
     if (native != nullptr) {
       const RtcD3D11TextureDescriptor* desc =
           static_cast<const RtcD3D11TextureDescriptor*>(native);
-      rendered = RenderNativeFrame(desc, w, h);
+      rendered = RenderNativeFrame(desc, w, h, post_active);
     }
 #endif
     // kNative frames have no CPU I420 view — never feed their (null) planes
@@ -536,12 +680,15 @@ const FlutterDesktopGpuSurfaceDescriptor* FlutterVideoRendererD3D::ObtainDescrip
     if (!rendered && native == nullptr) {
       rendered = RenderI420Frame(frame->DataY(), frame->StrideY(),
                                  frame->DataU(), frame->StrideU(),
-                                 frame->DataV(), frame->StrideV(), w, h);
+                                 frame->DataV(), frame->StrideV(), w, h,
+                                 post_active);
     }
     if (rendered) {
       last_rendered_frame_ = frame;
       last_rendered_width_ = w;
       last_rendered_height_ = h;
+      last_rendered_shader_version_ = shader.version;
+      last_rendered_post_active_ = post_active;
       rendered_once_ = true;
     }
     if (!path_reported_) {
@@ -639,11 +786,11 @@ bool FlutterVideoRendererD3D::EnsureResources(int width, int height) {
       return false;
     }
 
-    // RGBA8 shared render target. The legacy SHARED misc flag is required so
-    // ANGLE can open the handle with EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE on
-    // its own device.
+    // Intermediate RGBA target for the YUV→RGB pass (non-shared — the engine
+    // never sees it). Carries an SRV so the post pass can sample it.
     rgba_tex_.Reset();
     rgba_rtv_.Reset();
+    rgba_srv_.Reset();
     D3D11_TEXTURE2D_DESC rt = {};
     rt.Width = static_cast<UINT>(width);
     rt.Height = static_cast<UINT>(height);
@@ -653,7 +800,6 @@ bool FlutterVideoRendererD3D::EnsureResources(int width, int height) {
     rt.SampleDesc.Count = 1;
     rt.Usage = D3D11_USAGE_DEFAULT;
     rt.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    rt.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
     if (FAILED(quad->device->CreateTexture2D(&rt, nullptr, &rgba_tex_))) {
       return false;
     }
@@ -661,8 +807,35 @@ bool FlutterVideoRendererD3D::EnsureResources(int width, int height) {
             rgba_tex_.Get(), nullptr, &rgba_rtv_))) {
       return false;
     }
+    if (FAILED(quad->device->CreateShaderResourceView(
+            rgba_tex_.Get(), nullptr, &rgba_srv_))) {
+      return false;
+    }
+
+    // Final RGBA shared render target handed to the engine. The legacy SHARED
+    // misc flag is required so ANGLE can open the handle with
+    // EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE on its own device.
+    final_tex_.Reset();
+    final_rtv_.Reset();
+    D3D11_TEXTURE2D_DESC ft = {};
+    ft.Width = static_cast<UINT>(width);
+    ft.Height = static_cast<UINT>(height);
+    ft.MipLevels = 1;
+    ft.ArraySize = 1;
+    ft.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    ft.SampleDesc.Count = 1;
+    ft.Usage = D3D11_USAGE_DEFAULT;
+    ft.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ft.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    if (FAILED(quad->device->CreateTexture2D(&ft, nullptr, &final_tex_))) {
+      return false;
+    }
+    if (FAILED(quad->device->CreateRenderTargetView(
+            final_tex_.Get(), nullptr, &final_rtv_))) {
+      return false;
+    }
     Microsoft::WRL::ComPtr<IDXGIResource> dxgi;
-    if (FAILED(rgba_tex_.As(&dxgi)) ||
+    if (FAILED(final_tex_.As(&dxgi)) ||
         FAILED(dxgi->GetSharedHandle(&shared_handle_))) {
       return false;
     }
@@ -680,7 +853,8 @@ bool FlutterVideoRendererD3D::RenderI420Frame(const uint8_t* y,
                                               const uint8_t* v,
                                               int v_stride,
                                               int width,
-                                              int height) {
+                                              int height,
+                                              bool post_active) {
   D3d11Quad* quad = d3d11_quad();
 
   // 1.5 B/px CPU→GPU upload of the three planes (vs 4 B/px for the CPU path's
@@ -693,20 +867,65 @@ bool FlutterVideoRendererD3D::RenderI420Frame(const uint8_t* y,
   quad->ctx->UpdateSubresource(v_tex_.Get(), 0, nullptr, v,
                                static_cast<UINT>(v_stride), 0);
 
+  // Filter off: draw YUV→RGB straight into the shared texture the engine
+  // composites. Filter on: draw into the intermediate so the post pass can
+  // sample it, then run the post pass into the shared texture.
   ID3D11ShaderResourceView* srvs[] = {y_srv_.Get(), u_srv_.Get(), v_srv_.Get()};
   quad->ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   quad->ctx->VSSetShader(quad->vs.Get(), nullptr, 0);
   quad->ctx->PSSetShader(quad->ps_i420.Get(), nullptr, 0);
   quad->ctx->PSSetShaderResources(0, 3, srvs);
   quad->ctx->PSSetSamplers(0, 1, quad->sampler.GetAddressOf());
-  ID3D11RenderTargetView* rtvs[] = {rgba_rtv_.Get()};
+  ID3D11RenderTargetView* rtvs[] = {
+      post_active ? rgba_rtv_.Get() : final_rtv_.Get()};
   quad->ctx->OMSetRenderTargets(1, rtvs, nullptr);
   D3D11_VIEWPORT vp = {0.0f, 0.0f, static_cast<float>(width),
                        static_cast<float>(height), 0.0f, 1.0f};
   quad->ctx->RSSetViewports(1, &vp);
   quad->ctx->Draw(3, 0);
+  if (post_active) {
+    if (!RenderPostPass(width, height)) return false;
+  }
   // Submit the draw before the engine samples the surface on its own device.
   quad->ctx->Flush();
+  return true;
+}
+
+bool FlutterVideoRendererD3D::RenderPostPass(int width, int height) {
+  D3d11Quad* quad = d3d11_quad();
+  if (!quad->ps_post.Get() || !quad->post_cb.Get()) {
+    return false;
+  }
+  const VideoShaderSettingsState s = video_shader_settings_snapshot();
+  const double elapsed_s = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - g_start_time)
+                               .count();
+  PostShaderParams params = {};
+  params.texel_x = 1.0f / width;
+  params.texel_y = 1.0f / height;
+  params.sharpen = s.sharpen / 100.0f;
+  params.sharpen_adaptive = s.sharpenAdaptive ? 1.0f : 0.0f;
+  params.saturation = s.saturation / 100.0f;
+  params.contrast = s.contrast / 100.0f;
+  params.brightness = s.brightness / 100.0f;
+  params.vibrance = s.vibrance / 100.0f;
+  params.grain = s.grain / 100.0f;
+  params.time = static_cast<float>(elapsed_s);
+  quad->ctx->UpdateSubresource(quad->post_cb.Get(), 0, nullptr, &params, 0, 0);
+
+  ID3D11ShaderResourceView* srvs[] = {rgba_srv_.Get()};
+  quad->ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  quad->ctx->VSSetShader(quad->vs.Get(), nullptr, 0);
+  quad->ctx->PSSetShader(quad->ps_post.Get(), nullptr, 0);
+  quad->ctx->PSSetConstantBuffers(0, 1, quad->post_cb.GetAddressOf());
+  quad->ctx->PSSetShaderResources(0, 1, srvs);
+  quad->ctx->PSSetSamplers(0, 1, quad->sampler.GetAddressOf());
+  ID3D11RenderTargetView* rtvs[] = {final_rtv_.Get()};
+  quad->ctx->OMSetRenderTargets(1, rtvs, nullptr);
+  D3D11_VIEWPORT vp = {0.0f, 0.0f, static_cast<float>(width),
+                       static_cast<float>(height), 0.0f, 1.0f};
+  quad->ctx->RSSetViewports(1, &vp);
+  quad->ctx->Draw(3, 0);
   return true;
 }
 
@@ -714,7 +933,8 @@ bool FlutterVideoRendererD3D::RenderI420Frame(const uint8_t* y,
 bool FlutterVideoRendererD3D::RenderNativeFrame(
     const RtcD3D11TextureDescriptor* desc,
     int width,
-    int height) {
+    int height,
+    bool post_active) {
   if (desc == nullptr || desc->handle == nullptr ||
       desc->format != RtcD3D11TextureFormat::kNv12) {
     return false;
@@ -762,12 +982,18 @@ bool FlutterVideoRendererD3D::RenderNativeFrame(
   quad->ctx->PSSetShader(quad->ps_nv12.Get(), nullptr, 0);
   quad->ctx->PSSetShaderResources(0, 2, srvs);
   quad->ctx->PSSetSamplers(0, 1, quad->sampler.GetAddressOf());
-  ID3D11RenderTargetView* rtvs[] = {rgba_rtv_.Get()};
+  // Same target split as RenderI420Frame: intermediate when the post pass
+  // runs, shared final texture when the filter is off.
+  ID3D11RenderTargetView* rtvs[] = {
+      post_active ? rgba_rtv_.Get() : final_rtv_.Get()};
   quad->ctx->OMSetRenderTargets(1, rtvs, nullptr);
   D3D11_VIEWPORT vp = {0.0f, 0.0f, static_cast<float>(width),
                        static_cast<float>(height), 0.0f, 1.0f};
   quad->ctx->RSSetViewports(1, &vp);
   quad->ctx->Draw(3, 0);
+  if (post_active) {
+    if (!RenderPostPass(width, height)) return false;
+  }
   quad->ctx->Flush();
   return true;
 }

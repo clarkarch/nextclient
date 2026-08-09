@@ -46,6 +46,43 @@ namespace flutter_webrtc_plugin {
 
 using namespace libwebrtc;
 
+// ---------------------------------------------------------------------------
+// GPU post-processing (video shader filter) settings, mirror of the Linux GL
+// renderer's state. Values keep the UI-facing ranges; the HLSL post shader
+// normalizes them. Set from Dart via the setVideoShaderSettings method;
+// renderers snapshot on the raster thread.
+// ---------------------------------------------------------------------------
+struct VideoShaderSettingsState {
+  bool enabled = false;
+  int sharpen = 40;     // 0-100 (0 = off)
+  bool sharpenAdaptive = true;  // true = contrast-adaptive (CAS), false = uniform
+  int saturation = 100; // 0-200 (100 = neutral)
+  int contrast = 100;   // 50-150 (100 = neutral)
+  int brightness = 100; // 50-150 (100 = neutral)
+  int vibrance = 0;     // 0-100 (0 = off)
+  int grain = 0;        // 0-100 (0 = off)
+
+  // Bumped on every update so the frame cache re-renders on live slider
+  // changes even when the video frame pointer is unchanged.
+  uint64_t version = 0;
+
+  // True when the post pass would visibly change the image. The renderer
+  // draws YUV→RGB straight into the shared texture when false — zero extra
+  // GPU work.
+  bool active() const {
+    return enabled &&
+           (sharpen > 0 || saturation != 100 || contrast != 100 ||
+            brightness != 100 || vibrance > 0 || grain > 0);
+  }
+};
+
+// Replaces the process-wide shader filter settings (platform thread, via the
+// method channel) and bumps the version (read on the raster thread).
+void set_video_shader_settings(const VideoShaderSettingsState& settings);
+
+// Thread-safe snapshot of the current shader filter settings + version.
+VideoShaderSettingsState video_shader_settings_snapshot();
+
 // Renders decoded video frames GPU-side. Mirrors FlutterVideoRenderer's track
 // / event-channel contract (RTCVideoRenderer, SetVideoTrack, media_stream_id)
 // so the existing Dart texture plumbing (RTCVideoView, Texture widget) works
@@ -98,11 +135,14 @@ class FlutterVideoRendererD3D
     size_t height;
   };
 
-  // (Re)creates the plane textures + shared RGBA render target for the given
-  // size on the process-wide D3D11 device. Raster thread only.
+  // (Re)creates the plane textures + intermediate/shared RGBA render targets
+  // for the given size on the process-wide D3D11 device. Raster thread only.
   bool EnsureResources(int width, int height);
 
-  // Uploads the I420 planes and runs the YUV→RGB shader into rgba_tex_.
+  // Uploads the I420 planes and runs the YUV→RGB shader. Draws into the
+  // intermediate rgba_tex_ when the video shader filter is active (so the
+  // post pass can sample it), then runs the post pass into the shared
+  // final_tex_; otherwise draws straight into final_tex_.
   bool RenderI420Frame(const uint8_t* y,
                        int y_stride,
                        const uint8_t* u,
@@ -110,15 +150,22 @@ class FlutterVideoRendererD3D
                        const uint8_t* v,
                        int v_stride,
                        int width,
-                       int height);
+                       int height,
+                       bool post_active);
+
+  // Runs OpenNOW's post-processing HLSL shader (CAS sharpening + color grade
+  // + vibrance + film grain) sampling rgba_tex_ into the shared final_tex_.
+  bool RenderPostPass(int width, int height);
 
 #if defined(LIBWEBRTC_D3D11_CUSTOM)
   // Zero-copy path for a custom libwebrtc build (see d3d11_patch/): opens the
   // decoder's NV12 shared texture on our device and composites it through the
-  // NV12 shader — decode → composite with no CPU copy at all.
+  // NV12 shader — decode → composite with no CPU copy at all. Same
+  // intermediate/shared target split as RenderI420Frame.
   bool RenderNativeFrame(const RtcD3D11TextureDescriptor* desc,
                          int width,
-                         int height);
+                         int height,
+                         bool post_active);
 #endif
 
   // Fills descriptor_ with the current shared texture + frame size.
@@ -133,11 +180,14 @@ class FlutterVideoRendererD3D
   // overlay tick, session timer, chrome hover) that carry the SAME decoded
   // frame. Re-running the full-screen YUV→RGB pass for those wastes raster
   // time — return the already-rendered texture instead. Only touched on the
-  // raster thread.
+  // raster thread. The shader version joins the key so live filter edits
+  // re-render without a new video frame.
   scoped_refptr<RTCVideoFrame> last_rendered_frame_;
   int last_rendered_width_ = 0;
   int last_rendered_height_ = 0;
   bool rendered_once_ = false;
+  uint64_t last_rendered_shader_version_ = 0;
+  bool last_rendered_post_active_ = false;
 
   uint64_t raster_frames_ = 0;
   double raster_total_ms_ = 0;
@@ -175,9 +225,18 @@ class FlutterVideoRendererD3D
   Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> y_srv_;
   Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> u_srv_;
   Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> v_srv_;
+  // Intermediate RGBA target for the YUV→RGB pass. When the video shader
+  // filter is active it is ALSO sampled by the post pass; it is never shared
+  // (the engine never sees it directly).
   Microsoft::WRL::ComPtr<ID3D11Texture2D> rgba_tex_;
   Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rgba_rtv_;
-  HANDLE shared_handle_ = nullptr;  // owned by rgba_tex_ (never CloseHandle)
+  Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> rgba_srv_;
+  // Final RGBA shared texture handed to the engine (ANGLE opens the handle).
+  // The YUV→RGB pass draws straight into it when the filter is off; the post
+  // pass draws into it when the filter is on.
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> final_tex_;
+  Microsoft::WRL::ComPtr<ID3D11RenderTargetView> final_rtv_;
+  HANDLE shared_handle_ = nullptr;  // owned by final_tex_ (never CloseHandle)
   int d3d_width_ = 0;
   int d3d_height_ = 0;
 
@@ -195,12 +254,25 @@ class FlutterVideoRendererD3D
 // Process-wide D3D11 device + shaders, shared by every D3D renderer (created
 // once, never deleted — like the Linux GL renderer's GlQuad). All use happens
 // on the raster thread inside ObtainDescriptor.
+// Constant-buffer layout for the post (video shader filter) pass — must match
+// the HLSL `PostParams` cbuffer (register b0) exactly, 16-byte register
+// aligned: float2 + 2 floats, then 2+2, then 2+2, then 1+1+2.
+struct PostShaderParams {
+  float texel_x, texel_y;  // 1 / frame size
+  float sharpen, saturation;
+  float contrast, brightness;
+  float vibrance, grain;
+  float time, sharpen_adaptive, pad0, pad1;
+};
+
 struct D3d11Quad {
   Microsoft::WRL::ComPtr<ID3D11Device> device;
   Microsoft::WRL::ComPtr<ID3D11DeviceContext> ctx;
   Microsoft::WRL::ComPtr<ID3D11VertexShader> vs;
   Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_i420;
   Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_nv12;
+  Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_post;
+  Microsoft::WRL::ComPtr<ID3D11Buffer> post_cb;
   Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
   bool compiled = false;
   // Which D3D_DRIVER_TYPE actually created the device (hardware or WARP), so

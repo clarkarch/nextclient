@@ -18,6 +18,33 @@ import 'process_env.dart' show applyDecoderBackend, applyRendererBackend;
 import 'stream_stats.dart';
 import 'stream_transport.dart';
 import 'user_settings.dart';
+import 'video_shader_settings.dart';
+
+/// Pushes the current video shader filter settings to the native GPU
+/// renderer. The plugin stores them process-wide; the GL/D3D post-processing
+/// pass reads them on the raster thread, so calling this mid-stream
+/// re-applies the filter live. Safe to call before or during a stream, and
+/// never fails the stream (advisory).
+Future<void> pushVideoShaderSettings(VideoShaderSettings settings) async {
+  if (!Platform.isLinux && !Platform.isWindows) return;
+  try {
+    await const MethodChannel('FlutterWebRTC.Method').invokeMethod(
+      'setVideoShaderSettings',
+      {
+        'enabled': settings.enabled,
+        'sharpen': settings.sharpen,
+        'sharpenAdaptive': settings.sharpenAdaptive,
+        'saturation': settings.saturation,
+        'contrast': settings.contrast,
+        'brightness': settings.brightness,
+        'vibrance': settings.vibrance,
+        'filmGrain': settings.filmGrain,
+      },
+    ).catchError((Object _) => false);
+  } on Exception {
+    // The shader channel is advisory; the stream must never fail over it.
+  }
+}
 
 /// Bridges NVIDIA's NVST signaling WebSocket to a local [RTCPeerConnection]
 /// and renders the incoming media into an [RTCVideoRenderer].
@@ -200,6 +227,21 @@ class WebRtcStreamSession implements StreamTransport {
     // [glrender] stderr diagnostics (which bypass the in-app LogSink) are
     // silenced when logging is off.
     await _applyRendererLogging(settings.logsEnabled);
+
+    // Push the video shader filter settings to the native renderer. The
+    // post-processing pass only runs on the GPU renderer path (OPENNOW_RENDERER
+    // = gl); on the CPU path this is stored but unused, matching OpenNOW's
+    // web-client-only shader.
+    if (settings.videoShader.hasVisibleEffect) {
+      _log('Video shader filter active: '
+          'sharpen=${settings.videoShader.sharpen}% '
+          'saturation=${settings.videoShader.saturation}% '
+          'contrast=${settings.videoShader.contrast}% '
+          'brightness=${settings.videoShader.brightness}% '
+          'vibrance=${settings.videoShader.vibrance}% '
+          'grain=${settings.videoShader.filmGrain}%');
+    }
+    await pushVideoShaderSettings(settings.videoShader);
 
     await videoRenderer.initialize();
     _rendererInitialized = true;

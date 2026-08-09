@@ -7,6 +7,10 @@ import '../theme/neon.dart';
 /// copy button is appended so error text can be grabbed for bug reports.
 /// Optionally pass [actionLabel] + [onAction] for an action button, plus a
 /// destructive [altActionLabel] + [altOnAction] for a secondary (e.g. Kill).
+///
+/// When [persistent] is true the snackbar never auto-dismisses and cannot be
+/// swiped away — it stays until one of its actions runs or the caller hides
+/// it. Used for prompts that must not be missed (the resume-session offer).
 void showNeonSnackbar(
   BuildContext context,
   String message, {
@@ -17,13 +21,21 @@ void showNeonSnackbar(
   String? altActionLabel,
   VoidCallback? altOnAction,
   Duration? duration,
+  bool persistent = false,
 }) {
   final messenger = ScaffoldMessenger.of(context);
   messenger.hideCurrentSnackBar();
   messenger.showSnackBar(
     SnackBar(
       behavior: SnackBarBehavior.floating,
-      duration: duration ?? Duration(seconds: isError ? 6 : 3),
+      // Persistent prompts use an effectively-infinite duration (SnackBar has
+      // no true "stays forever" mode) and block swipe-dismiss so the only way
+      // out is one of the actions.
+      duration: persistent
+          ? const Duration(days: 365)
+          : duration ?? Duration(seconds: isError ? 6 : 3),
+      dismissDirection:
+          persistent ? DismissDirection.none : DismissDirection.down,
       backgroundColor: isError ? Neon.error.withValues(alpha: 0.16) : Neon.bgC,
       content: Row(
         children: [

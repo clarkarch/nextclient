@@ -22,6 +22,9 @@ import '../../state/session_controller.dart';
 import '../../state/stream_stats.dart';
 import '../../state/stream_transport.dart';
 import '../../state/user_settings.dart';
+import '../../state/video_shader_settings.dart';
+import '../../state/webrtc_stream_session.dart'
+    show pushVideoShaderSettings;
 import '../../theme/neon.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/game_art.dart';
@@ -35,6 +38,7 @@ import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_snackbar.dart';
 import '../../widgets/stream/queue_ad_player.dart';
 import '../../widgets/stream/session_timer.dart';
+import '../../widgets/stream/video_shader_controls.dart';
 
 /// Full-screen streaming surface. Drives the [SessionController] lifecycle
 /// (requesting → queued → allocating → ready) then shows the session-ready
@@ -166,6 +170,18 @@ class _StreamPageState extends State<StreamPage> {
       line('transport', s.streamTransport.name),
       line('decoder', s.decoderBackend.name),
       line('renderer', s.rendererBackend.name),
+      line(
+        'shader',
+        s.videoShader.hasVisibleEffect
+            ? 'on sharpen=${s.videoShader.sharpen}% '
+                '${s.videoShader.sharpenAdaptive ? 'adaptive' : 'uniform'} '
+                'sat=${s.videoShader.saturation}% '
+                'contrast=${s.videoShader.contrast}% '
+                'brightness=${s.videoShader.brightness}% '
+                'vibrance=${s.videoShader.vibrance}% '
+                'grain=${s.videoShader.filmGrain}%'
+            : 'off',
+      ),
       line(
         'priority',
         '${s.streamPriority.name}'
@@ -1258,12 +1274,32 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// whole stream surface.
   final ValueNotifier<Offset> _cursorPos = ValueNotifier<Offset>(Offset.zero);
 
+  /// Last shader filter settings pushed to the native renderer, so the
+  /// settings listener only fires the method channel on actual changes.
+  late VideoShaderSettings _lastPushedShader;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _attachCursorOverlay(widget.transport);
     _physicalGamepad = PhysicalGamepad(_onPhysicalGamepadState);
+    // Push the video shader filter settings to the native GPU renderer and
+    // keep it in sync while this surface is live, so sidebar slider changes
+    // apply to the running stream without re-connecting (the GL/D3D post pass
+    // reads the process-wide state on every composite).
+    _lastPushedShader = widget.settings.videoShader;
+    widget.settings.addListener(_onShaderSettingsChanged);
+    unawaited(pushVideoShaderSettings(widget.settings.videoShader));
+  }
+
+  /// Forwards shader filter changes to the native renderer (deduped on the
+  /// settings object — unrelated settings changes skip the method call).
+  void _onShaderSettingsChanged() {
+    final shader = widget.settings.videoShader;
+    if (shader == _lastPushedShader) return;
+    _lastPushedShader = shader;
+    unawaited(pushVideoShaderSettings(shader));
   }
 
   @override
@@ -1694,18 +1730,34 @@ class _ReadySurfaceState extends State<_ReadySurface>
     }
   }
 
+  /// True when in-game and a pointer grab is already active (or the platform
+  /// has no grab at all — mobile, where in-game mode IS the soft lock), so
+  /// [_enterMouseLock] would be a no-op. Re-entry is allowed while the UI is
+  /// showing, and also when the chrome is hidden but no grab session exists
+  /// (the Hide-UI button / Esc-hide path sets [_mouseLocked] without ever
+  /// starting the grab) — in that state the next surface click must engage
+  /// the real grab instead of silently staying soft-locked.
+  bool get _grabAlreadyEngaged =>
+      _mouseLocked &&
+      !_chromeVisible &&
+      (_pointerLockSub != null ||
+          !(kIsWeb ||
+              Platform.isLinux ||
+              Platform.isMacOS ||
+              Platform.isWindows));
+
   Future<void> _enterMouseLock() async {
     // Allow re-entry whenever the UI is showing (the "fullscreen once" bug:
     // leaving game via the back button leaves _mouseLocked stale, which would
     // otherwise make the next Fullscreen press a no-op).
-    if (_mouseLocked && !_chromeVisible) return;
+    if (_grabAlreadyEngaged) return;
     // Wait for any pending unlock to land before creating a new session, so
     // its native unlock doesn't tear down the lock we're about to acquire.
     final pending = _pendingUnlock;
     _pendingUnlock = null;
     if (pending != null) await pending;
     if (!mounted) return;
-    if (_mouseLocked && !_chromeVisible) return;
+    if (_grabAlreadyEngaged) return;
     // Real OS fullscreen alongside the in-game mode: the compositor stops
     // re-compositing the windowed surface (direct scanout), which is a
     // full-screen pass saved per frame on iGPUs. No-op on mobile/web and when
@@ -1731,7 +1783,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
       }
     }
     if (!mounted) return;
-    if (_mouseLocked && !_chromeVisible) return;
+    if (_grabAlreadyEngaged) return;
     _enterGameMode();
     // Mobile (Android/iOS) has no native pointer grab — the soft-lock state
     // IS the game mode; taps stream to the game directly. Only desktop/web
@@ -1859,6 +1911,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _keyboardCloseDebounce?.cancel();
     _physicalGamepad?.dispose();
     _gameFocus.dispose();
+    widget.settings.removeListener(_onShaderSettingsChanged);
     WidgetsBinding.instance.removeObserver(this);
     _leaveOsFullscreen();
     _applyMobileSystemUi(false);
@@ -2117,12 +2170,29 @@ class _ReadySurfaceState extends State<_ReadySurface>
     final newly = event.buttons & ~_pressedMouseButtons;
     _pressedMouseButtons = event.buttons;
     // Without an active OS grab (soft lock, OTG/absolute mouse, touchscreens),
-    // pin the game cursor to the exact spot under the pointer so the click
-    // lands where the user pointed — relative deltas alone would leave the
-    // game cursor wherever it last was.
+    // a click must land on the cursor the user is aiming with. Only align an
+    // absolute position when the game is actually SHOWING a cursor (menus /
+    // chat): in look mode the cursor is hidden and a type-5 pin yanks the
+    // camera to wherever the physical pointer happens to be (which drifts
+    // from the tracked position at window edges / sensitivity != 1). And when
+    // the cursor is visible, pin the TRACKED position the overlay/flush
+    // already uses — never the raw physical pointer, or the visible game
+    // cursor teleports on click.
     if (newly & kPrimaryMouseButton != 0 &&
-        !(_pointerLockSub != null && _nativeGrabLive)) {
-      _sendAbsoluteAt(event.localPosition);
+        !(_pointerLockSub != null && _nativeGrabLive) &&
+        _cursorVisible) {
+      if (_cursorPositionKnown) {
+        widget.transport?.sendMouseAbsolute(
+          x: _cursorNormX.round(),
+          y: _cursorNormY.round(),
+          width: 65535,
+          height: 65535,
+        );
+      } else {
+        // No tracked position (overlay off / never server-anchored): align
+        // the click to the physical pointer as a last resort.
+        _sendAbsoluteAt(event.localPosition);
+      }
     }
     for (var bit = 1; bit <= kForwardMouseButton; bit <<= 1) {
       if ((newly & bit) == 0) continue;
@@ -2227,7 +2297,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
 
   void _onVideoPointerSignal(PointerSignalEvent event) {
     if (_chromeVisible || event is! PointerScrollEvent) return;
-    final dy = event.scrollDelta.dy.round();
+    // GFN expects the NEGATED raw deltaY (the official client sends
+    // -wheelEvent.deltaY unquantized; OpenNOW's onWheel does the same).
+    // Flutter's scrollDelta.dy matches the browser's sign (positive =
+    // scroll down), so negate here or scrolling is backwards. Also clamp to
+    // int16 — fast scrolling can exceed it and the encoder's setInt16 throws
+    // outside that range.
+    final dy =
+        (-event.scrollDelta.dy).round().clamp(-32768, 32767).toInt();
     if (dy != 0) widget.transport?.sendMouseWheel(delta: dy);
   }
 
@@ -2492,13 +2569,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () {
-                      // Tapping the stream surface captures the pointer: the first
-                      // click (chrome visible, or unlocked-but-hidden) is consumed
-                      // by _onVideoPointerDown/_Up and enters mouse lock; further
-                      // clicks play. Double-Esc releases.
-                      if (_chromeVisible || !_mouseLocked) {
-                        _enterMouseLock();
-                      }
+                      // Tapping the stream surface enters mouse lock whenever a
+                      // grab isn't already live: the capture click (chrome
+                      // visible), a re-lock after a release, or the chrome-visible
+                      // Hide-UI path that set _mouseLocked without starting the
+                      // grab. _enterMouseLock no-ops once the grab session is
+                      // active, so gameplay clicks still stream to the game.
+                      // Double-Esc releases.
+                      _enterMouseLock();
                     },
                     child: MouseRegion(
                       // In-game the OS cursor is hidden (soft lock — this is what
@@ -3258,6 +3336,13 @@ class StreamSettingsSidebar extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                _SidebarSection(
+                  title: 'VIDEO SHADERS',
+                  children: [
+                    VideoShaderControls(settings: settings),
                   ],
                 ),
                 const SizedBox(height: 24),

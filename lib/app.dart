@@ -151,10 +151,6 @@ class _ShellState extends State<Shell> {
   int _index = 0;
   bool _sidebarExpanded = true;
 
-  /// How long the resume prompt stays on screen. Long enough to actually
-  /// tap Resume (the default 3s is too easy to miss on app load).
-  static const Duration _resumePromptDuration = Duration(seconds: 15);
-
   @override
   void initState() {
     super.initState();
@@ -181,8 +177,9 @@ class _ShellState extends State<Shell> {
             '(appId ${first.appId})',
       );
       // Defer past the shell's first build frame: showing a snackbar while
-      // the Scaffold is still mounting can drop it. Keep it on screen long
-      // enough to actually tap Resume (the default 3s is too easy to miss).
+      // the Scaffold is still mounting can drop it. The prompt is persistent
+      // — no timeout, no swipe-dismiss — so it can't be missed: the only way
+      // out is tapping Resume or Kill.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         showNeonSnackbar(
@@ -191,7 +188,7 @@ class _ShellState extends State<Shell> {
           actionLabel: 'Resume',
           altActionLabel: 'Kill',
           copyable: false,
-          duration: _resumePromptDuration,
+          persistent: true,
           onAction: () => _resumeActiveSession(first),
           altOnAction: () => _terminateActiveSession(first),
         );

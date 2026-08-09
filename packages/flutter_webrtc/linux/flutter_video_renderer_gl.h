@@ -32,6 +32,42 @@ namespace flutter_webrtc_plugin {
 
 using namespace libwebrtc;
 
+// ---------------------------------------------------------------------------
+// GPU post-processing (video shader filter) settings. Values keep the
+// UI-facing ranges; the fragment shader normalizes them. The whole struct is
+// replaced from Dart via the setVideoShaderSettings method; renderers
+// snapshot it on the raster thread.
+// ---------------------------------------------------------------------------
+struct VideoShaderSettingsState {
+  bool enabled = false;
+  int sharpen = 40;     // 0-100 (0 = off)
+  bool sharpenAdaptive = true;  // true = contrast-adaptive (CAS), false = uniform
+  int saturation = 100; // 0-200 (100 = neutral)
+  int contrast = 100;   // 50-150 (100 = neutral)
+  int brightness = 100; // 50-150 (100 = neutral)
+  int vibrance = 0;     // 0-100 (0 = off)
+  int grain = 0;        // 0-100 (0 = off)
+
+  // Bumped on every update so the frame cache (keyed on frame identity +
+  // settings version) re-renders when a slider moves between video frames.
+  uint64_t version = 0;
+
+  // True when the post pass would visibly change the image. The renderer
+  // keeps the single-pass YUV→RGB path when false — zero extra GPU work.
+  bool active() const {
+    return enabled &&
+           (sharpen > 0 || saturation != 100 || contrast != 100 ||
+            brightness != 100 || vibrance > 0 || grain > 0);
+  }
+};
+
+// Replaces the process-wide shader filter settings (thread-safe; called from
+// the platform thread via the method channel, read on the raster thread).
+void set_video_shader_settings(const VideoShaderSettingsState& settings);
+
+// Thread-safe snapshot of the current shader filter settings + version.
+VideoShaderSettingsState video_shader_settings_snapshot();
+
 // GObject subclass of FlTextureGL. The engine calls populate() on its raster
 // thread with the Flutter GL context already current; we render the latest
 // frame's Y/U/V planes through the YUV→RGB shader into an RGBA8 texture and
@@ -114,6 +150,15 @@ class FlutterVideoRendererGL
   bool EnsureGlResources(int width, int height);
   bool CompileShaderProgram();
   bool CompileNv12ShaderProgram();
+
+  // Video shader filter (post-processing) stage, port of OpenNOW's
+  // videoShader.ts: compiles the post program into the process-wide GlQuad on
+  // first use, then renders rgb_tex_ → post_tex_ when the filter is active.
+  // Raster thread only (populate()). Returns false when the filter is
+  // unavailable (shader compile failure) so the caller falls back to handing
+  // the engine the unfiltered rgb_tex_.
+  bool CompilePostShaderProgram();
+  bool RenderPostPass(int width, int height);
   void UploadAndRenderFrame(const uint8_t* y,
                             int y_stride,
                             const uint8_t* u,
@@ -187,8 +232,22 @@ class FlutterVideoRendererGL
   GLuint uv_tex_ = 0;  // NV12 interleaved UV plane (dmabuf path)
   GLuint rgb_tex_ = 0;
   GLuint fbo_ = 0;
+
+  // Post-processing stage: rgb_tex_ → post_tex_ when the video shader filter
+  // is active (the engine composites post_tex_). Skipped entirely (and
+  // post_tex_ never allocated on the hot path) when the filter is off — the
+  // engine then gets rgb_tex_ directly, exactly as before.
+  GLuint post_tex_ = 0;
+  GLuint post_fbo_ = 0;
+
   int gl_width_ = 0;
   int gl_height_ = 0;
+
+  // Frame-cache bookkeeping for the post pass: which settings the cached
+  // texture was rendered with, so a live slider change (version bump) forces
+  // a re-render even when the video frame pointer is unchanged.
+  uint64_t last_rendered_shader_version_ = 0;
+  bool last_rendered_post_active_ = false;
 };
 
 // Process-wide GL program + fullscreen quad, shared by all GL renderers.
@@ -208,6 +267,22 @@ struct GlQuad {
   GLint uniform_y_nv12 = -1;
   GLint uniform_uv_nv12 = -1;
   bool nv12_compiled = false;
+
+  // Post-processing (video shader filter) program: samples the YUV→RGB
+  // result texture and applies the sharpen/grade/grain pass. Compiles only
+  // when the post pass is first needed, and is shared by every renderer.
+  GLuint program_post = 0;
+  GLint uniform_post_frame = -1;
+  GLint uniform_post_texel_size = -1;
+  GLint uniform_post_sharpen = -1;
+  GLint uniform_post_sharpen_adaptive = -1;
+  GLint uniform_post_saturation = -1;
+  GLint uniform_post_contrast = -1;
+  GLint uniform_post_brightness = -1;
+  GLint uniform_post_vibrance = -1;
+  GLint uniform_post_grain = -1;
+  GLint uniform_post_time = -1;
+  bool post_compiled = false;
 };
 
 GlQuad* gl_quad();

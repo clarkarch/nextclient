@@ -13,6 +13,7 @@ import '../../widgets/neon_option_chip.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/neon_switch.dart';
+import '../../widgets/stream/video_shader_controls.dart';
 
 /// Client-side transport + input options (local client behavior, not sent to
 /// the NVIDIA server): the ICE/transport knobs, the WebRTC engine selection
@@ -257,8 +258,41 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
             ],
             const SizedBox(height: 14),
             _inputCard(s),
+            const SizedBox(height: 14),
+            _shaderCard(s),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Client-side GPU post-processing filters for the stream (CAS
+  /// sharpening, color grade, vibrance, film grain). Only the GPU renderer
+  /// path composites through a shader, so the controls explain when the
+  /// filter can't apply.
+  Widget _shaderCard(UserSettings s) {
+    return NeonCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const NeonSettingSection(label: 'Video shaders'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: const Text(
+              'Client-side GPU post-processing: sharpening, '
+              'saturation/contrast/brightness, vibrance, and animated film '
+              'grain. Applies on the GPU renderer path while streaming; '
+              'changes apply live from the stream sidebar too.',
+              style: TextStyle(color: Neon.inkMuted, fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 16),
+            child: VideoShaderControls(settings: s),
+          ),
+        ],
       ),
     );
   }

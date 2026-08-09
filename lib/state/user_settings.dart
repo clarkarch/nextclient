@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../theme/neon.dart';
 import 'stream_transport.dart' show StreamTransportKind;
+import 'video_shader_settings.dart';
 
 /// Launch preferences that are sent to the NVIDIA server in the
 /// `SessionCreateRequest`. Persisted locally so launches reuse the last choice.
@@ -41,6 +42,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamTransport = 'settings.experimental.streamTransport';
   static const _keyDecoderBackend = 'settings.experimental.decoderBackend';
   static const _keyRendererBackend = 'settings.experimental.rendererBackend';
+  static const _keyVideoShader = 'settings.videoShader';
   static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
@@ -101,6 +103,7 @@ class UserSettings extends ChangeNotifier {
   StreamTransportKind _streamTransport = StreamTransportKind.flutterWebrtc;
   DecoderBackend _decoderBackend = DecoderBackend.vaapi;
   RendererBackend _rendererBackend = RendererBackend.cpu;
+  VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
   bool _logsEnabled = true;
   bool _hideTitleBar = false;
@@ -160,6 +163,11 @@ class UserSettings extends ChangeNotifier {
   StreamTransportKind get streamTransport => _streamTransport;
   DecoderBackend get decoderBackend => _decoderBackend;
   RendererBackend get rendererBackend => _rendererBackend;
+
+  /// Client-side GPU post-processing applied to the stream (port of OpenNOW's
+  /// video shader filters: CAS sharpening, color grade, vibrance, film
+  /// grain). Applies on the GPU renderer path only (RendererBackend.gl).
+  VideoShaderSettings get videoShader => _videoShader;
   BackgroundStyle get backgroundStyle => _backgroundStyle;
   bool get logsEnabled => _logsEnabled;
   bool get hideTitleBar => _hideTitleBar;
@@ -461,6 +469,16 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Replaces the whole shader filter config (enabled + all six controls) and
+  /// persists it. The stream surface pushes the change to the native GPU
+  /// renderer, which re-applies it on the next composite.
+  set videoShader(VideoShaderSettings v) {
+    if (_videoShader == v) return;
+    _videoShader = v;
+    _prefs.setString(_keyVideoShader, v.toPersistedString());
+    notifyListeners();
+  }
+
   set backgroundStyle(BackgroundStyle v) {
     if (_backgroundStyle == v) return;
     _backgroundStyle = v;
@@ -666,6 +684,8 @@ class UserSettings extends ChangeNotifier {
     _rendererBackend = RendererBackend.values.asNameMap()[
             _prefs.getString(_keyRendererBackend)] ??
         _rendererBackend;
+    _videoShader =
+        VideoShaderSettings.fromPersistedString(_prefs.getString(_keyVideoShader));
     _backgroundStyle = BackgroundStyle.values.asNameMap()[
             _prefs.getString(_keyBackgroundStyle)] ??
         _backgroundStyle;
@@ -771,6 +791,7 @@ class UserSettings extends ChangeNotifier {
     _streamTransport = StreamTransportKind.flutterWebrtc;
     _decoderBackend = DecoderBackend.vaapi;
     _rendererBackend = RendererBackend.cpu;
+    _videoShader = VideoShaderSettings.defaults;
     _backgroundStyle = BackgroundStyle.beams;
     _logsEnabled = true;
     _hideTitleBar = false;
@@ -824,6 +845,7 @@ class UserSettings extends ChangeNotifier {
     _keyStreamTransport,
     _keyDecoderBackend,
     _keyRendererBackend,
+    _keyVideoShader,
     _keyBackgroundStyle,
     _keyLogsEnabled,
     _keyHideTitleBar,
