@@ -4,11 +4,11 @@
   <img src="nextclient.svg" alt="NEXTCLIENT logo" width="200" />
 </p>
 
-**A neon, open-source GeForce NOW client for Android, Linux, and Windows — a Flutter port of [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW).**
+**A modern, open-source GeForce NOW client for Android and Linux — a Flutter port of [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW).**
 
 NEXTCLIENT is a from-scratch Dart/Flutter rewrite of the OpenNOW Electron
 client, built around a custom-built, hardware-accelerated streaming pipeline
-(VAAPI zero-copy on Linux) and a dark neon UI.
+(VAAPI zero-copy on Linux) and a clean, modern neon UI.
 
 > [!WARNING]
 > Under active development. Expect rough edges, especially around the native
@@ -64,7 +64,7 @@ client, built around a custom-built, hardware-accelerated streaming pipeline
 |---|---|
 | Android | ✅ Supported — decode is already handled by flutter_webrtc (platform hardware codecs) |
 | Linux | ✅ Supported — VAAPI hardware decode + zero-copy render |
-| Windows | 🚧 Builds and streams, but GPU decode isn't solved yet — runs FFmpeg software decode for now |
+| Windows | 🚧 Partially supported — builds and streams, but GPU decode isn't solved yet (runs FFmpeg software decode) |
 | macOS | ❓ Untested — I have no Mac (a CI job exists, but nothing has been validated) |
 | Web | ❌ Not built — the app depends on `dart:ffi`, GStreamer, and native plugins |
 

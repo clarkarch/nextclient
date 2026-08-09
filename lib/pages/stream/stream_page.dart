@@ -1716,6 +1716,29 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _applyMobileSystemUi(true);
   }
 
+  /// Ctrl+G: flip between the in-game/immersive mode and the stream UI chrome.
+  void _toggleChromeFromKey() {
+    if (_chromeVisible) {
+      _enterGameMode();
+    } else {
+      _showChromeFromEdge();
+    }
+  }
+
+  /// Fullscreen button: entering enters in-game mode (pointer lock + OS
+  /// fullscreen); while already in OS fullscreen it exits back to the window.
+  void _toggleFullscreen() {
+    if (_osFullscreen) {
+      setState(() {
+        _chromeVisible = true;
+        _streamSettingsOpen = false;
+      });
+      _exitMouseLock();
+      return;
+    }
+    _enterMouseLock();
+  }
+
   /// Same as [_enterGameMode] but for the soft-keyboard button: the chrome
   /// hides so the stream is immersive while the OS keyboard stays up. Switches
   /// the system to immersive would dismiss the IME on some Android builds, so
@@ -2542,6 +2565,16 @@ class _ReadySurfaceState extends State<_ReadySurface>
             _handleEscKey(event);
             return KeyEventResult.handled;
           }
+          // Ctrl+G: toggle the stream UI chrome. Ignore the OS key auto-repeat
+          // (KeyRepeatEvent is a KeyDownEvent) so holding the key flips once,
+          // not repeatedly.
+          if (event.logicalKey == LogicalKeyboardKey.keyG &&
+              HardwareKeyboard.instance.isControlPressed) {
+            if (event is KeyDownEvent && event is! KeyRepeatEvent) {
+              _toggleChromeFromKey();
+            }
+            return KeyEventResult.handled;
+          }
           // Everything else goes to the stream over the input channel.
           widget.transport?.sendKeyEvent(event);
           return KeyEventResult.handled;
@@ -2853,8 +2886,9 @@ class _ReadySurfaceState extends State<_ReadySurface>
                     settings: widget.settings,
                     keyboardOpen: _keyboardOpen,
                     settingsOpen: _streamSettingsOpen,
+                    isFullscreen: _osFullscreen,
                     onKeyboard: _toggleKeyboard,
-                    onFullscreen: _enterMouseLock,
+                    onFullscreen: _toggleFullscreen,
                     onOpenSettings: () {
                       setState(() {
                         _streamSettingsOpen = !_streamSettingsOpen;
@@ -3042,6 +3076,7 @@ class _BottomChrome extends StatelessWidget {
   final UserSettings settings;
   final bool keyboardOpen;
   final bool settingsOpen;
+  final bool isFullscreen;
   final VoidCallback onKeyboard;
   final VoidCallback onFullscreen;
   final VoidCallback onOpenSettings;
@@ -3055,6 +3090,7 @@ class _BottomChrome extends StatelessWidget {
     required this.settings,
     required this.keyboardOpen,
     required this.settingsOpen,
+    required this.isFullscreen,
     required this.onKeyboard,
     required this.onFullscreen,
     required this.onOpenSettings,
@@ -3114,8 +3150,8 @@ class _BottomChrome extends StatelessWidget {
           ),
           const SizedBox(width: 20),
           _ChromeButton(
-            icon: Icons.fullscreen,
-            label: 'Fullscreen',
+            icon: isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            label: isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
             onTap: () {
               onFullscreen();
               onHideUi();
@@ -3205,7 +3241,7 @@ class _HintPill extends StatelessWidget {
           Icon(Icons.keyboard, size: 13, color: Neon.inkSoft),
           SizedBox(width: 7),
           Text(
-            'click to lock mouse · Esc Esc or top edge opens UI',
+            'click to lock mouse · Esc Esc or Ctrl+G opens UI',
             style: TextStyle(color: Neon.inkSoft, fontSize: 11),
           ),
         ],

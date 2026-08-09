@@ -131,10 +131,14 @@ static const char* kPostFragmentShader =
     "  vec3 mx = max(center, max(max(n, s), max(w, e)));\n"
     "  vec3 amp = clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-5)), 0.0, 1.0);\n"
     "  amp = sqrt(amp);\n"
-    "  float peak = mix(-0.125, -0.2, amount);\n"
+    "  float peak = mix(-0.16, -0.24, amount);\n"
     "  vec3 weight = amp * peak;\n"
     "  vec3 result = (center + (n + s + w + e) * weight) / (1.0 + 4.0 * weight);\n"
-    "  return clamp(result, mn, mx);\n"
+    // Clamp only to the full range: clamping to local [mn,mx] cancels the edge
+    // overshoot — the sharpened edge would be pushed straight back into the
+    // original min/max, so adaptive did nothing. (peak stays above -0.25 so the
+    // 1 + 4*weight denominator can't go negative.)
+    "  return clamp(result, 0.0, 1.0);\n"
     "}\n"
     "vec3 sharpen_uniform(vec2 uv, vec3 center, float amount) {\n"
     "  vec3 n = texture2D(u_frame, uv + vec2(0.0, -u_texel_size.y)).rgb;\n"

@@ -246,6 +246,10 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (_isFreeTier) ...[
+                _buildFreeTierUpgradeCard(),
+                const SizedBox(height: 14),
+              ],
               NeonCard(
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -312,10 +316,6 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
                   ],
                 ),
               ),
-              if (_isFreeTier) ...[
-                const SizedBox(height: 14),
-                _buildFreeTierUpgradeCard(),
-              ],
               const SizedBox(height: 14),
               _experimentalServerCard(s),
             ],

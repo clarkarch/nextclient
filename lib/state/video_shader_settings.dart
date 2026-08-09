@@ -37,7 +37,7 @@ class VideoShaderSettings {
 
   const VideoShaderSettings({
     this.enabled = true,
-    this.sharpen = 100,
+    this.sharpen = 40,
     this.sharpenAdaptive = true,
     this.saturation = 100,
     this.contrast = 100,

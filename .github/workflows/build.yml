@@ -69,6 +69,7 @@ jobs:
         with:
           name: next-client-${{ matrix.name }}
           path: ${{ matrix.path }}
+          if-no-files-found: error
 
   android:
     name: android
@@ -90,3 +91,42 @@ jobs:
         with:
           name: next-android
           path: build/app/outputs/flutter-apk/*.apk
+
+  release:
+    name: release
+    needs: [build, android]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Package releases
+        run: |
+          set -e
+          mkdir -p packaged
+          # Linux: tar the bundle; Android: copy the APK; Windows/macOS if present.
+          if [ -d dist/next-client-linux ]; then
+            tar -C dist/next-client-linux -czf packaged/next-client-linux.tar.gz .
+          fi
+          if ls dist/next-android/*.apk >/dev/null 2>&1; then
+            cp dist/next-android/*.apk packaged/
+          fi
+          if [ -d dist/next-client-windows ]; then
+            tar -C dist/next-client-windows -czf packaged/next-client-windows.tar.gz .
+          fi
+          ls -la packaged
+
+      - name: Create/update the latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NEXTCLIENT nightly
+          body: |
+            Automatic build from the latest commit on `master`.
+          files: packaged/*
+          fail_on_unmatched_files: false
