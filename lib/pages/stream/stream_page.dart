@@ -1664,9 +1664,17 @@ class _ReadySurfaceState extends State<_ReadySurface>
       _escArmed = false;
       _escTimer?.cancel();
       _escTimer = null;
-      if (_mouseLocked) _exitMouseLock();
-      // Double-Esc always shows the stream UI (never hides it).
-      if (!_chromeVisible) setState(() => _chromeVisible = true);
+      if (!_chromeVisible) {
+        // Release just the pointer grab so the cursor is clickable, but do
+        // NOT leave OS fullscreen (that flashes/minimizes the window on
+        // Wayland). Fullscreen exits via the Fullscreen button / top edge.
+        final sub = _pointerLockSub;
+        _pointerLockSub = null;
+        _nativeGrabLive = false;
+        _mouseLocked = false;
+        if (sub != null) _pendingUnlock = sub.cancel();
+        setState(() => _chromeVisible = true);
+      }
       return;
     }
     // First Esc: forward to the game and arm the double-press window.
@@ -1716,13 +1724,26 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _applyMobileSystemUi(true);
   }
 
-  /// Ctrl+G: flip between the in-game/immersive mode and the stream UI chrome.
   void _toggleChromeFromKey() {
     if (_chromeVisible) {
-      _enterGameMode();
-    } else {
-      _showChromeFromEdge();
+      // Hide: back into the game (mouse deltas reach the game again).
+      setState(() {
+        _chromeVisible = false;
+        _mouseLocked = true;
+        _streamSettingsOpen = false;
+      });
+      return;
     }
+    // Show: cancel just the pointer grab so the cursor is clickable — but DO
+    // NOT call _exitMouseLock()/leave OS fullscreen (that flashes/minimizes
+    // the window on Wayland). Fullscreen exits only via the Fullscreen button
+    // or the top-edge escape zone.
+    final sub = _pointerLockSub;
+    _pointerLockSub = null;
+    _nativeGrabLive = false;
+    _mouseLocked = false;
+    if (sub != null) _pendingUnlock = sub.cancel();
+    setState(() => _chromeVisible = true);
   }
 
   /// Fullscreen button: entering enters in-game mode (pointer lock + OS
