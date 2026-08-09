@@ -66,12 +66,26 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
     _timer = Timer.periodic(widget.autoAdvance, (_) {
       if (!mounted || !_controller.hasClients) return;
       final next = (_index + 1) % widget.slides.length;
-      _controller.animateToPage(
-        next,
-        duration: const Duration(milliseconds: 700),
-        curve: Curves.easeInOutCubic,
-      );
+      _animateTo(next);
     });
+  }
+
+  void _goToPage(int index) {
+    if (index == _index) {
+      _startTimer();
+      return;
+    }
+    _timer?.cancel();
+    _animateTo(index);
+  }
+
+  void _animateTo(int index) {
+    if (!mounted || !_controller.hasClients) return;
+    _controller.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 700),
+      curve: Curves.easeInOutCubic,
+    );
   }
 
   @override
@@ -113,7 +127,11 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
             if (slides.length > 1)
               Padding(
                 padding: const EdgeInsets.only(top: 14),
-                child: _PagerDots(count: slides.length, index: _index),
+                child: _PagerDots(
+                  count: slides.length,
+                  index: _index,
+                  onTap: _goToPage,
+                ),
               ),
           ],
         );
@@ -127,8 +145,9 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
 class _PagerDots extends StatelessWidget {
   final int count;
   final int index;
+  final ValueChanged<int>? onTap;
 
-  const _PagerDots({required this.count, required this.index});
+  const _PagerDots({required this.count, required this.index, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -136,15 +155,21 @@ class _PagerDots extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 0; i < count; i++)
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOutCubic,
-            width: i == index ? 24 : 6,
-            height: 6,
-            margin: const EdgeInsets.symmetric(horizontal: 3),
-            decoration: BoxDecoration(
-              color: i == index ? Neon.accent : const Color(0x33FFFFFF),
-              borderRadius: BorderRadius.circular(3),
+          GestureDetector(
+            onTap: onTap == null ? null : () => onTap!(i),
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOutCubic,
+                width: i == index ? 24 : 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: i == index ? Neon.accent : const Color(0x33FFFFFF),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
             ),
           ),
       ],

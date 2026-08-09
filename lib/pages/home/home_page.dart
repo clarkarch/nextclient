@@ -298,9 +298,6 @@ class _HomeTopBar extends StatelessWidget {
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Neon.outlineSoft)),
-      ),
       child: Row(
         children: [
           if (showBrand)

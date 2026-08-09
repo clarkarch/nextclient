@@ -44,7 +44,6 @@ class NeonSidebar extends StatelessWidget {
       width: expanded ? 250 : 84,
       decoration: BoxDecoration(
         color: Neon.bgB,
-        border: const Border(right: BorderSide(color: Neon.outlineSoft)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.4),
@@ -58,7 +57,7 @@ class NeonSidebar extends StatelessWidget {
         children: [
           if (expanded) ...[
             const Padding(
-              padding: EdgeInsets.fromLTRB(22, 24, 22, 18),
+              padding: EdgeInsets.fromLTRB(22, 24, 22, 14),
               child: ShaderMask(
                 shaderCallback: _gradientShader,
                 child: Text(
@@ -72,7 +71,6 @@ class NeonSidebar extends StatelessWidget {
                 ),
               ),
             ),
-            const Divider(),
           ] else
             const SizedBox(height: 20),
           for (var i = 0; i < destinations.length; i++)

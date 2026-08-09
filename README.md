@@ -62,10 +62,10 @@ client, built around a custom-built, hardware-accelerated streaming pipeline
 
 | Platform | Status |
 |---|---|
-| Android | ✅ Supported — decode is automatic (platform hardware codecs, no custom build needed) |
+| Android | ✅ Supported — decode is already handled by flutter_webrtc (platform hardware codecs) |
 | Linux | ✅ Supported — VAAPI hardware decode + zero-copy render |
 | Windows | 🚧 Builds and streams, but GPU decode isn't solved yet — runs FFmpeg software decode for now |
-| macOS | ❓ Untested — no Mac available to verify (a CI job exists, but nothing has been validated) |
+| macOS | ❓ Untested — I have no Mac (a CI job exists, but nothing has been validated) |
 | Web | ❌ Not built — the app depends on `dart:ffi`, GStreamer, and native plugins |
 
 CI (`build.yml`) builds **Linux, Windows, and Android** on every push; a

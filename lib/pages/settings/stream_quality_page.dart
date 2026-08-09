@@ -44,7 +44,14 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
       _ResOption('3840x2400', '4K', OptionTier.ultimate, 3840, 2400),
     ],
     '21:9': [
-      _ResOption('2560x1080', 'Ultrawide 1080p', OptionTier.free, 2560, 1080),
+      _ResOption('1680x720', 'Ultrawide 720p', OptionTier.free, 1680, 720),
+      _ResOption(
+        '2560x1080',
+        'Ultrawide 1080p',
+        OptionTier.priority,
+        2560,
+        1080,
+      ),
       _ResOption(
         '3440x1440',
         'Ultrawide 1440p',
@@ -92,47 +99,66 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
     });
   }
 
-  /// Whether an option is usable. Prefers the account's entitled
-  /// resolutions; falls back to membership-tier rules when unknown.
+  /// Whether an option is usable. When the account is entitled to a specific
+  /// resolution or fps combo, entitlement wins regardless of tier label; a
+  /// combo that isn't explicitly entitled falls back to the tier rules (the
+  /// entitled list from MES is a subset of what GFN actually delivers, e.g.
+  /// free-tier ultrawide 1680x720 isn't always listed).
   bool _canUse(OptionTier tier, {int? width, int? height, int? fps}) {
     final subscription = _subscription;
     if (subscription != null) {
       final entitled = subscription.entitledResolutions;
       if (entitled.isNotEmpty) {
         if (width != null && height != null) {
-          return entitled.any((r) => r.width == width && r.height == height);
+          if (entitled.any((r) => r.width == width && r.height == height)) {
+            return true;
+          }
         }
         if (fps != null) {
-          return entitled.any((r) => r.fps == fps);
+          if (entitled.any((r) => r.fps == fps)) {
+            return true;
+          }
         }
-        return true;
+        // Not in the entitled subset — fall through to tier rules rather than
+        // locking a known-supported combo (e.g. free 21:9) out entirely.
       }
     }
     return !_isFreeTier || tier == OptionTier.free;
   }
 
-  /// Resolution options derived from the account's entitled resolutions,
-  /// grouped by aspect ratio. When the subscription is known this is the
-  /// authoritative list — it can contain more (or fewer) options than the
-  /// hardcoded defaults, so we only ever offer server-approved combinations.
+  /// Resolution options grouped by aspect ratio. The curated [_resolutions]
+  /// list is always the base (it carries the correct tier labels for every
+  /// option GFN ships, including free-tier ultrawide); entitled resolutions
+  /// from the account are merged in as extras. `_canUse` gates each option by
+  /// tier / entitlement.
   Map<String, List<_ResOption>> get _resolutionGroups {
     final entitled = _subscription?.entitledResolutions ?? const [];
-    if (entitled.isEmpty) return _resolutions;
-
-    final groups = <String, List<_ResOption>>{};
-    final seen = <String>{};
+    final groups = <String, List<_ResOption>>{
+      for (final entry in _resolutions.entries) entry.key: [...entry.value],
+    };
+    final seen = <String, _ResOption>{
+      for (final entry in _resolutions.entries)
+        for (final r in entry.value) r.resolution: r,
+    };
     for (final r in entitled) {
       final key = '${r.width}x${r.height}';
-      if (!seen.add(key)) continue;
+      if (seen.containsKey(key)) continue;
       final ratio = _aspectRatio(r.width, r.height);
-      (groups[ratio] ??= []).add(
-        _ResOption(
-          key,
-          _resolutionLabel(r.width, r.height),
-          OptionTier.free,
-          r.width,
-          r.height,
-        ),
+      final opt = _ResOption(
+        key,
+        _resolutionLabel(r.width, r.height),
+        OptionTier.free,
+        r.width,
+        r.height,
+      );
+      seen[key] = opt;
+      (groups[ratio] ??= []).add(opt);
+    }
+    // Keep every group ordered low -> high by pixel count, even after merging
+    // entitled extras in.
+    for (final entry in groups.entries) {
+      entry.value.sort(
+        (a, b) => (a.width * a.height).compareTo(b.width * b.height),
       );
     }
     return groups;
@@ -202,6 +228,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
       '3840x2400': '4K',
       '2560x1080': 'Ultrawide 1080p',
       '3440x1440': 'Ultrawide 1440p',
+      '1680x720': 'Ultrawide 720p',
       '5120x1440': 'Super Ultrawide',
     };
     return common['${width}x$height'] ?? '${width}x$height';

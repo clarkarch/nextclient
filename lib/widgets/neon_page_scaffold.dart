@@ -148,9 +148,6 @@ class _TopBar extends StatelessWidget {
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Neon.outlineSoft)),
-      ),
       child: Row(
         children: [
           if (showBack) ...[

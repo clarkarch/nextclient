@@ -36,8 +36,8 @@ class VideoShaderSettings {
   final int filmGrain;
 
   const VideoShaderSettings({
-    this.enabled = false,
-    this.sharpen = 40,
+    this.enabled = true,
+    this.sharpen = 100,
     this.sharpenAdaptive = true,
     this.saturation = 100,
     this.contrast = 100,

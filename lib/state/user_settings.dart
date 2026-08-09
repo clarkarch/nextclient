@@ -91,8 +91,8 @@ class UserSettings extends ChangeNotifier {
   double _streamGamepadOpacity = 1.0;
   bool _streamShowFps = false;
   WebrtcIceTransportPolicy _webrtcIceTransport = WebrtcIceTransportPolicy.all;
-  int _webrtcIcePoolSize = 0;
-  WebrtcBundlePolicy _webrtcBundle = WebrtcBundlePolicy.balanced;
+  int _webrtcIcePoolSize = 4;
+  WebrtcBundlePolicy _webrtcBundle = WebrtcBundlePolicy.maxBundle;
   WebrtcRtcpMuxPolicy _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
   bool _webrtcHwAccel = true;
   String _webrtcStunServer = '';
@@ -102,7 +102,7 @@ class UserSettings extends ChangeNotifier {
   bool _streamPriorityEnabled = false;
   StreamTransportKind _streamTransport = StreamTransportKind.flutterWebrtc;
   DecoderBackend _decoderBackend = DecoderBackend.vaapi;
-  RendererBackend _rendererBackend = RendererBackend.cpu;
+  RendererBackend _rendererBackend = RendererBackend.gl;
   VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
   bool _logsEnabled = true;
@@ -122,7 +122,7 @@ class UserSettings extends ChangeNotifier {
   bool _inputCursorOverlay = true;
   bool _inputCursorNative = true;
   TouchInputMode _inputTouchMode = TouchInputMode.relative;
-  bool _inputTouchEnabled = true;
+  bool _inputTouchEnabled = false;
   bool _debugCursorOverlayBox = false;
 
   UserSettings(this._prefs) {
@@ -461,7 +461,8 @@ class UserSettings extends ChangeNotifier {
   /// in a shader — GL on Linux, D3D11 shared-handle on Windows — composited
   /// by the engine with no CPU readback). Applied via the `OPENNOW_RENDERER`
   /// env var read by the plugin when the video texture is created. Defaults
-  /// to [RendererBackend.cpu] until the GPU path is verified.
+  /// to [RendererBackend.gl] — the GPU path falls back to CPU when the shader
+  /// renderer isn't available, so the default stays compatible.
   set rendererBackend(RendererBackend v) {
     if (_rendererBackend == v) return;
     _rendererBackend = v;
@@ -779,8 +780,8 @@ class UserSettings extends ChangeNotifier {
     _streamGamepadOpacity = 1.0;
     _streamShowFps = false;
     _webrtcIceTransport = WebrtcIceTransportPolicy.all;
-    _webrtcIcePoolSize = 0;
-    _webrtcBundle = WebrtcBundlePolicy.balanced;
+    _webrtcIcePoolSize = 4;
+    _webrtcBundle = WebrtcBundlePolicy.maxBundle;
     _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
     _webrtcHwAccel = true;
     _webrtcStunServer = '';
@@ -790,7 +791,7 @@ class UserSettings extends ChangeNotifier {
     _streamPriorityEnabled = false;
     _streamTransport = StreamTransportKind.flutterWebrtc;
     _decoderBackend = DecoderBackend.vaapi;
-    _rendererBackend = RendererBackend.cpu;
+    _rendererBackend = RendererBackend.gl;
     _videoShader = VideoShaderSettings.defaults;
     _backgroundStyle = BackgroundStyle.beams;
     _logsEnabled = true;
@@ -808,7 +809,7 @@ class UserSettings extends ChangeNotifier {
     _inputCursorOverlay = true;
     _inputCursorNative = true;
     _inputTouchMode = TouchInputMode.relative;
-    _inputTouchEnabled = true;
+    _inputTouchEnabled = false;
     _debugCursorOverlayBox = false;
     BackgroundGlow.current.value = _backgroundStyle;
     notifyListeners();

@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest an idea or improvement
+labels: enhancement
+body:
+  - type: dropdown
+    id: scope
+    attributes:
+      label: What area?
+      multiple: true
+      options:
+        - Catalog / Library
+        - Sign-in / accounts
+        - Session / queue / launcher
+        - Streaming (transports, decode, renderer)
+        - Input (mouse, gamepad, touch, keyboard)
+        - Settings / UX
+        - UI theme / design
+        - Native / FFI / build system
+        - Packaging / release / install
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What do you want, and why? Concrete > vague ("be able to pick the GPU decode priority" > "streaming should be better").
+      placeholder: "e.g. a per-game launch filter that custom-lists resolve options..."
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Why / use case
+      description: "Who is this for, what problem does it solve for you?"
+  - type: textarea
+    id: opened-copy
+    attributes:
+      label: Reference implementation (optional)
+      description: "If another client does this (OpenNOW, the official app), paste a link/screenshot."
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Trade-offs considered
+      description: "Optional, but helps: complexity, compatibility risk, default-on vs opt-in, etc."
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Please confirm
+      options:
+        - I searched existing issues (open + closed) first and this is new.
+        - I understand small codebase is one person; big scope may be declined or staged.

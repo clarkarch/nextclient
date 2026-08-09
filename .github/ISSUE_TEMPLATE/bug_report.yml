@@ -1,0 +1,114 @@
+name: Bug report
+description: Report a crash, glitch, or wrong behavior
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! The more detail you give here, the faster this gets fixed.
+  - type: input
+    id: version
+    attributes:
+      label: Build version
+      description: From Settings → (or the About/Log viewer). Also fine to paste the git commit.
+      placeholder: "e.g. release binary from 2025-08-09, or b924be5"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Which OS are you on?
+      multiple: true
+      options:
+        - Linux
+        - Linux (Steam Deck)
+        - Windows
+        - Android
+        - macOS
+    validations:
+      required: true
+  - type: dropdown
+    id: gpu
+    attributes:
+      label: GPU / driver
+      multiple: false
+      options:
+        - Intel (iGPU)
+        - AMD
+        - NVIDIA (proprietary)
+        - NVIDIA (nouveau)
+        - Other / unsure
+    validations:
+      required: true
+  - type: dropdown
+    id: display-server
+    attributes:
+      label: Linux display server (Linux only)
+      description: "Which Wayland/X11 compositor, if known."
+      multiple: false
+      options:
+        - "Wayland (Hyprland)"
+        - "Wayland (GNOME/KDE)"
+        - "Wayland (other)"
+        - X11
+        - Not applicable
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Stream transport (Settings → Client)
+      multiple: false
+      options:
+        - LIBWEBRTC (default)
+        - WEBRTCBIN (FFI)
+        - NVST (GStreamer)
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: decode-render
+    attributes:
+      label: Decode / render backend (if using LIBWEBRTC)
+      multiple: true
+      options:
+        - VAAPI decode
+        - FFmpeg (software) decode
+        - GPU shader renderer
+        - CPU renderer
+        - Not sure / default
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: "What you did, what you expected, what actually happened."
+      placeholder: "Launched a session, the video shows but audio is 3s behind..."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Open the in-app Log viewer, copy the relevant lines, and paste them here. Redact anything sensitive automatically (the app already scrubs tokens)."
+      render: shell
+      placeholder: "[stream] launch failed: ..."
+  - type: input
+    id: net
+    attributes:
+      label: Connection
+      description: "Approximate downstream speed / fiber / WiFi / other."
+      placeholder: "e.g. 100 Mbps fiber, wired"
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: "1. Go to ... 2. Click ... 3. See error."
+  - type: checkboxes
+    id: consent
+    title: Before submitting
+    attributes:
+      label: Please confirm
+      options:
+        - I have the latest build and can still reproduce this.
+        - I checked the README / existing issues for this.
+        - I have a GeForce NOW account of my own (and am not expecting any affiliation).
