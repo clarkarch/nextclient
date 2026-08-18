@@ -143,6 +143,11 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
     for (final r in entitled) {
       final key = '${r.width}x${r.height}';
       if (seen.containsKey(key)) continue;
+      // Skip odd native/device panel resolutions (e.g. 1366x768 laptop
+      // screens) that GFN lists as entitled but aren't real cloud-gaming
+      // targets — they only clutter the selector and end up "selected" when
+      // the user asked for a standard option like Ultrawide 720p.
+      if (!_isCloudGamingResolution(r.width, r.height)) continue;
       final ratio = _aspectRatio(r.width, r.height);
       final opt = _ResOption(
         key,
@@ -186,6 +191,27 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
       fpsSet.addAll({for (final r in entitled) r.fps});
     }
     return fpsSet.toList()..sort();
+  }
+
+  /// Whether [width]x[height] is a plausible cloud-gaming stream resolution
+  /// (a standard panel height and a canonical aspect ratio). Used to keep odd
+  /// device-native panels (e.g. 1366x768 laptops) out of the entitled-options
+  /// merge so they don't clutter the selector.
+  static bool _isCloudGamingResolution(int width, int height) {
+    const heights = {
+      720, 900, 1050, 1080, 1200, 1440, 1600, 2160, 2400, 2880,
+    };
+    if (!heights.contains(height)) return false;
+    final ratio = width / height;
+    const canonical = [
+      (w: 16, h: 9),
+      (w: 16, h: 10),
+      (w: 21, h: 9),
+      (w: 32, h: 9),
+      (w: 4, h: 3),
+      (w: 3, h: 2),
+    ];
+    return canonical.any((c) => (c.w / c.h - ratio).abs() < 0.08);
   }
 
   static String _aspectRatio(int width, int height) {

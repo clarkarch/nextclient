@@ -1139,6 +1139,11 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// capture-click both route through [_enterMouseLock].
   bool _osFullscreen = false;
 
+  /// True on Android/iOS while the system bars are hidden (immersive), so the
+  /// Fullscreen button can toggle back out of fullscreen on mobile — the
+  /// desktop `_osFullscreen` window state never applies there.
+  bool _mobileImmersive = false;
+
   /// Height of the top-edge escape zone (logical px). While in-game, parking
   /// the cursor here shows the stream UI — the reliable, mouse-only way out.
   /// Double-Esc needs the keyboard, which some Wayland compositors stop
@@ -1717,6 +1722,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
         _chromeVisible = false;
         _streamSettingsOpen = false;
       });
+      _applyMobileSystemUi(true);
       return;
     }
     if (_escArmed) {
@@ -1735,6 +1741,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
         _mouseLocked = false;
         if (sub != null) _pendingUnlock = sub.cancel();
         setState(() => _chromeVisible = true);
+        _applyMobileSystemUi(false);
       }
       return;
     }
@@ -1796,6 +1803,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
         _mouseLocked = true;
         _streamSettingsOpen = false;
       });
+      _applyMobileSystemUi(true);
       return;
     }
     // Show: cancel just the pointer grab so the cursor is clickable — but DO
@@ -1808,12 +1816,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _mouseLocked = false;
     if (sub != null) _pendingUnlock = sub.cancel();
     setState(() => _chromeVisible = true);
+    _applyMobileSystemUi(false);
   }
 
   /// Fullscreen button: entering enters in-game mode (pointer lock + OS
-  /// fullscreen); while already in OS fullscreen it exits back to the window.
+  /// fullscreen on desktop, immersive system bars on mobile); while already
+  /// fullscreen it exits back to the window / system bars.
   void _toggleFullscreen() {
-    if (_osFullscreen) {
+    if (_osFullscreen || _mobileImmersive) {
       setState(() {
         _chromeVisible = true;
         _streamSettingsOpen = false;
@@ -1966,13 +1976,38 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// Hides or restores the Android/iOS system bars. `hide=true` (in-game /
   /// fullscreen) goes fully immersive so nothing overlays the stream; `false`
   /// restores the solid bars the app boots with. No-op on desktop/web.
+  ///
+  /// The bar COLORS are switched to transparent when hidden too: some Android
+  /// builds keep a thin gesture-navigation strip (or briefly reveal the bars
+  /// on swipe), and a transparent bar over the video is invisible instead of a
+  /// solid block.
   void _applyMobileSystemUi(bool hide) {
     if (kIsWeb) return;
     if (!(Platform.isAndroid || Platform.isIOS)) return;
+    _mobileImmersive = hide;
     try {
       SystemChrome.setEnabledSystemUIMode(
         hide ? SystemUiMode.immersiveSticky : SystemUiMode.manual,
         overlays: hide ? const [] : SystemUiOverlay.values,
+      );
+      SystemChrome.setSystemUIOverlayStyle(
+        hide
+            ? const SystemUiOverlayStyle(
+                statusBarColor: Colors.transparent,
+                statusBarIconBrightness: Brightness.light,
+                statusBarBrightness: Brightness.dark,
+                systemNavigationBarColor: Colors.transparent,
+                systemNavigationBarDividerColor: Colors.transparent,
+                systemNavigationBarIconBrightness: Brightness.light,
+              )
+            : const SystemUiOverlayStyle(
+                statusBarColor: Neon.bgA,
+                statusBarIconBrightness: Brightness.light,
+                statusBarBrightness: Brightness.dark,
+                systemNavigationBarColor: Neon.bgA,
+                systemNavigationBarDividerColor: Colors.transparent,
+                systemNavigationBarIconBrightness: Brightness.light,
+              ),
       );
     } catch (_) {
       // Best-effort: a platform that can't switch modes must not break the
@@ -2618,14 +2653,71 @@ class _ReadySurfaceState extends State<_ReadySurface>
       );
     }
 
-    // Forward the newly typed characters as text input.
+    // Forward the newly typed characters as text input. Digits are routed as
+    // synthetic key events (see [_sendSoftKeyboardInput]).
     final added = text.substring(common);
-    if (added.isNotEmpty) transport.sendText(added);
+    if (added.isNotEmpty) _sendSoftKeyboardInput(added);
+  }
+
+  /// Digit keys indexed by the digit character ('0'..'9' → [digit0]..[digit9]).
+  static const List<LogicalKeyboardKey> _digitLogicalKeys = [
+    LogicalKeyboardKey.digit0,
+    LogicalKeyboardKey.digit1,
+    LogicalKeyboardKey.digit2,
+    LogicalKeyboardKey.digit3,
+    LogicalKeyboardKey.digit4,
+    LogicalKeyboardKey.digit5,
+    LogicalKeyboardKey.digit6,
+    LogicalKeyboardKey.digit7,
+    LogicalKeyboardKey.digit8,
+    LogicalKeyboardKey.digit9,
+  ];
+  static const List<PhysicalKeyboardKey> _digitPhysicalKeys = [
+    PhysicalKeyboardKey.digit0,
+    PhysicalKeyboardKey.digit1,
+    PhysicalKeyboardKey.digit2,
+    PhysicalKeyboardKey.digit3,
+    PhysicalKeyboardKey.digit4,
+    PhysicalKeyboardKey.digit5,
+    PhysicalKeyboardKey.digit6,
+    PhysicalKeyboardKey.digit7,
+    PhysicalKeyboardKey.digit8,
+    PhysicalKeyboardKey.digit9,
+  ];
+
+  /// Forwards soft-keyboard text to the stream. Letters/symbols go as
+  /// [INPUT_TEXT] raw UTF-8; digits go as synthetic key events — some game
+  /// text fields only accept key-based digits, so numbers typed on the
+  /// on-screen keyboard never appear otherwise (a physical keyboard works
+  /// because its digits arrive as real key events).
+  void _sendSoftKeyboardInput(String text) {
+    final transport = widget.transport;
+    if (transport == null) return;
+    final buf = StringBuffer();
+    void flush() {
+      if (buf.isEmpty) return;
+      transport.sendText(buf.toString());
+      buf.clear();
+    }
+
+    for (final rune in text.runes) {
+      if (rune >= 0x30 && rune <= 0x39) {
+        flush();
+        final digit = rune - 0x30;
+        _sendSyntheticKey(
+          _digitLogicalKeys[digit],
+          _digitPhysicalKeys[digit],
+        );
+      } else {
+        buf.writeCharCode(rune);
+      }
+    }
+    flush();
   }
 
   void _onKeyboardSubmitted(String text) {
     if (text.isNotEmpty) {
-      widget.transport?.sendText(text);
+      _sendSoftKeyboardInput(text);
       _lastKeyboardText = '';
       _keyboardController.clear();
     }
@@ -2689,22 +2781,27 @@ class _ReadySurfaceState extends State<_ReadySurface>
       _keyboardCloseDebounce = null;
       _keyboardFocus.unfocus();
       _gameFocus.requestFocus();
+      // Revealing the chrome leaves fullscreen: restore the system bars.
+      _applyMobileSystemUi(false);
       return true;
     }
     if (!_chromeVisible) {
-      // In-game: back shows the stream UI.
+      // In-game: back shows the stream UI (and restores the system bars).
       setState(() {
         _chromeVisible = true;
         _streamSettingsOpen = false;
       });
+      _applyMobileSystemUi(false);
       return true;
     }
     // Stream UI is showing: back only exits the stream UI (back into the
-    // game). It never stops the session — that's what the Exit button is for.
+    // game), hiding the bars again. It never stops the session — that's what
+    // the Exit button is for.
     setState(() {
       _chromeVisible = false;
       _streamSettingsOpen = false;
     });
+    _applyMobileSystemUi(true);
     return true;
   }
 

@@ -243,6 +243,13 @@ class WebRtcStreamSession implements StreamTransport {
     }
     await pushVideoShaderSettings(settings.videoShader);
 
+    // Android: play the stream audio through the MEDIA stream (STREAM_MUSIC /
+    // MODE_NORMAL / USAGE_MEDIA) so the volume keys control the media volume
+    // instead of the in-call volume, and audio goes to the speaker rather than
+    // the earpiece. Must run before createPeerConnection/getUserMedia — the
+    // plugin bakes it into its AudioSwitch at creation. No-op on non-Android.
+    await Helper.setAndroidAudioConfiguration(AndroidAudioConfiguration.media);
+
     await videoRenderer.initialize();
     _rendererInitialized = true;
     if (_disposed) return;
