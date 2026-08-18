@@ -11,7 +11,14 @@ import 'package:flutter/services.dart';
 /// Maps a Flutter [KeyEvent] to the GFN protocol's (keycode, scancode) pair.
 /// Returns null for keys the streamer doesn't know (IME/unknown physical keys).
 ({int keycode, int scancode})? mapFlutterKeyEvent(KeyEvent event) {
-  final code = _domCodeFromPhysicalKey(event.physicalKey);
+  // Soft-keyboard keys can arrive as simulated key events whose PHYSICAL key
+  // is a vendor usage (e.g. the number row on some IMEs reports
+  // 0x1100000008 — not a keyboard-page HID id), so the physical-key mapping
+  // returns null even though the LOGICAL key is perfectly normal (Digit1, …).
+  // Fall back to the logical key so those digits/letters still reach the game
+  // instead of being silently dropped.
+  var code = _domCodeFromPhysicalKey(event.physicalKey);
+  code ??= _domCodeFromLogicalKey(event.logicalKey);
   if (code == null) return null;
 
   final vk = _defaultVirtualKeyFromCode(code);
@@ -19,6 +26,21 @@ import 'package:flutter/services.dart';
 
   // Official GFN Zc() always sends scancode 0; the server uses layout + VK.
   return (keycode: vk, scancode: 0);
+}
+
+/// Maps a [LogicalKeyboardKey] to a DOM-style code as a fallback for
+/// IME-simulated key events whose physical key carries a vendor usage.
+/// Digits' logical keyId IS their US VK code (0x30..0x39); letters carry
+/// lowercase ASCII ids (0x61..0x7a).
+String? _domCodeFromLogicalKey(LogicalKeyboardKey key) {
+  final id = key.keyId;
+  if (id >= 0x30 && id <= 0x39) {
+    return id == 0x30 ? 'Digit0' : 'Digit${id - 0x30}';
+  }
+  if (id >= 0x61 && id <= 0x7a) {
+    return 'Key${String.fromCharCode(id - 0x20)}';
+  }
+  return null;
 }
 
 /// Per-key modifier byte (port of OpenNOW's `modifierFlags`).
