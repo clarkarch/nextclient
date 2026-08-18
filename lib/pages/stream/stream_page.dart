@@ -36,6 +36,7 @@ import '../../widgets/neon_card.dart';
 import '../../widgets/neon_chip.dart';
 import '../../widgets/neon_loading.dart';
 import '../../widgets/neon_snackbar.dart';
+import '../../widgets/neon_switch.dart';
 import '../../widgets/stream/queue_ad_player.dart';
 import '../../widgets/stream/session_timer.dart';
 import '../../widgets/stream/video_shader_controls.dart';
@@ -1165,15 +1166,43 @@ class _ReadySurfaceState extends State<_ReadySurface>
   final FocusNode _keyboardFocus = FocusNode();
   String _lastKeyboardText = '';
 
-  /// True once the OS keyboard inset was observed > 0 since the open flag was
-  /// set — guards the auto-close (IME dismissed by the system back) against
-  /// the transient 0 inset seen while the keyboard is still opening.
-  bool _keyboardWasUp = false;
-
-  /// Debounces the auto-close while typing (predictive IMEs momentarily reset
-  /// the inset to 0 on each committed character); 0 must persist before we
-  /// treat the keyboard as really dismissed.
+  /// The keyboard only ever closes on a deliberate action: the Android system
+  /// back button, or the user touching the non-keyboard stream UI (video tap /
+  /// Hide UI rides [_enterGameMode] which already drops it). It must NEVER
+  /// close on its own while the user is typing.
+  ///
+  /// Dismissals that never route through this widget (the OS back button /
+  /// swipe-down / tap outside while the IME is open) are detected through
+  /// [_keyboardFocus]: EditableText's `connectionClosed` unfocuses its node
+  /// the moment the platform stops the IME.
+  ///
+  /// Two guards keep typing from tripping that signal:
+  /// 1. The hidden field is keyed in the surface [Stack], so when the
+  ///    server-driven cursor overlay is inserted in front of it (the game
+  ///    shows a text caret the moment a character is typed into a chat/login
+  ///    field), index-based reconciliation does NOT recreate the field's
+  ///    element and detach its focus node.
+  /// 2. Focus loss alone never closes immediately: it is debounced and gated
+  ///    on the IME inset having actually collapsed, so a transient drop from a
+  ///    predictive IME (which resets the input connection on each committed
+  ///    character) is treated as the keyboard still being up.
   Timer? _keyboardCloseDebounce;
+  static const Duration _keyboardCloseDelay = Duration(milliseconds: 350);
+
+  /// True while a tap that dismissed the soft keyboard (the
+  /// [UserSettings.keyboardTapToDismiss] toggle) is in flight, so the
+  /// corresponding pointer-up does not forward a stray click to the game —
+  /// the tap was spent closing the IME, not clicking the stream.
+  bool _keyboardDismissTap = false;
+
+  /// When the Android back button is delivered as a key event, it lands on the
+  /// surface's [Focus.onKeyEvent] AND may also arrive as a system pop through
+  /// the navigator. `handleSystemBack` records the last handling time so the
+  /// second delivery of the same physical press is deduplicated instead of
+  /// toggling the chrome twice (show-then-hide, which looks like "back does
+  /// nothing").
+  DateTime? _lastBackHandledAt;
+  static const Duration _backDedupeWindow = Duration(milliseconds: 250);
 
   /// Live stream-settings sidebar (gamepad scale/opacity, stats, sensitivity).
   bool _streamSettingsOpen = false;
@@ -1282,6 +1311,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _keyboardFocus.addListener(_onKeyboardFocusChanged);
     _attachCursorOverlay(widget.transport);
     _physicalGamepad = PhysicalGamepad(_onPhysicalGamepadState);
     // Push the video shader filter settings to the native GPU renderer and
@@ -1302,36 +1332,65 @@ class _ReadySurfaceState extends State<_ReadySurface>
     unawaited(pushVideoShaderSettings(shader));
   }
 
-  @override
-  void didChangeMetrics() {
-    super.didChangeMetrics();
-    // The Android system back button dismisses the IME without going through
-    // the stream page. When the keyboard inset collapses while the on-screen
-    // keyboard is flagged open, drop the open flag so the Keyboard button
-    // un-glows. Only reset AFTER the inset has actually been up once — the
-    // opening transition fires metrics changes while the inset is still 0 and
-    // would otherwise kill the keyboard the moment it is summoned. The reset
-    // is also debounced because inline/predictive IMEs flicker the inset to 0
-    // while text is being committed (typing one character must not close it).
+  /// Fired on every focus change of the hidden keyboard [TextField].
+  ///
+  /// When the platform stops the IME for a focused text field (Android system
+  /// back, swipe-down, tap outside), EditableText's `connectionClosed` calls
+  /// `unfocus` on its node — focus leaving while the keyboard is flagged open
+  /// is the "the OS dismissed it behind our back" case. But focus loss is NOT
+  /// instant proof: predictive IMEs transiently reset the input connection
+  /// (and with it focus) while committing characters, so the dismissal is only
+  /// committed once the loss persists AND the IME inset has collapsed (a live
+  /// IME always occupies screen space). Any keystroke ([_onKeyboardChanged])
+  /// or recovered focus cancels the pending close. The explicit close paths
+  /// set `_keyboardOpen = false` before unfocusing, so this just no-ops there.
+  void _onKeyboardFocusChanged() {
     if (!mounted || !_keyboardOpen) return;
-    final inset = View.of(context).viewInsets.bottom;
-    if (inset > 0) {
-      _keyboardWasUp = true;
+    if (_keyboardFocus.hasFocus) {
+      // Focus came back from a transient IME drop — abort the pending close.
       _keyboardCloseDebounce?.cancel();
       _keyboardCloseDebounce = null;
       return;
     }
-    if (!_keyboardWasUp) return;
-    _keyboardCloseDebounce ??= Timer(const Duration(milliseconds: 350), () {
+    _scheduleKeyboardAutoClose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    // Some Android builds hide the IME on back/swipe-down without closing the
+    // input connection, so the focus listener above never fires and the open
+    // flag (and the stale connection) keeps the OS swallowing subsequent back
+    // presses. Watch the inset directly: a collapse while the keyboard is
+    // flagged open is a real dismissal and cleans the stale state up.
+    _scheduleKeyboardAutoClose();
+  }
+
+  /// Debounces the keyboard auto-close. Triggered by a dropped focus on the
+  /// hidden field or by the IME inset collapsing; closes only when the inset
+  /// stays gone (a live IME always occupies space). Typing
+  /// ([_onKeyboardChanged]) and recovered focus cancel it. It only clears the
+  /// keyboard state — revealing the chrome is [handleSystemBack]'s job, so a
+  /// stray auto-close never flashes the UI mid-edit.
+  void _scheduleKeyboardAutoClose() {
+    if (!mounted || !_keyboardOpen) return;
+    if (View.of(context).viewInsets.bottom > 0) {
+      _keyboardCloseDebounce?.cancel();
+      _keyboardCloseDebounce = null;
+      return;
+    }
+    _keyboardCloseDebounce ??= Timer(_keyboardCloseDelay, () {
       _keyboardCloseDebounce = null;
       if (!mounted || !_keyboardOpen) return;
+      if (View.of(context).viewInsets.bottom > 0) return;
       setState(() {
         _keyboardOpen = false;
-        _keyboardWasUp = false;
-        _keyboardFocus.unfocus();
       });
-      // Hand control back to the stream surface so physical keys keep going
-      // to the game after the IME is dismissed.
+      // Tear down the (possibly stale) input connection so the OS no longer
+      // treats a keyboard as active and swallows back presses.
+      _keyboardFocus.unfocus();
+      // Hand the hardware-keyboard focus back to the stream surface so
+      // physical keys keep reaching the game after the IME is dismissed.
       _gameFocus.requestFocus();
     });
   }
@@ -1712,11 +1771,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
         _mouseLocked = true;
         _chromeVisible = false;
         _streamSettingsOpen = false;
-        // Entering in-game mode dismisses the soft keyboard (its focus would
-        // otherwise fight the pointer-lock tap).
+        // Entering in-game mode (touching non-keyboard stream UI) dismisses
+        // the soft keyboard — its focus would otherwise fight the
+        // pointer-lock tap. The flag is cleared BEFORE the unfocus so the
+        // focus listener sees the close as already handled.
         if (_keyboardOpen) {
           _keyboardOpen = false;
-          _keyboardWasUp = false;
+          _keyboardCloseDebounce?.cancel();
+          _keyboardCloseDebounce = null;
           _keyboardFocus.unfocus();
         }
       });
@@ -1950,9 +2012,11 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _cursorCustomImage?.dispose();
     _cursorCustomImage = null;
     _cursorPos.dispose();
+    _keyboardCloseDebounce?.cancel();
+    _keyboardCloseDebounce = null;
+    _keyboardFocus.removeListener(_onKeyboardFocusChanged);
     _keyboardController.dispose();
     _keyboardFocus.dispose();
-    _keyboardCloseDebounce?.cancel();
     _physicalGamepad?.dispose();
     _gameFocus.dispose();
     widget.settings.removeListener(_onShaderSettingsChanged);
@@ -2182,14 +2246,44 @@ class _ReadySurfaceState extends State<_ReadySurface>
   }
 
   void _onVideoPointerDown(PointerDownEvent event) {
-    // Any interaction with the surface reasserts that the stream owns the
-    // hardware-keyboard focus (physical keys keep reaching the game).
-    _gameFocus.requestFocus();
+    // When the soft keyboard is up, the hidden TextField owns focus. Any
+    // _gameFocus.requestFocus() or _enterGameMode() here would yank the IME
+    // away mid-typing — that's the "typing into the game's login field closes
+    // the keyboard" bug. While the keyboard is open, a tap is forwarded to the
+    // game as-is (so the in-game field being typed into can be focused/tapped)
+    // and the focus is left alone.
+    final keyboardOpen = _keyboardOpen;
+    if (keyboardOpen && widget.settings.keyboardTapToDismiss) {
+      // Tap-to-dismiss is on: touching the stream surface closes the soft
+      // keyboard. The tap is consumed — it dismissed the IME, it did not click
+      // the game (the matching pointer-up is suppressed via [_keyboardDismissTap]).
+      _keyboardDismissTap = true;
+      _dismissKeyboard();
+      return;
+    }
+    if (!keyboardOpen) {
+      // Any interaction with the surface reasserts that the stream owns the
+      // hardware-keyboard focus (physical keys keep reaching the game).
+      _gameFocus.requestFocus();
+    }
     // Touch: leaving the UI is immediate and synchronous on the first touch.
     // Absolute mode clicks on touch (direct touch). Relative mode defers the
     // click to release and only fires it for a real tap (no drag) — sending a
     // down immediately AND an up on release produced a double-click.
     if (event.kind == PointerDeviceKind.touch) {
+      if (keyboardOpen) {
+        // Keep the IME up and stream the tap so interacting with the game's
+        // text field doesn't dismiss the keyboard.
+        if (!widget.settings.inputTouchEnabled) return;
+        _touchDownPos = event.position;
+        _touchPointerDragged = false;
+        if (_touchAbsolute) {
+          _sendAbsoluteAt(event.localPosition);
+          _pressedMouseButtons |= kPrimaryMouseButton;
+          widget.transport?.sendMouseButton(down: true, button: mouseLeft);
+        }
+        return;
+      }
       if (_chromeVisible || !_mouseLocked) {
         _enterGameMode();
         return;
@@ -2207,7 +2301,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
     if (_chromeVisible) return; // chrome consumes; tap will hide it
     // A click on the video while the UI is visible (mouse path) hides it
     // immediately too — no need to wait for the tap recognizer.
-    if (!_mouseLocked) {
+    if (!keyboardOpen && !_mouseLocked) {
       _enterGameMode();
       return;
     }
@@ -2248,6 +2342,12 @@ class _ReadySurfaceState extends State<_ReadySurface>
   }
 
   void _onVideoPointerUp(PointerUpEvent event) {
+    if (_keyboardDismissTap) {
+      // This tap closed the soft keyboard — do not forward a click to the
+      // game for it.
+      _keyboardDismissTap = false;
+      return;
+    }
     if (event.kind == PointerDeviceKind.touch) {
       final absolute = _touchAbsolute;
       final wasDragged = _touchPointerDragged;
@@ -2325,6 +2425,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _touchDownPos = null;
     _touchPointerDragged = false;
     _consumingClickForLock = false;
+    _keyboardDismissTap = false;
     // Pointer lock can inject cancel/add pairs (Windows capture, gdk grab);
     // release only the buttons we think are held so the game never sees a
     // stuck button — and no spurious ups for buttons that were never down.
@@ -2451,12 +2552,26 @@ class _ReadySurfaceState extends State<_ReadySurface>
 
   // --- Soft keyboard (mobile touch input) -----------------------------------
 
+  /// Closes the soft keyboard and hands the hardware-keyboard focus back to
+  /// the stream surface. Always resets the open flag and any pending
+  /// auto-close; used by the tap-to-dismiss path and the back button.
+  void _dismissKeyboard() {
+    if (!_keyboardOpen) return;
+    setState(() {
+      _keyboardOpen = false;
+    });
+    _keyboardCloseDebounce?.cancel();
+    _keyboardCloseDebounce = null;
+    _keyboardFocus.unfocus();
+    _gameFocus.requestFocus();
+  }
+
   void _toggleKeyboard() {
+    // A manual toggle always overrides any pending auto-close.
     _keyboardCloseDebounce?.cancel();
     _keyboardCloseDebounce = null;
     setState(() {
       _keyboardOpen = !_keyboardOpen;
-      _keyboardWasUp = false;
       if (_keyboardOpen) {
         _lastKeyboardText = '';
         _keyboardController.clear();
@@ -2473,8 +2588,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
   }
 
   void _onKeyboardChanged(String text) {
-    // Any keystroke proves the keyboard is still up — cancel any pending
-    // auto-close from a transient inset drop.
+    // Any committed character proves the IME is still up and being typed into
+    // — cancel a pending auto-close from a transient focus drop.
     _keyboardCloseDebounce?.cancel();
     _keyboardCloseDebounce = null;
     final previous = _lastKeyboardText;
@@ -2538,11 +2653,40 @@ class _ReadySurfaceState extends State<_ReadySurface>
     );
   }
 
-  /// Android system back: if the soft keyboard is open, close it; otherwise
-  /// show the stream UI (chrome). Returns true when consumed.
+  /// Android system back: if the soft keyboard is up, close it and reveal the
+  /// stream UI in the same press; otherwise toggle the chrome. Returns true
+  /// when consumed.
+  ///
+  /// A back press while the IME is open is sometimes consumed by the OS (the
+  /// focus listener clears the flag for that) and sometimes routed here (on
+  /// predictive-back builds). Testing the flag, held focus AND the visible
+  /// inset covers both, so the press always lands: it closes the keyboard AND
+  /// shows the chrome, and a stale flag can never wedge the back button.
   bool handleSystemBack() {
-    if (_keyboardOpen) {
-      _toggleKeyboard();
+    // The Android back button can be delivered twice for one press (once as a
+    // key event handled by the surface Focus, once as a system pop through the
+    // navigator). Deduplicate so the second delivery doesn't re-toggle the
+    // chrome, which would look like "back did nothing".
+    final now = DateTime.now();
+    final lastBack = _lastBackHandledAt;
+    _lastBackHandledAt = now;
+    if (lastBack != null && now.difference(lastBack) < _backDedupeWindow) {
+      return true;
+    }
+    final keyboardUp = _keyboardOpen ||
+        _keyboardFocus.hasFocus ||
+        View.of(context).viewInsets.bottom > 0;
+    if (keyboardUp) {
+      setState(() {
+        _keyboardOpen = false;
+        _chromeVisible = true;
+        _mouseLocked = false;
+        _streamSettingsOpen = false;
+      });
+      _keyboardCloseDebounce?.cancel();
+      _keyboardCloseDebounce = null;
+      _keyboardFocus.unfocus();
+      _gameFocus.requestFocus();
       return true;
     }
     if (!_chromeVisible) {
@@ -2580,6 +2724,18 @@ class _ReadySurfaceState extends State<_ReadySurface>
         autofocus: true,
         focusNode: _gameFocus,
         onKeyEvent: (node, event) {
+          // Android back (system button OR hardware KEYCODE_BACK) can arrive
+          // as a key event. Route it through handleSystemBack (chrome toggle /
+          // keyboard close) instead of forwarding it to the game — otherwise
+          // it is swallowed here and the pop the navigator also receives never
+          // shows the stream UI. The dedupe inside handleSystemBack collapses
+          // the key-event + system-pop pair into a single toggle.
+          if (event.logicalKey == LogicalKeyboardKey.goBack) {
+            if (event is KeyDownEvent && event is! KeyRepeatEvent) {
+              handleSystemBack();
+            }
+            return KeyEventResult.handled;
+          }
           // Escape: a single press is read by the game; a quick second press
           // within the double-press window shows the stream UI instead.
           if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -2623,6 +2779,13 @@ class _ReadySurfaceState extends State<_ReadySurface>
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () {
+                      // With the soft keyboard up, don't enter mouse lock —
+                      // _enterMouseLock hides the chrome AND drops the IME
+                      // (its pointer-lock tap fights the focused text field).
+                      // The pointer-down already forwarded the tap to the
+                      // game; the keyboard is closed by back or the Keyboard
+                      // button, not by tapping the surface.
+                      if (_keyboardOpen) return;
                       // Tapping the stream surface enters mouse lock whenever a
                       // grab isn't already live: the capture click (chrome
                       // visible), a re-lock after a release, or the chrome-visible
@@ -2949,8 +3112,17 @@ class _ReadySurfaceState extends State<_ReadySurface>
               // Soft keyboard (touch devices): a focusable text field lives just
               // off-screen so the Android keyboard shows, and whatever the user
               // types there is forwarded to the game. No input bar is drawn.
+              //
+              // The Positioned carries a stable key: it lives in a Stack whose
+              // earlier children (the in-game cursor overlay, stats/gamepad)
+              // are inserted/removed while the session runs. Without a key,
+              // index-based reconciliation would recreate this field's element
+              // the moment a sibling is inserted in front of it (which the game
+              // does by showing a text caret when the user types a character),
+              // detaching the FocusNode and hiding the keyboard mid-edit.
               if (_keyboardOpen)
                 Positioned(
+                  key: const ValueKey('soft-keyboard-field'),
                   left: 0,
                   right: 0,
                   top: 0,
@@ -3390,6 +3562,45 @@ class StreamSettingsSidebar extends StatelessWidget {
                               TouchInputMode.relative,
                           onTap: () =>
                               settings.inputTouchMode = TouchInputMode.relative,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                _SidebarSection(
+                  title: 'KEYBOARD',
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Tap to dismiss',
+                                style: TextStyle(
+                                  color: Neon.ink,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Tap the stream to close the keyboard '
+                                'instead of keeping it up to type',
+                                style: TextStyle(
+                                  color: Neon.inkMuted,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        NeonSwitch(
+                          value: settings.keyboardTapToDismiss,
+                          onChanged: (v) =>
+                              settings.keyboardTapToDismiss = v,
                         ),
                       ],
                     ),

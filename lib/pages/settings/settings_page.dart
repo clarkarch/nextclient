@@ -243,7 +243,9 @@ class SettingsPage extends StatelessWidget {
   }
 
   String _uiSummary() {
-    return 'Background: ${services.settings.backgroundStyle.label}';
+    final s = services.settings;
+    return 'Background: ${s.backgroundStyle.label} · '
+        'Scale: ${(s.uiScale * 100).round()}%';
   }
 
   String _perfSummary() {

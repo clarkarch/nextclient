@@ -28,6 +28,8 @@ class UiSettingsPage extends StatelessWidget {
         listenable: services.settings,
         builder: (context, _) {
           final selected = services.settings.backgroundStyle;
+          final scalePercent =
+              (services.settings.uiScale * 100).round().toDouble();
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -49,6 +51,80 @@ class UiSettingsPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
               ],
+              NeonCard(
+                padding: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(
+                            Icons.format_size,
+                            size: 20,
+                            color: Neon.inkSoft,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'UI SCALE',
+                              style: TextStyle(
+                                color: Neon.ink,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Overall app text size. Scales dialogs, labels '
+                              'and the stream chrome together; 100% is default.',
+                              style: TextStyle(
+                                color: Neon.inkMuted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            '${(scalePercent).round()}%',
+                            style: const TextStyle(
+                              color: Neon.accent,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: scalePercent,
+                        min: 75,
+                        max: 150,
+                        divisions: 15,
+                        label: '${scalePercent.round()}%',
+                        onChanged: (v) =>
+                            services.settings.uiScale = v / 100,
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _sizeProbe(0.8, 'A'),
+                          _sizeProbe(1.0, 'A'),
+                          _sizeProbe(1.5, 'A'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               NeonCard(
                 padding: EdgeInsets.zero,
                 child: Column(
@@ -104,6 +180,23 @@ class UiSettingsPage extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Small preview glyph scaled by [size] so the slider's effect is visible
+  /// without leaving the page.
+  Widget _sizeProbe(double size, String label) {
+    return SizedBox(
+      width: 26,
+      child: Text(
+        label,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: Neon.inkMuted,
+          fontSize: 14 * size,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }

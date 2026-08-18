@@ -44,6 +44,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyRendererBackend = 'settings.experimental.rendererBackend';
   static const _keyVideoShader = 'settings.videoShader';
   static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
+  static const _keyUiScale = 'settings.ui.scale';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
   // --- Experimental stream optimizations --------------------------------
@@ -64,6 +65,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyInputCursorNative = 'settings.input.cursorNative';
   static const _keyInputTouchMode = 'settings.input.touchMode';
   static const _keyInputTouchEnabled = 'settings.input.touchEnabled';
+  static const _keyKeyboardTapToDismiss = 'settings.input.keyboardTapToDismiss';
   // --- Debug diagnostics (advanced) --------------------------------------
   static const _keyDebugCursorOverlayBox = 'settings.debug.cursorOverlayBox';
 
@@ -105,6 +107,7 @@ class UserSettings extends ChangeNotifier {
   RendererBackend _rendererBackend = RendererBackend.gl;
   VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
+  double _uiScale = 1.0;
   bool _logsEnabled = true;
   bool _hideTitleBar = false;
   // --- Experimental stream optimizations (all default to the safe profile) --
@@ -123,6 +126,7 @@ class UserSettings extends ChangeNotifier {
   bool _inputCursorNative = true;
   TouchInputMode _inputTouchMode = TouchInputMode.relative;
   bool _inputTouchEnabled = false;
+  bool _keyboardTapToDismiss = false;
   bool _debugCursorOverlayBox = false;
 
   UserSettings(this._prefs) {
@@ -169,6 +173,12 @@ class UserSettings extends ChangeNotifier {
   /// grain). Applies on the GPU renderer path only (RendererBackend.gl).
   VideoShaderSettings get videoShader => _videoShader;
   BackgroundStyle get backgroundStyle => _backgroundStyle;
+
+  /// App-wide UI/text scale (0.75–1.5, 1.0 = default). Applied globally as a
+  /// [TextScaler] multiplier over the OS font scale, so dialogs, labels and
+  /// the stream chrome all grow/shrink together regardless of hardcoded sizes.
+  double get uiScale => _uiScale;
+
   bool get logsEnabled => _logsEnabled;
   bool get hideTitleBar => _hideTitleBar;
   bool get optLowLatencyMode => _optLowLatencyMode;
@@ -229,6 +239,12 @@ class UserSettings extends ChangeNotifier {
   /// entirely (they still enter the game, but never click or move the cursor),
   /// useful when playing with an external mouse/keyboard on a touch screen.
   bool get inputTouchEnabled => _inputTouchEnabled;
+
+  /// When on, tapping the stream surface while the soft keyboard is up closes
+  /// the keyboard (and consumes the tap) instead of keeping the IME open and
+  /// forwarding the tap to the game. Off keeps the keyboard up so the in-game
+  /// text field stays interactive — close it with the system back button.
+  bool get keyboardTapToDismiss => _keyboardTapToDismiss;
 
   set resolution(String v) {
     if (_resolution == v) return;
@@ -488,6 +504,14 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set uiScale(double v) {
+    final clamped = v.clamp(0.75, 1.5);
+    if (_uiScale == clamped) return;
+    _uiScale = clamped;
+    _prefs.setDouble(_keyUiScale, clamped);
+    notifyListeners();
+  }
+
   set logsEnabled(bool v) {
     if (_logsEnabled == v) return;
     _logsEnabled = v;
@@ -610,6 +634,13 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set keyboardTapToDismiss(bool v) {
+    if (_keyboardTapToDismiss == v) return;
+    _keyboardTapToDismiss = v;
+    _save(_keyKeyboardTapToDismiss, v);
+    notifyListeners();
+  }
+
   StreamSettings buildStreamSettings() {
     return StreamSettings(
       resolution: _resolution,
@@ -690,6 +721,7 @@ class UserSettings extends ChangeNotifier {
     _backgroundStyle = BackgroundStyle.values.asNameMap()[
             _prefs.getString(_keyBackgroundStyle)] ??
         _backgroundStyle;
+    _uiScale = _prefs.getDouble(_keyUiScale) ?? _uiScale;
     _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
     _hideTitleBar = _prefs.getBool(_keyHideTitleBar) ?? _hideTitleBar;
     _optLowLatencyMode =
@@ -732,8 +764,8 @@ class UserSettings extends ChangeNotifier {
         _inputTouchMode;
     _inputTouchEnabled =
         _prefs.getBool(_keyInputTouchEnabled) ?? _inputTouchEnabled;
-    _inputTouchEnabled =
-        _prefs.getBool(_keyInputTouchEnabled) ?? _inputTouchEnabled;
+    _keyboardTapToDismiss =
+        _prefs.getBool(_keyKeyboardTapToDismiss) ?? _keyboardTapToDismiss;
     _debugCursorOverlayBox =
         _prefs.getBool(_keyDebugCursorOverlayBox) ?? _debugCursorOverlayBox;
     BackgroundGlow.current.value = _backgroundStyle;
@@ -794,6 +826,7 @@ class UserSettings extends ChangeNotifier {
     _rendererBackend = RendererBackend.gl;
     _videoShader = VideoShaderSettings.defaults;
     _backgroundStyle = BackgroundStyle.beams;
+    _uiScale = 1.0;
     _logsEnabled = true;
     _hideTitleBar = false;
     _optLowLatencyMode = false;
@@ -810,6 +843,7 @@ class UserSettings extends ChangeNotifier {
     _inputCursorNative = true;
     _inputTouchMode = TouchInputMode.relative;
     _inputTouchEnabled = false;
+    _keyboardTapToDismiss = false;
     _debugCursorOverlayBox = false;
     BackgroundGlow.current.value = _backgroundStyle;
     notifyListeners();
@@ -848,6 +882,7 @@ class UserSettings extends ChangeNotifier {
     _keyRendererBackend,
     _keyVideoShader,
     _keyBackgroundStyle,
+    _keyUiScale,
     _keyLogsEnabled,
     _keyHideTitleBar,
     _keyOptLowLatency,
@@ -864,6 +899,7 @@ class UserSettings extends ChangeNotifier {
     _keyInputCursorNative,
     _keyInputTouchMode,
     _keyInputTouchEnabled,
+    _keyKeyboardTapToDismiss,
     _keyDebugCursorOverlayBox,
   ];
 }

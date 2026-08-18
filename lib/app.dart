@@ -26,6 +26,12 @@ class _DebugShellAppState extends State<DebugShellApp>
     with WidgetsBindingObserver {
   Future<AppServices>? _servicesFuture;
 
+  /// The loaded services, captured once the root [FutureBuilder] resolves so
+  /// the [MaterialApp.builder] can live-reapply the UI scale (the future alone
+  /// can't drive it — the builder only runs when the app widget itself
+  /// rebuilds, and settings changes must reach it through a listener).
+  AppServices? _services;
+
   @override
   void initState() {
     super.initState();
@@ -34,6 +40,16 @@ class _DebugShellAppState extends State<DebugShellApp>
   }
 
   void _onServicesReady(AppServices services) {
+    if (!identical(_services, services)) {
+      _services = services;
+      // Requested during build (inside the FutureBuilder builder), so the
+      // rebuild must be deferred past the current frame. Once it lands, the
+      // MaterialApp builder re-runs with _services set and the scale wrapper
+      // (ListenableBuilder on settings) takes over.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
     // Apply the persisted "Hide title bar" UI setting to the native window.
     unawaited(TitleBarController.apply(services.settings));
   }
@@ -60,6 +76,31 @@ class _DebugShellAppState extends State<DebugShellApp>
       title: 'NEXTCLIENT',
       debugShowCheckedModeBanner: false,
       theme: buildNeonTheme(),
+      // Wraps the Navigator (everything the app pushes, stream page included)
+      // with the persisted UI scale. Text scaling is composed with the OS font
+      // scale so an accessibility setting isn't clobbered. The scale applies
+      // live via the ListenableBuilder below this builder (only once services
+      // are loaded — before that the app renders unscaled).
+      builder: (context, child) {
+        final services = _services;
+        if (services == null) return child!;
+        return ListenableBuilder(
+          listenable: services.settings,
+          builder: (context, _) {
+            final scale = services.settings.uiScale;
+            if ((scale - 1.0).abs() < 0.005) return child!;
+            final mq = MediaQuery.of(context);
+            // Preserve the OS font scale (accessibility setting) and multiply
+            // it by the app scale. The built-in scalers are linear, so the
+            // scaled size at a 1.0px reference gives the exact factor.
+            final factor = mq.textScaler.scale(1.0) * scale;
+            return MediaQuery(
+              data: mq.copyWith(textScaler: TextScaler.linear(factor)),
+              child: child!,
+            );
+          },
+        );
+      },
       home: FutureBuilder<AppServices>(
         future: _servicesFuture,
         builder: (context, snapshot) {
