@@ -80,8 +80,31 @@ class VirtualGamepad extends StatefulWidget {
   /// Padding around the gamepad.
   final EdgeInsets padding;
 
-  /// Scale factor for gamepad size (1.0 = default, 0.7 = small, 1.3 = large).
+  /// Visual scale factor for the gamepad (1.0 = default, 0.7 = small,
+  /// 1.3 = large). Applied as a transform around the base layout, so changing
+  /// it resizes the controls WITHOUT moving the pad's position on screen —
+  /// position is controlled separately by the parent's placement.
   final double scale;
+
+  /// Scale factor for the gaps between the control rows (0.5–2.0, 1.0 =
+  /// default). Offsets the components relative to each other (shoulders ↔
+  /// sticks/D-pad/face ↔ menu) without resizing them.
+  final double spacing;
+
+  /// Whether the shoulder/trigger row (LT/RT/LB/RB) is shown.
+  final bool showShoulders;
+
+  /// Whether the analog sticks are shown.
+  final bool showSticks;
+
+  /// Whether the D-pad is shown.
+  final bool showDpad;
+
+  /// Whether the face buttons (A/B/X/Y) are shown.
+  final bool showFaceButtons;
+
+  /// Whether the menu buttons (Select/Start/Home) are shown.
+  final bool showMenu;
 
   const VirtualGamepad({
     super.key,
@@ -109,6 +132,12 @@ class VirtualGamepad extends StatefulWidget {
     this.onRightTriggerReleased,
     this.padding = const EdgeInsets.all(16.0),
     this.scale = 1.0,
+    this.spacing = 1.0,
+    this.showShoulders = true,
+    this.showSticks = true,
+    this.showDpad = true,
+    this.showFaceButtons = true,
+    this.showMenu = true,
   });
 
   @override
@@ -116,15 +145,17 @@ class VirtualGamepad extends StatefulWidget {
 }
 
 class _VirtualGamepadState extends State<VirtualGamepad> {
-  /// Calculate adaptive scale based on screen size.
+  /// Screen-adaptive base scale, normalized to a 400px reference. This sizes
+  /// the LAYOUT (the base box the pad occupies). The user's component-size
+  /// slider is applied separately as a transform (see [build]) so it never
+  /// changes this box — i.e. never moves the pad's position on screen.
   double get _adaptiveScale {
     final screenSize = MediaQuery.of(context).size;
     final shortestSide = screenSize.width < screenSize.height
         ? screenSize.width
         : screenSize.height;
-    // Base scale on shortest side, normalized to 400px reference.
     final baseScale = shortestSide / 400;
-    return (baseScale.clamp(0.5, 1.5) * widget.scale).clamp(0.4, 2.0);
+    return baseScale.clamp(0.5, 1.5);
   }
 
   double get _sideContainerSize => 240 * _adaptiveScale;
@@ -132,58 +163,90 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
   double get _analogStickSize => 100 * _adaptiveScale;
   double get _analogStickKnobSize => 42 * _adaptiveScale;
   double get _faceButtonSize => 48 * _adaptiveScale;
-  double get _centerSpacing => 80 * _adaptiveScale;
   double get _menuButtonSize => 40 * _adaptiveScale;
   double get _shoulderButtonWidth => 90 * _adaptiveScale;
   double get _shoulderButtonHeight => 36 * _adaptiveScale;
   double get _triggerButtonWidth => 70 * _adaptiveScale;
   double get _triggerButtonHeight => 44 * _adaptiveScale;
 
+  /// Inter-component gaps (offsets) scale with the screen AND the spacing
+  /// slider, independently of the control sizes.
+  double get _spacingScale => _adaptiveScale * widget.spacing;
+  double get _centerSpacing => 80 * _spacingScale;
+
+  /// Scales a single control around its own center. The base layout keeps the
+  /// control's position; only its visual size changes.
+  Widget _scaled(Widget child) {
+    return Transform.scale(
+      scale: widget.scale,
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // The component-size slider scales EACH control around its own center via
+    // [_scaled] — the base layout (and every control's position) stays exactly
+    // where it is, so resizing only changes the size of the controls, never
+    // their position. Transform also transforms hit tests, so a scaled-up
+    // control stays tappable over its whole visual area.
     return Padding(
       padding: widget.padding,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildShoulderButtons(),
-          SizedBox(height: 12 * _adaptiveScale),
+          if (widget.showShoulders) ...[
+            _buildShoulderButtons(),
+            SizedBox(height: 12 * _spacingScale),
+          ],
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildLeftSide(),
-              SizedBox(width: _centerSpacing),
+              if (widget.showDpad ||
+                  widget.showSticks ||
+                  widget.showFaceButtons)
+                SizedBox(width: _centerSpacing),
               _buildRightSide(),
             ],
           ),
-          SizedBox(height: 16 * _adaptiveScale),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _MenuButton(
-                label: 'SELECT',
-                size: _menuButtonSize,
-                onPressed: widget.onSelectPressed,
-                onReleased: widget.onSelectReleased,
-              ),
-              SizedBox(width: 16 * _adaptiveScale),
-              _MenuButton(
-                label: 'START',
-                size: _menuButtonSize,
-                onPressed: widget.onStartPressed,
-                onReleased: widget.onStartReleased,
-              ),
-              SizedBox(width: 16 * _adaptiveScale),
-              _MenuButton(
-                icon: Icons.home_rounded,
-                size: _menuButtonSize * 0.9,
-                onPressed: widget.onHomePressed,
-                onReleased: widget.onHomeReleased,
-                isHome: true,
-              ),
-            ],
-          ),
+          if (widget.showMenu) ...[
+            SizedBox(height: 16 * _spacingScale),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _scaled(
+                  _MenuButton(
+                    label: 'SELECT',
+                    size: _menuButtonSize,
+                    onPressed: widget.onSelectPressed,
+                    onReleased: widget.onSelectReleased,
+                  ),
+                ),
+                SizedBox(width: 16 * _spacingScale),
+                _scaled(
+                  _MenuButton(
+                    label: 'START',
+                    size: _menuButtonSize,
+                    onPressed: widget.onStartPressed,
+                    onReleased: widget.onStartReleased,
+                  ),
+                ),
+                SizedBox(width: 16 * _spacingScale),
+                _scaled(
+                  _MenuButton(
+                    icon: Icons.home_rounded,
+                    size: _menuButtonSize * 0.9,
+                    onPressed: widget.onHomePressed,
+                    onReleased: widget.onHomeReleased,
+                    isHome: true,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -196,37 +259,45 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            _TriggerButton(
-              width: _triggerButtonWidth,
-              height: _triggerButtonHeight,
-              onPressed: widget.onLeftTriggerPressed,
-              onReleased: widget.onLeftTriggerReleased,
+            _scaled(
+              _TriggerButton(
+                width: _triggerButtonWidth,
+                height: _triggerButtonHeight,
+                onPressed: widget.onLeftTriggerPressed,
+                onReleased: widget.onLeftTriggerReleased,
+              ),
             ),
-            _TriggerButton(
-              width: _triggerButtonWidth,
-              height: _triggerButtonHeight,
-              onPressed: widget.onRightTriggerPressed,
-              onReleased: widget.onRightTriggerReleased,
+            _scaled(
+              _TriggerButton(
+                width: _triggerButtonWidth,
+                height: _triggerButtonHeight,
+                onPressed: widget.onRightTriggerPressed,
+                onReleased: widget.onRightTriggerReleased,
+              ),
             ),
           ],
         ),
-        SizedBox(height: 8 * _adaptiveScale),
+        SizedBox(height: 8 * _spacingScale),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            _ShoulderButton(
-              label: 'LB',
-              width: _shoulderButtonWidth,
-              height: _shoulderButtonHeight,
-              onPressed: widget.onLeftBumperPressed,
-              onReleased: widget.onLeftBumperReleased,
+            _scaled(
+              _ShoulderButton(
+                label: 'LB',
+                width: _shoulderButtonWidth,
+                height: _shoulderButtonHeight,
+                onPressed: widget.onLeftBumperPressed,
+                onReleased: widget.onLeftBumperReleased,
+              ),
             ),
-            _ShoulderButton(
-              label: 'RB',
-              width: _shoulderButtonWidth,
-              height: _shoulderButtonHeight,
-              onPressed: widget.onRightBumperPressed,
-              onReleased: widget.onRightBumperReleased,
+            _scaled(
+              _ShoulderButton(
+                label: 'RB',
+                width: _shoulderButtonWidth,
+                height: _shoulderButtonHeight,
+                onPressed: widget.onRightBumperPressed,
+                onReleased: widget.onRightBumperReleased,
+              ),
             ),
           ],
         ),
@@ -235,61 +306,79 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
   }
 
   Widget _buildLeftSide() {
+    if (!widget.showDpad && !widget.showSticks) return const SizedBox.shrink();
     return Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: _sideContainerSize,
-            height: _sideContainerSize,
-            child: Center(
-              child: DPadWidget(
-                size: _dpadSize,
-                glowColor: Neon.violet,
-                onDirectionPressed: widget.onDpadPressed,
-                onDirectionReleased: widget.onDpadReleased,
+          if (widget.showDpad)
+            SizedBox(
+              width: _sideContainerSize,
+              height: _sideContainerSize,
+              child: Center(
+                child: _scaled(
+                  DPadWidget(
+                    size: _dpadSize,
+                    glowColor: Neon.violet,
+                    onDirectionPressed: widget.onDpadPressed,
+                    onDirectionReleased: widget.onDpadReleased,
+                  ),
+                ),
               ),
             ),
-          ),
-          SizedBox(height: 16 * _adaptiveScale),
-          AnalogStick(
-            size: _analogStickSize,
-            knobSize: _analogStickKnobSize,
-            glowColor: Neon.accent,
-            onDrag: widget.onLeftStickDrag,
-            onDragEnd: widget.onLeftStickDragEnd,
-          ),
+          if (widget.showDpad && widget.showSticks)
+            SizedBox(height: 16 * _spacingScale),
+          if (widget.showSticks)
+            _scaled(
+              AnalogStick(
+                size: _analogStickSize,
+                knobSize: _analogStickKnobSize,
+                glowColor: Neon.accent,
+                onDrag: widget.onLeftStickDrag,
+                onDragEnd: widget.onLeftStickDragEnd,
+              ),
+            ),
         ],
       ),
     );
   }
 
   Widget _buildRightSide() {
+    if (!widget.showFaceButtons && !widget.showSticks) {
+      return const SizedBox.shrink();
+    }
     return Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          SizedBox(
-            width: _sideContainerSize,
-            height: _sideContainerSize,
-            child: Center(
-              child: FaceButtons(
-                buttonSize: _faceButtonSize,
-                onButtonPressed: widget.onFaceButtonPressed,
-                onButtonReleased: widget.onFaceButtonReleased,
+          if (widget.showFaceButtons)
+            SizedBox(
+              width: _sideContainerSize,
+              height: _sideContainerSize,
+              child: Center(
+                child: _scaled(
+                  FaceButtons(
+                    buttonSize: _faceButtonSize,
+                    onButtonPressed: widget.onFaceButtonPressed,
+                    onButtonReleased: widget.onFaceButtonReleased,
+                  ),
+                ),
               ),
             ),
-          ),
-          SizedBox(height: 16 * _adaptiveScale),
-          AnalogStick(
-            size: _analogStickSize,
-            knobSize: _analogStickKnobSize,
-            glowColor: Neon.violet,
-            onDrag: widget.onRightStickDrag,
-            onDragEnd: widget.onRightStickDragEnd,
-          ),
+          if (widget.showFaceButtons && widget.showSticks)
+            SizedBox(height: 16 * _spacingScale),
+          if (widget.showSticks)
+            _scaled(
+              AnalogStick(
+                size: _analogStickSize,
+                knobSize: _analogStickKnobSize,
+                glowColor: Neon.violet,
+                onDrag: widget.onRightStickDrag,
+                onDragEnd: widget.onRightStickDragEnd,
+              ),
+            ),
         ],
       ),
     );

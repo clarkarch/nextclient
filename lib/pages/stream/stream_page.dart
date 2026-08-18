@@ -191,7 +191,9 @@ class _StreamPageState extends State<StreamPage> {
       line(
         'gamepad',
         s.streamGamepad
-            ? 'on ${s.streamGamepadScale.toStringAsFixed(1)}x'
+            ? 'on ${s.streamGamepadScale.toStringAsFixed(1)}x '
+                'off=${s.streamGamepadSpacing.toStringAsFixed(1)}x '
+                'vpos=${s.streamGamepadPosition.toStringAsFixed(1)}'
             : 'off',
       ),
       line(
@@ -2967,9 +2969,10 @@ class _ReadySurfaceState extends State<_ReadySurface>
                 Positioned(
                   left: 0,
                   right: 0,
-                  // Always anchored to the bottom: showing/hiding the stream UI
-                  // never shifts the pad. The chrome paints and hit-tests on top.
-                  bottom: 0,
+                  // Anchored to the bottom with the user's position lift, so
+                  // the pad can float above the bottom edge without resizing.
+                  // The chrome paints and hit-tests on top.
+                  bottom: widget.settings.streamGamepadPosition * 240,
                   child: GestureDetector(
                     behavior: HitTestBehavior.deferToChild,
                     onTap: () {},
@@ -2985,6 +2988,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
                           ),
                           child: VirtualGamepad(
                             scale: widget.settings.streamGamepadScale,
+                            spacing: widget.settings.streamGamepadSpacing,
+                            showShoulders:
+                                widget.settings.streamGamepadShowShoulders,
+                            showSticks: widget.settings.streamGamepadShowSticks,
+                            showDpad: widget.settings.streamGamepadShowDpad,
+                            showFaceButtons:
+                                widget.settings.streamGamepadShowFaceButtons,
+                            showMenu: widget.settings.streamGamepadShowMenu,
                             onLeftStickDrag: _onLeftStickDrag,
                             onLeftStickDragEnd: () {
                               _gamepadFlushTimer?.cancel();
@@ -3500,7 +3511,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                   title: 'GAMEPAD',
                   children: [
                     _SliderRow(
-                      label: 'Scale',
+                      label: 'Component size',
                       valueLabel:
                           '${(settings.streamGamepadScale * 100).round()}%',
                       value: settings.streamGamepadScale,
@@ -3508,6 +3519,28 @@ class StreamSettingsSidebar extends StatelessWidget {
                       max: 1.4,
                       divisions: 16,
                       onChanged: (v) => settings.streamGamepadScale = v,
+                    ),
+                    const SizedBox(height: 14),
+                    _SliderRow(
+                      label: 'Component offset',
+                      valueLabel:
+                          '${(settings.streamGamepadSpacing * 100).round()}%',
+                      value: settings.streamGamepadSpacing,
+                      min: 0.5,
+                      max: 2.0,
+                      divisions: 30,
+                      onChanged: (v) => settings.streamGamepadSpacing = v,
+                    ),
+                    const SizedBox(height: 14),
+                    _SliderRow(
+                      label: 'Vertical position',
+                      valueLabel:
+                          '${(settings.streamGamepadPosition * 100).round()}%',
+                      value: settings.streamGamepadPosition,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 20,
+                      onChanged: (v) => settings.streamGamepadPosition = v,
                     ),
                     const SizedBox(height: 14),
                     _SliderRow(
@@ -3519,6 +3552,38 @@ class StreamSettingsSidebar extends StatelessWidget {
                       max: 1.0,
                       divisions: 16,
                       onChanged: (v) => settings.streamGamepadOpacity = v,
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Elements',
+                      style: TextStyle(color: Neon.inkSoft, fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    _ToggleRow(
+                      label: 'Shoulders (LB/RB/LT/RT)',
+                      value: settings.streamGamepadShowShoulders,
+                      onChanged: (v) => settings.streamGamepadShowShoulders = v,
+                    ),
+                    _ToggleRow(
+                      label: 'Analog sticks',
+                      value: settings.streamGamepadShowSticks,
+                      onChanged: (v) => settings.streamGamepadShowSticks = v,
+                    ),
+                    _ToggleRow(
+                      label: 'D-pad',
+                      value: settings.streamGamepadShowDpad,
+                      onChanged: (v) => settings.streamGamepadShowDpad = v,
+                    ),
+                    _ToggleRow(
+                      label: 'Face buttons (A/B/X/Y)',
+                      value: settings.streamGamepadShowFaceButtons,
+                      onChanged: (v) =>
+                          settings.streamGamepadShowFaceButtons = v,
+                    ),
+                    _ToggleRow(
+                      label: 'Menu (Select/Start/Home)',
+                      value: settings.streamGamepadShowMenu,
+                      onChanged: (v) => settings.streamGamepadShowMenu = v,
                     ),
                   ],
                 ),
@@ -3724,6 +3789,38 @@ class _ModeButton extends StatelessWidget {
   }
 }
 
+/// Compact label + switch row used in the stream-settings sidebar.
+class _ToggleRow extends StatelessWidget {
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _ToggleRow({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(color: Neon.ink, fontSize: 13),
+            ),
+          ),
+          const SizedBox(width: 12),
+          NeonSwitch(value: value, onChanged: onChanged),
+        ],
+      ),
+    );
+  }
+}
+
 class _SliderRow extends StatelessWidget {
   final String label;
   final String valueLabel;
@@ -3733,8 +3830,7 @@ class _SliderRow extends StatelessWidget {
   final int? divisions;
   final ValueChanged<double> onChanged;
 
-  const _SliderRow({
-    required this.label,
+  const _SliderRow({    required this.label,
     required this.valueLabel,
     required this.value,
     required this.min,

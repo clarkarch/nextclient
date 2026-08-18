@@ -26,7 +26,16 @@ class UserSettings extends ChangeNotifier {
   static const _keyAdvancedMode = 'settings.advancedMode';
   static const _keyStreamGamepad = 'settings.stream.gamepad';
   static const _keyStreamGamepadScale = 'settings.stream.gamepadScale';
+  static const _keyStreamGamepadSpacing = 'settings.stream.gamepadSpacing';
+  static const _keyStreamGamepadPosition = 'settings.stream.gamepadPosition';
   static const _keyStreamGamepadOpacity = 'settings.stream.gamepadOpacity';
+  static const _keyStreamGamepadShowShoulders =
+      'settings.stream.gamepadShowShoulders';
+  static const _keyStreamGamepadShowSticks = 'settings.stream.gamepadShowSticks';
+  static const _keyStreamGamepadShowDpad = 'settings.stream.gamepadShowDpad';
+  static const _keyStreamGamepadShowFaceButtons =
+      'settings.stream.gamepadShowFaceButtons';
+  static const _keyStreamGamepadShowMenu = 'settings.stream.gamepadShowMenu';
   static const _keyStreamShowFps = 'settings.stream.showFps';
   static const _keyWebrtcIceTransport = 'settings.webrtc.iceTransport';
   static const _keyWebrtcIcePoolSize = 'settings.webrtc.icePoolSize';
@@ -90,7 +99,14 @@ class UserSettings extends ChangeNotifier {
   bool _advancedMode = false;
   bool _streamGamepad = false;
   double _streamGamepadScale = 1.0;
+  double _streamGamepadSpacing = 1.0;
+  double _streamGamepadPosition = 0.0;
   double _streamGamepadOpacity = 1.0;
+  bool _streamGamepadShowShoulders = true;
+  bool _streamGamepadShowSticks = true;
+  bool _streamGamepadShowDpad = true;
+  bool _streamGamepadShowFaceButtons = true;
+  bool _streamGamepadShowMenu = true;
   bool _streamShowFps = false;
   WebrtcIceTransportPolicy _webrtcIceTransport = WebrtcIceTransportPolicy.all;
   int _webrtcIcePoolSize = 4;
@@ -108,7 +124,7 @@ class UserSettings extends ChangeNotifier {
   VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
   double _uiScale = 1.0;
-  bool _logsEnabled = true;
+  bool _logsEnabled = false;
   bool _hideTitleBar = false;
   // --- Experimental stream optimizations (all default to the safe profile) --
   bool _optLowLatencyMode = false;
@@ -148,6 +164,32 @@ class UserSettings extends ChangeNotifier {
   bool get advancedMode => _advancedMode;
   bool get streamGamepad => _streamGamepad;
   double get streamGamepadScale => _streamGamepadScale;
+
+  /// Gamepad component spacing (0.5–2.0, 1.0 = default): multiplies the gaps
+  /// between the control rows (shoulders ↔ sticks/D-pad/face ↔ menu) so the
+  /// components offset relative to each other without resizing. Independent of
+  /// [streamGamepadScale] (sizes) and [streamGamepadPosition] (vertical lift).
+  double get streamGamepadSpacing => _streamGamepadSpacing;
+
+  /// Gamepad vertical position (0.0–1.0, 0.0 = sitting at the bottom edge):
+  /// lifts the whole pad up from the bottom of the screen without resizing it.
+  /// Independent of [streamGamepadScale], which sizes the components.
+  double get streamGamepadPosition => _streamGamepadPosition;
+
+  /// Whether the shoulder/trigger row (LT/RT/LB/RB) is shown on the gamepad.
+  bool get streamGamepadShowShoulders => _streamGamepadShowShoulders;
+
+  /// Whether the analog sticks are shown on the gamepad.
+  bool get streamGamepadShowSticks => _streamGamepadShowSticks;
+
+  /// Whether the D-pad is shown on the gamepad.
+  bool get streamGamepadShowDpad => _streamGamepadShowDpad;
+
+  /// Whether the face buttons (A/B/X/Y) are shown on the gamepad.
+  bool get streamGamepadShowFaceButtons => _streamGamepadShowFaceButtons;
+
+  /// Whether the menu buttons (Select/Start/Home) are shown on the gamepad.
+  bool get streamGamepadShowMenu => _streamGamepadShowMenu;
 
   /// Gamepad overlay opacity (0.2–1.0, 1.0 = fully opaque). Tweaked live
   /// from the stream settings sidebar so the pad can sit semi-transparent
@@ -356,6 +398,57 @@ class UserSettings extends ChangeNotifier {
     if (_streamGamepadScale == clamped) return;
     _streamGamepadScale = clamped;
     _prefs.setDouble(_keyStreamGamepadScale, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadSpacing(double v) {
+    final clamped = v.clamp(0.5, 2.0);
+    if (_streamGamepadSpacing == clamped) return;
+    _streamGamepadSpacing = clamped;
+    _prefs.setDouble(_keyStreamGamepadSpacing, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadPosition(double v) {
+    final clamped = v.clamp(0.0, 1.0);
+    if (_streamGamepadPosition == clamped) return;
+    _streamGamepadPosition = clamped;
+    _prefs.setDouble(_keyStreamGamepadPosition, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadShowShoulders(bool v) {
+    if (_streamGamepadShowShoulders == v) return;
+    _streamGamepadShowShoulders = v;
+    _save(_keyStreamGamepadShowShoulders, v);
+    notifyListeners();
+  }
+
+  set streamGamepadShowSticks(bool v) {
+    if (_streamGamepadShowSticks == v) return;
+    _streamGamepadShowSticks = v;
+    _save(_keyStreamGamepadShowSticks, v);
+    notifyListeners();
+  }
+
+  set streamGamepadShowDpad(bool v) {
+    if (_streamGamepadShowDpad == v) return;
+    _streamGamepadShowDpad = v;
+    _save(_keyStreamGamepadShowDpad, v);
+    notifyListeners();
+  }
+
+  set streamGamepadShowFaceButtons(bool v) {
+    if (_streamGamepadShowFaceButtons == v) return;
+    _streamGamepadShowFaceButtons = v;
+    _save(_keyStreamGamepadShowFaceButtons, v);
+    notifyListeners();
+  }
+
+  set streamGamepadShowMenu(bool v) {
+    if (_streamGamepadShowMenu == v) return;
+    _streamGamepadShowMenu = v;
+    _save(_keyStreamGamepadShowMenu, v);
     notifyListeners();
   }
 
@@ -682,8 +775,24 @@ class UserSettings extends ChangeNotifier {
     _streamGamepad = _prefs.getBool(_keyStreamGamepad) ?? _streamGamepad;
     _streamGamepadScale =
         _prefs.getDouble(_keyStreamGamepadScale) ?? _streamGamepadScale;
+    _streamGamepadSpacing =
+        _prefs.getDouble(_keyStreamGamepadSpacing) ?? _streamGamepadSpacing;
+    _streamGamepadPosition =
+        _prefs.getDouble(_keyStreamGamepadPosition) ?? _streamGamepadPosition;
     _streamGamepadOpacity =
         _prefs.getDouble(_keyStreamGamepadOpacity) ?? _streamGamepadOpacity;
+    _streamGamepadShowShoulders =
+        _prefs.getBool(_keyStreamGamepadShowShoulders) ??
+            _streamGamepadShowShoulders;
+    _streamGamepadShowSticks =
+        _prefs.getBool(_keyStreamGamepadShowSticks) ?? _streamGamepadShowSticks;
+    _streamGamepadShowDpad =
+        _prefs.getBool(_keyStreamGamepadShowDpad) ?? _streamGamepadShowDpad;
+    _streamGamepadShowFaceButtons =
+        _prefs.getBool(_keyStreamGamepadShowFaceButtons) ??
+            _streamGamepadShowFaceButtons;
+    _streamGamepadShowMenu =
+        _prefs.getBool(_keyStreamGamepadShowMenu) ?? _streamGamepadShowMenu;
     _streamShowFps = _prefs.getBool(_keyStreamShowFps) ?? _streamShowFps;
     _webrtcIceTransport = WebrtcIceTransportPolicy
             .values.asNameMap()[_prefs.getString(_keyWebrtcIceTransport)] ??
@@ -809,7 +918,14 @@ class UserSettings extends ChangeNotifier {
     _advancedMode = false;
     _streamGamepad = false;
     _streamGamepadScale = 1.0;
+    _streamGamepadSpacing = 1.0;
+    _streamGamepadPosition = 0.0;
     _streamGamepadOpacity = 1.0;
+    _streamGamepadShowShoulders = true;
+    _streamGamepadShowSticks = true;
+    _streamGamepadShowDpad = true;
+    _streamGamepadShowFaceButtons = true;
+    _streamGamepadShowMenu = true;
     _streamShowFps = false;
     _webrtcIceTransport = WebrtcIceTransportPolicy.all;
     _webrtcIcePoolSize = 4;
@@ -827,7 +943,7 @@ class UserSettings extends ChangeNotifier {
     _videoShader = VideoShaderSettings.defaults;
     _backgroundStyle = BackgroundStyle.beams;
     _uiScale = 1.0;
-    _logsEnabled = true;
+    _logsEnabled = false;
     _hideTitleBar = false;
     _optLowLatencyMode = false;
     _optRecoveryProfile = StreamRecoveryProfile.smooth;
@@ -865,7 +981,14 @@ class UserSettings extends ChangeNotifier {
     _keyAdvancedMode,
     _keyStreamGamepad,
     _keyStreamGamepadScale,
+    _keyStreamGamepadSpacing,
+    _keyStreamGamepadPosition,
     _keyStreamGamepadOpacity,
+    _keyStreamGamepadShowShoulders,
+    _keyStreamGamepadShowSticks,
+    _keyStreamGamepadShowDpad,
+    _keyStreamGamepadShowFaceButtons,
+    _keyStreamGamepadShowMenu,
     _keyStreamShowFps,
     _keyWebrtcIceTransport,
     _keyWebrtcIcePoolSize,
