@@ -101,7 +101,8 @@ public class FlutterRTCVideoRenderer implements EventChannel.StreamHandler {
     EventChannel.EventSink eventSink;
 
     public FlutterRTCVideoRenderer(TextureRegistry.SurfaceProducer producer) {
-        this.surfaceTextureRenderer = new SurfaceTextureRenderer("");
+        this.surfaceTextureRenderer = new SurfaceTextureRenderer("",
+            new ShaderVideoFrameDrawer());
         listenRendererEvents();
         surfaceTextureRenderer.init(EglUtils.getRootEglBaseContext(), rendererEvents);
         surfaceTextureRenderer.surfaceCreated(producer);

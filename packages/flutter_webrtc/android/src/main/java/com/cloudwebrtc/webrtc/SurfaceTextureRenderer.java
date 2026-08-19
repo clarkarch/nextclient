@@ -9,6 +9,7 @@ import org.webrtc.GlRectDrawer;
 import org.webrtc.RendererCommon;
 import org.webrtc.ThreadUtils;
 import org.webrtc.VideoFrame;
+import org.webrtc.VideoFrameDrawer;
 
 import java.util.concurrent.CountDownLatch;
 
@@ -39,9 +40,16 @@ public class SurfaceTextureRenderer extends EglRenderer {
     super(name);
   }
 
+  public SurfaceTextureRenderer(String name, VideoFrameDrawer frameDrawer) {
+    super(name, frameDrawer);
+  }
+
   public void init(final EglBase.Context sharedContext,
                    RendererCommon.RendererEvents rendererEvents) {
-    init(sharedContext, rendererEvents, EglBase.CONFIG_PLAIN, new GlRectDrawer());
+    // Use default GlRectDrawer — shader post-processing is handled by
+    // ShaderVideoFrameDrawer at the VideoFrameDrawer level.
+    init(sharedContext, rendererEvents, EglBase.CONFIG_PLAIN,
+         new GlRectDrawer());
   }
 
   /**

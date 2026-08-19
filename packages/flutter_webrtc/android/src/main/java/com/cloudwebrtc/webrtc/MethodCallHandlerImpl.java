@@ -1079,6 +1079,35 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
         rtpTransceiverSetCodecPreferences(peerConnectionId, transceiverId, codecs, result);
         break;
       }
+      case "setVideoShaderSettings": {
+        // Video shader filter settings for the GPU post-processing pipeline.
+        // Stored in a static holder so ShaderFilterDrawer reads them on the
+        // render thread without a method-channel round-trip per frame.
+        Boolean enabled = call.argument("enabled");
+        Number sharpenVal = call.argument("sharpen");
+        Boolean sharpenAdaptive = call.argument("sharpenAdaptive");
+        Number saturation = call.argument("saturation");
+        Number contrast = call.argument("contrast");
+        Number brightness = call.argument("brightness");
+        Number vibrance = call.argument("vibrance");
+        Number filmGrain = call.argument("filmGrain");
+        boolean e = enabled != null && enabled;
+        int sh = sharpenVal != null ? sharpenVal.intValue() : 0;
+        boolean sa = sharpenAdaptive == null || sharpenAdaptive;
+        int sat = saturation != null ? saturation.intValue() : 100;
+        int con = contrast != null ? contrast.intValue() : 100;
+        int bri = brightness != null ? brightness.intValue() : 100;
+        int vib = vibrance != null ? vibrance.intValue() : 0;
+        int gra = filmGrain != null ? filmGrain.intValue() : 0;
+        VideoShaderState.set(e, sh, sa, sat, con, bri, vib, gra);
+        Log.i(TAG, "setVideoShaderSettings: enabled=" + e
+                + " sharpen=" + sh + " adaptive=" + sa
+                + " sat=" + sat + " contrast=" + con
+                + " brightness=" + bri + " vibrance=" + vib
+                + " grain=" + gra);
+        result.success(null);
+        break;
+      }
       case "getSignalingState": {
         String peerConnectionId = call.argument("peerConnectionId");
         PeerConnection pc = getPeerConnection(peerConnectionId);

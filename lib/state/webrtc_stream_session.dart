@@ -26,7 +26,6 @@ import 'video_shader_settings.dart';
 /// re-applies the filter live. Safe to call before or during a stream, and
 /// never fails the stream (advisory).
 Future<void> pushVideoShaderSettings(VideoShaderSettings settings) async {
-  if (!Platform.isLinux && !Platform.isWindows) return;
   try {
     await const MethodChannel('FlutterWebRTC.Method').invokeMethod(
       'setVideoShaderSettings',

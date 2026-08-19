@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:io' show Platform;
 
 import '../../state/stream_transport.dart' show StreamTransportKind;
 import '../../state/user_settings.dart';
@@ -60,9 +61,11 @@ class VideoShaderControls extends StatelessWidget {
   const VideoShaderControls({super.key, required this.settings});
 
   /// Whether the native GPU renderer (the only path the shader pipeline runs
-  /// on) is selected for the next session.
+  /// on) is selected for the next session. On Android the shader filter is
+  /// always available via the ShaderFilterDrawer wrapper.
   bool get _available =>
-      settings.rendererBackend == RendererBackend.gl &&
+      (Platform.isAndroid ||
+          settings.rendererBackend == RendererBackend.gl) &&
       settings.streamTransport == StreamTransportKind.flutterWebrtc;
 
   @override
