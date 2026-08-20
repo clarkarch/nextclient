@@ -42,6 +42,18 @@ import '../../widgets/stream/queue_ad_player.dart';
 import '../../widgets/stream/session_timer.dart';
 import '../../widgets/stream/video_shader_controls.dart';
 
+/// Android max-performance window hints (sustained perf + keepScreenOn + 60Hz
+/// preferredDisplayMode). No-op on other platforms / when the channel is absent.
+const MethodChannel _androidPerfChannel = MethodChannel('next_client/perf');
+Future<void> _applyAndroidMaxPerformance(bool enabled) async {
+  if (kIsWeb || !Platform.isAndroid) return;
+  try {
+    await _androidPerfChannel.invokeMethod('setMaxPerformance', {'enabled': enabled});
+  } catch (_) {
+    // Channel absent on old installs — ignore, streaming still works.
+  }
+}
+
 /// Full-screen streaming surface. Drives the [SessionController] lifecycle
 /// (requesting → queued → allocating → ready) then shows the session-ready
 /// state. No video render yet (gfn_core v0.01). With [resumeClaim], an
@@ -117,6 +129,11 @@ class _StreamPageState extends State<StreamPage> {
 
   void _startUiFpsTracking() {
     if (_uiFpsActive) return;
+    // Max-performance: skip the per-frame post-frame callback chain entirely.
+    // It re-schedules every vsync and adds dart overhead while in-game;
+    // the exit report will simply omit the UI-fps row, which is preferable to
+    // burning frames for telemetry.
+    if (widget.services.settings.maxPerformanceMode) return;
     _uiFpsActive = true;
     _uiFrames = 0;
     _uiWindowStart = null;
@@ -125,6 +142,10 @@ class _StreamPageState extends State<StreamPage> {
 
   void _onUiFrame(Duration elapsed) {
     if (!_uiFpsActive) return;
+    if (widget.services.settings.maxPerformanceMode) {
+      _uiFpsActive = false;
+      return;
+    }
     _uiFrames++;
     final start = _uiWindowStart;
     if (start == null) {
@@ -1337,18 +1358,35 @@ class _ReadySurfaceState extends State<_ReadySurface>
     // keep it in sync while this surface is live, so sidebar slider changes
     // apply to the running stream without re-connecting (the GL/D3D post pass
     // reads the process-wide state on every composite).
-    _lastPushedShader = widget.settings.videoShader;
+    _lastPushedShader = widget.settings.effectiveVideoShader;
     widget.settings.addListener(_onShaderSettingsChanged);
-    unawaited(pushVideoShaderSettings(widget.settings.videoShader));
+    widget.settings.addListener(_onPerformanceModeChanged);
+    unawaited(pushVideoShaderSettings(widget.settings.effectiveVideoShader));
+    // Android window hints (keepScreenOn + sustained perf + 60Hz) are
+    // zero-downside during streaming and now apply unconditionally — max-
+    // performance keeps them too, but even without the toggle a streaming
+    // session benefits from stable 60Hz vs 90/120Hz bouncing.
+    unawaited(_applyAndroidMaxPerformance(true));
   }
 
   /// Forwards shader filter changes to the native renderer (deduped on the
   /// settings object — unrelated settings changes skip the method call).
   void _onShaderSettingsChanged() {
-    final shader = widget.settings.videoShader;
+    final shader = widget.settings.effectiveVideoShader;
     if (shader == _lastPushedShader) return;
     _lastPushedShader = shader;
     unawaited(pushVideoShaderSettings(shader));
+  }
+
+  void _onPerformanceModeChanged() {
+    // Re-push the effective shader (max-perf forces it off) so the EGL FBO is
+    // torn down without needing a reconnect. Android window hints are now
+    // baseline during streaming (see initState), not gated by this toggle.
+    final effective = widget.settings.effectiveVideoShader;
+    if (effective != _lastPushedShader) {
+      _lastPushedShader = effective;
+      unawaited(pushVideoShaderSettings(effective));
+    }
   }
 
   /// Fired on every focus change of the hidden keyboard [TextField].
@@ -1831,9 +1869,9 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _applyMobileSystemUi(false);
   }
 
-  /// Fullscreen button: entering enters in-game mode (pointer lock + OS
-  /// fullscreen on desktop, immersive system bars on mobile); while already
-  /// fullscreen it exits back to the window / system bars.
+  /// Fullscreen button: explicitly toggles OS fullscreen (desktop) / immersive
+  /// bars (mobile) + pointer capture. Mouse capture alone (clicking the video)
+  /// no longer triggers fullscreen — this button is the only fullscreen path.
   void _toggleFullscreen() {
     if (_osFullscreen || _mobileImmersive) {
       setState(() {
@@ -1843,7 +1881,28 @@ class _ReadySurfaceState extends State<_ReadySurface>
       _exitMouseLock();
       return;
     }
-    _enterMouseLock();
+    unawaited(_enterFullscreen());
+  }
+
+  Future<void> _enterFullscreen() async {
+    // Desktop: real OS fullscreen for direct scanout (saves a compositor pass).
+    if (!kIsWeb &&
+        (Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
+      _osFullscreen = true;
+      try {
+        await windowManager.setFullScreen(true);
+      } catch (_) {
+        _osFullscreen = false;
+      }
+      if (_osFullscreen) {
+        try {
+          await windowManager.focus();
+        } catch (_) {}
+      }
+      if (!mounted) return;
+    }
+    // Then capture mouse like a normal click.
+    await _enterMouseLock();
   }
 
   /// Same as [_enterGameMode] but for the soft-keyboard button: the chrome
@@ -1877,41 +1936,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
               Platform.isWindows));
 
   Future<void> _enterMouseLock() async {
-    // Allow re-entry whenever the UI is showing (the "fullscreen once" bug:
-    // leaving game via the back button leaves _mouseLocked stale, which would
-    // otherwise make the next Fullscreen press a no-op).
+    // Capture mouse only — no OS fullscreen. Fullscreen is now explicit via
+    // the Fullscreen button / _enterFullscreen().
     if (_grabAlreadyEngaged) return;
     // Wait for any pending unlock to land before creating a new session, so
     // its native unlock doesn't tear down the lock we're about to acquire.
     final pending = _pendingUnlock;
     _pendingUnlock = null;
     if (pending != null) await pending;
-    if (!mounted) return;
-    if (_grabAlreadyEngaged) return;
-    // Real OS fullscreen alongside the in-game mode: the compositor stops
-    // re-compositing the windowed surface (direct scanout), which is a
-    // full-screen pass saved per frame on iGPUs. No-op on mobile/web and when
-    // the platform plugin has no implementation. The flag is set BEFORE the
-    // await so a dispose during the in-flight transition (user exits the
-    // stream) still runs _leaveOsFullscreen and restores the window.
-    if (!kIsWeb &&
-        (Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
-      _osFullscreen = true;
-      try {
-        await windowManager.setFullScreen(true);
-      } catch (_) {
-        _osFullscreen = false;
-      }
-      // Best-effort: some Wayland compositors drop keyboard focus during the
-      // fullscreen transition; re-grab it so Esc keeps reaching the app.
-      // Deliberately outside the state transition — a failure here must not
-      // mark the window as non-fullscreen.
-      if (_osFullscreen) {
-        try {
-          await windowManager.focus();
-        } catch (_) {}
-      }
-    }
     if (!mounted) return;
     if (_grabAlreadyEngaged) return;
     _enterGameMode();
@@ -2072,9 +2104,13 @@ class _ReadySurfaceState extends State<_ReadySurface>
     DesktopGamepad.instance.stop();
     _gameFocus.dispose();
     widget.settings.removeListener(_onShaderSettingsChanged);
+    widget.settings.removeListener(_onPerformanceModeChanged);
     WidgetsBinding.instance.removeObserver(this);
     _leaveOsFullscreen();
     _applyMobileSystemUi(false);
+    // Drop Android sustained-perf hints when the surface goes away
+    // (stream exit). No-op on non-Android.
+    unawaited(_applyAndroidMaxPerformance(false));
     super.dispose();
   }
 
@@ -2872,16 +2908,22 @@ class _ReadySurfaceState extends State<_ReadySurface>
         },
         // Rebuild when stream settings change (gamepad/stats toggles in the
         // bottom chrome mutate UserSettings, a ChangeNotifier).
-        child: ListenableBuilder(
-          listenable: widget.settings,
-          builder: (context, _) => Stack(
-            fit: StackFit.expand,
-            children: [
-              // Video fills the screen. When the chrome is visible, tapping hides
-              // it (UI mode). When hidden (in-game), all mouse input — deltas,
-              // buttons, wheel — streams to the game. Raw Listeners below the
-              // chrome/gamepad overlays mean those still win hit-testing.
-              Positioned.fill(
+        // NOTE: video is isolated in a RepaintBoundary and outside the
+        // settings ListenableBuilder's hot path where possible — max-performance
+        // avoids paying a full Stack rebuild + repaint on every settings delta
+        // (60fps path: only chrome/gamepad/cursor overlays rebuild).
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Video fills the screen. When the chrome is visible, tapping hides
+            // it (UI mode). When hidden (in-game), all mouse input — deltas,
+            // buttons, wheel — streams to the game. Raw Listeners below the
+            // chrome/gamepad overlays mean those still win hit-testing.
+            // RepaintBoundary isolates the texture so overlay repaints don't
+            // repaint the video and vice-versa — critical for stable 60fps on
+            // Android's SurfaceProducer + Linux GL paths.
+            Positioned.fill(
+              child: RepaintBoundary(
                 child: Listener(
                   behavior: HitTestBehavior.opaque,
                   onPointerDown: _onVideoPointerDown,
@@ -2928,6 +2970,15 @@ class _ReadySurfaceState extends State<_ReadySurface>
                   ),
                 ),
               ),
+            ),
+            // Settings-dependent overlays: gamepad/stats/cursor/chrome rebuild
+            // on UserSettings changes; the video layer above stays in its
+            // RepaintBoundary and is not rebuilt by this ListenableBuilder.
+            ListenableBuilder(
+              listenable: widget.settings,
+              builder: (context, _) => Stack(
+                fit: StackFit.expand,
+                children: [
 
               // Top-edge escape: while in-game, moving the cursor to the top
               // edge shows the stream UI. This is the mouse-only way out that
@@ -3068,7 +3119,10 @@ class _ReadySurfaceState extends State<_ReadySurface>
                 Positioned(
                   top: 96,
                   left: 16,
-                  child: _StatsOverlay(transport: widget.transport),
+                  child: _StatsOverlay(
+                    transport: widget.transport,
+                    maxPerformance: widget.settings.maxPerformanceMode,
+                  ),
                 ),
 
               // Virtual gamepad overlay (independent of chrome visibility). Uses
@@ -3271,6 +3325,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
                 ),
             ],
           ),
+        ),
+          ],
         ),
       ),
     );
@@ -3997,8 +4053,9 @@ class _SliderRow extends StatelessWidget {
 /// of OpenNOW's stream diagnostics panel.
 class _StatsOverlay extends StatefulWidget {
   final StreamTransport? transport;
+  final bool maxPerformance;
 
-  const _StatsOverlay({this.transport});
+  const _StatsOverlay({this.transport, this.maxPerformance = false});
 
   @override
   State<_StatsOverlay> createState() => _StatsOverlayState();
@@ -4019,7 +4076,10 @@ class _StatsOverlayState extends State<_StatsOverlay>
     _ticker = createTicker((elapsed) {
       _uiFrames++;
       final windowMs = elapsed - _windowStart;
-      if (windowMs.inMilliseconds >= 500 && windowMs.inMilliseconds > 0) {
+      // Max-performance: wider window (1s) halves setState churn at the cost
+      // of a slightly slower UI-fps readout — intentional tradeoff for 60fps.
+      final thresholdMs = widget.maxPerformance ? 1000 : 500;
+      if (windowMs.inMilliseconds >= thresholdMs && windowMs.inMilliseconds > 0) {
         setState(() {
           _uiFps = _uiFrames * 1000 / windowMs.inMilliseconds;
           _uiFrames = 0;
@@ -4027,6 +4087,10 @@ class _StatsOverlayState extends State<_StatsOverlay>
         });
       }
     });
+    // Max-performance: mute the ticker entirely when the overlay is the only
+    // consumer of UI-fps? The overlay is visible only when streamShowFps is
+    // on, so the ticker is the readout itself — keep it but throttled above.
+    // When the overlay is hidden, the Ticker is not created at all.
     _ticker.start();
   }
 
@@ -4048,7 +4112,7 @@ class _StatsOverlayState extends State<_StatsOverlay>
           color: Colors.black.withValues(alpha: 0.72),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-          boxShadow: Neon.softShadow(radius: 14),
+          boxShadow: widget.maxPerformance ? null : Neon.softShadow(radius: 14),
         ),
         child: SingleChildScrollView(
           child: Column(

@@ -56,6 +56,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyUiScale = 'settings.ui.scale';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
+  static const _keyMaxPerformanceMode = 'settings.perf.maxPerformance';
   // --- Experimental stream optimizations --------------------------------
   static const _keyOptLowLatency = 'settings.experimental.opt.lowLatency';
   static const _keyOptRecovery =
@@ -126,6 +127,7 @@ class UserSettings extends ChangeNotifier {
   double _uiScale = 1.0;
   bool _logsEnabled = false;
   bool _hideTitleBar = false;
+  bool _maxPerformanceMode = false;
   // --- Experimental stream optimizations (all default to the safe profile) --
   bool _optLowLatencyMode = false;
   StreamRecoveryProfile _optRecoveryProfile = StreamRecoveryProfile.smooth;
@@ -223,6 +225,30 @@ class UserSettings extends ChangeNotifier {
 
   bool get logsEnabled => _logsEnabled;
   bool get hideTitleBar => _hideTitleBar;
+
+  /// When true the stream stack aggressively maximizes render performance:
+  /// disables expensive post-processing, forces hardware decode, prefers the
+  /// GPU renderer, throttles telemetry, disables animated backgrounds and
+  /// verbose logging. Applied on both Linux and Android.
+  bool get maxPerformanceMode => _maxPerformanceMode;
+
+  /// Effective values when max-performance is on: callers that affect the
+  /// streaming pipeline should read these instead of the raw persisted values
+  /// so the boost is reversible without losing the user's saved preferences.
+  bool get effectiveLogsEnabled => _maxPerformanceMode ? false : _logsEnabled;
+  VideoShaderSettings get effectiveVideoShader =>
+      _maxPerformanceMode ? const VideoShaderSettings(enabled: false) : _videoShader;
+  RendererBackend get effectiveRendererBackend =>
+      _maxPerformanceMode ? RendererBackend.gl : _rendererBackend;
+  DecoderBackend get effectiveDecoderBackend =>
+      _maxPerformanceMode ? DecoderBackend.vaapi : _decoderBackend;
+  bool get effectiveHwAccel => _maxPerformanceMode ? true : _webrtcHwAccel;
+  BackgroundStyle get effectiveBackgroundStyle =>
+      _maxPerformanceMode ? BackgroundStyle.subtle : _backgroundStyle;
+  Duration get statsPollInterval =>
+      _maxPerformanceMode ? const Duration(milliseconds: 1000) : const Duration(milliseconds: 500);
+  bool get performanceShadowsEnabled => !_maxPerformanceMode;
+
   bool get optLowLatencyMode => _optLowLatencyMode;
   StreamRecoveryProfile get optRecoveryProfile => _optRecoveryProfile;
   int get optMinBitrateKbps => _optMinBitrateKbps;
@@ -619,6 +645,21 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set maxPerformanceMode(bool v) {
+    if (_maxPerformanceMode == v) return;
+    _maxPerformanceMode = v;
+    _save(_keyMaxPerformanceMode, v);
+    // When going to max perf, immediately reflect the effective background
+    // and notify so the whole UI (Neon glow, shader, renderer prefs)
+    // re-evaluates via effective getters without overwriting persisted prefs.
+    if (v) {
+      BackgroundGlow.current.value = effectiveBackgroundStyle;
+    } else {
+      BackgroundGlow.current.value = _backgroundStyle;
+    }
+    notifyListeners();
+  }
+
   set optLowLatencyMode(bool v) {
     if (_optLowLatencyMode == v) return;
     _optLowLatencyMode = v;
@@ -833,6 +874,7 @@ class UserSettings extends ChangeNotifier {
     _uiScale = _prefs.getDouble(_keyUiScale) ?? _uiScale;
     _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
     _hideTitleBar = _prefs.getBool(_keyHideTitleBar) ?? _hideTitleBar;
+    _maxPerformanceMode = _prefs.getBool(_keyMaxPerformanceMode) ?? _maxPerformanceMode;
     _optLowLatencyMode =
         _prefs.getBool(_keyOptLowLatency) ?? _optLowLatencyMode;
     _optRecoveryProfile = StreamRecoveryProfile.values.asNameMap()[
@@ -877,7 +919,7 @@ class UserSettings extends ChangeNotifier {
         _prefs.getBool(_keyKeyboardTapToDismiss) ?? _keyboardTapToDismiss;
     _debugCursorOverlayBox =
         _prefs.getBool(_keyDebugCursorOverlayBox) ?? _debugCursorOverlayBox;
-    BackgroundGlow.current.value = _backgroundStyle;
+    BackgroundGlow.current.value = effectiveBackgroundStyle;
   }
 
   void _save(String key, Object value) {
@@ -945,6 +987,7 @@ class UserSettings extends ChangeNotifier {
     _uiScale = 1.0;
     _logsEnabled = false;
     _hideTitleBar = false;
+    _maxPerformanceMode = false;
     _optLowLatencyMode = false;
     _optRecoveryProfile = StreamRecoveryProfile.smooth;
     _optMinBitrateKbps = 4000;
@@ -1008,6 +1051,7 @@ class UserSettings extends ChangeNotifier {
     _keyUiScale,
     _keyLogsEnabled,
     _keyHideTitleBar,
+    _keyMaxPerformanceMode,
     _keyOptLowLatency,
     _keyOptRecovery,
     _keyOptMinBitrate,

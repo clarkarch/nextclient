@@ -82,10 +82,13 @@ Future<void> installWindowCloseHandler() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Use the fvp (libmdk) backend for video_player so ads/creative play on
-  // Windows, Linux, macOS, iOS and Android. Official video_player has no
-  // desktop implementation; fvp supplies it. Must be a direct dependency and
-  // registered before any player is created.
-  fvp.registerWith();
+  // Windows, Linux, macOS, iOS. Official video_player has no desktop
+  // implementation; fvp supplies it. On Android the platform plugin already
+  // handles video_player natively — registering fvp there just loads the
+  // libmdk .so for no gain and adds cold-start / memory overhead.
+  if (!Platform.isAndroid) {
+    fvp.registerWith();
+  }
   // Desktop-only plugins (pointer lock, window management). Guarded so the
   // app boots on mobile/web where the plugins have no implementation — an
   // unguarded await throws MissingPluginException before runApp and the app
@@ -236,7 +239,13 @@ class AppServices {
     final settings = UserSettings(prefs);
     // Drive verbose logging from the Performance setting so the toggle applies
     // from launch (all sinks — memory, file, terminal — stay in sync).
-    logSink.setEnabledForAll(settings.logsEnabled);
+    // Max-performance forces logs off regardless of the persisted toggle.
+    logSink.setEnabledForAll(settings.effectiveLogsEnabled);
+    // Keep the sink in sync when max-performance is toggled mid-run (the
+    // toggle flips effectiveLogs without touching the raw persisted value).
+    settings.addListener(() {
+      logSink.setEnabledForAll(settings.effectiveLogsEnabled);
+    });
     final session = SessionController(
       cloudMatch: cloudMatch,
       getToken: () => auth.resolveJwtToken(),
@@ -247,8 +256,9 @@ class AppServices {
       LogLevel.info,
       'app',
       'AppServices ready — session ${session.state.name}, '
-          'background ${settings.backgroundStyle.label}, '
-          'logs ${settings.logsEnabled ? 'enabled' : 'disabled'}',
+          'background ${settings.effectiveBackgroundStyle.label}, '
+          'logs ${settings.effectiveLogsEnabled ? 'enabled' : 'disabled'}'
+          '${settings.maxPerformanceMode ? ' · max-performance ENGAGED' : ''}',
     );
 
     return AppServices._(

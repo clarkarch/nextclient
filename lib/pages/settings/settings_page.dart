@@ -172,7 +172,7 @@ class SettingsPage extends StatelessWidget {
     // Re-sync side effects that are applied outside the settings object:
     // verbose logging gates all sinks, and the title bar style touches the
     // native window.
-    services.logSink.setEnabledForAll(services.settings.logsEnabled);
+    services.logSink.setEnabledForAll(services.settings.effectiveLogsEnabled);
     await TitleBarController.apply(services.settings);
     services.logSink.log(
       LogLevel.info,
@@ -216,7 +216,7 @@ class SettingsPage extends StatelessWidget {
           ),
           const Divider(height: 1),
           NeonSettingTile(
-            icon: Icons.speed,
+            icon: Icons.bolt,
             title: 'Performance',
             subtitle: _perfSummary(),
             onTap: () =>
@@ -249,7 +249,9 @@ class SettingsPage extends StatelessWidget {
   }
 
   String _perfSummary() {
-    return 'Verbose logs: ${services.settings.logsEnabled ? 'on' : 'off'}';
+    final s = services.settings;
+    if (s.maxPerformanceMode) return 'Max performance · ENGAGED';
+    return 'Verbose logs: ${s.logsEnabled ? 'on' : 'off'}';
   }
 }
 

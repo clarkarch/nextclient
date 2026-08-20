@@ -271,6 +271,7 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
   /// path composites through a shader, so the controls explain when the
   /// filter can't apply.
   Widget _shaderCard(UserSettings s) {
+    final suppressed = s.maxPerformanceMode;
     return NeonCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -279,18 +280,30 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
           const NeonSettingSection(label: 'Video shaders'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: const Text(
-              'Client-side GPU post-processing: sharpening, '
-              'saturation/contrast/brightness, vibrance, and animated film '
-              'grain. Applies on the GPU renderer path while streaming; '
-              'changes apply live from the stream sidebar too.',
-              style: TextStyle(color: Neon.inkMuted, fontSize: 12),
+            child: Text(
+              suppressed
+                  ? 'Suppressed by max-performance mode: the GPU post-pass '
+                      '(sharpen / color grade / grain) is forced off to avoid '
+                      'the extra FBO + shader on mobile. Disable max-performance '
+                      'to edit shaders.'
+                  : 'Client-side GPU post-processing: sharpening, '
+                      'saturation/contrast/brightness, vibrance, and animated film '
+                      'grain. Applies on the GPU renderer path while streaming; '
+                      'changes apply live from the stream sidebar too.',
+              style: TextStyle(
+                  color: suppressed ? Neon.warning : Neon.inkMuted, fontSize: 12),
             ),
           ),
           const SizedBox(height: 6),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 4, 14, 16),
-            child: VideoShaderControls(settings: s),
+            child: Opacity(
+              opacity: suppressed ? 0.45 : 1,
+              child: IgnorePointer(
+                ignoring: suppressed,
+                child: VideoShaderControls(settings: s),
+              ),
+            ),
           ),
         ],
       ),

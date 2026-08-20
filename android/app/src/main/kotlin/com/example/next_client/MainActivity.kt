@@ -1,8 +1,10 @@
 package com.example.next_client
 
+import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -31,6 +33,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var channel: MethodChannel? = null
+    private var perfChannel: MethodChannel? = null
     private var buttons = 0
     private var lx = 0.0
     private var ly = 0.0
@@ -44,6 +47,67 @@ class MainActivity : FlutterActivity() {
         // A re-attached engine re-runs configure; null the old channel so a
         // stale messenger isn't reused.
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        perfChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "next_client/perf").apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setMaxPerformance" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        runOnUiThread { applyMaxPerformance(enabled) }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+    }
+
+    private fun applyMaxPerformance(enabled: Boolean) {
+        val w = window ?: return
+        if (enabled) {
+            w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                w.setSustainedPerformanceMode(true)
+            }
+            // Prefer a stable 60Hz refresh while streaming to avoid the
+            // compositor bouncing between 60/90/120Hz on variable-refresh
+            // devices, which thrashes the Flutter raster thread.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    val display = w.decorView.display
+                    val targetFps = 60f
+                    // Hint the SurfaceFlinger frame-rate (Android 11+).
+                    w.decorView.let { view ->
+                        view.post {
+                            try {
+                                // surface.setFrameRate is per-Surface; Flutter's
+                                // SurfaceProducer surface honors the window hint.
+                                // We use the window-level preferredDisplayModeId
+                                // fallback when available.
+                                val modes = display?.supportedModes
+                                val best = modes?.filter { it.refreshRate in 59f..61f }?.minByOrNull { kotlin.math.abs(it.refreshRate - targetFps) }
+                                if (best != null) {
+                                    val lp = w.attributes
+                                    lp.preferredDisplayModeId = best.modeId
+                                    w.attributes = lp
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        } else {
+            w.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                w.setSustainedPerformanceMode(false)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    val lp = w.attributes
+                    lp.preferredDisplayModeId = 0
+                    w.attributes = lp
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     private fun sendState() {

@@ -110,7 +110,7 @@ class WebRtcStreamSession implements StreamTransport {
   }
   Timer? _statsTimer;
   bool _statsPollInFlight = false;
-  static const Duration _statsPollInterval = Duration(milliseconds: 500);
+  Duration get _statsPollInterval => settings.statsPollInterval;
 
   // --- NVST handshake state (mirrors OpenNOW's handleOffer) ---
   bool _answerOnWire = false;
@@ -219,28 +219,36 @@ class WebRtcStreamSession implements StreamTransport {
     // below) and the custom libwebrtc decoder factory reads OPENNOW_DECODER at
     // decoder instantiation, so setting both first cleanly flips the
     // decode/render path for this session (A/B testing).
-    applyDecoderBackend(settings.decoderBackend);
-    applyRendererBackend(settings.rendererBackend);
+    // Max-performance forces hardware decode + GPU renderer for lowest CPU
+    // overhead on Linux/Android; the effective getters keep the user's saved
+    // prefs intact while the session uses the boosted path.
+    applyDecoderBackend(settings.effectiveDecoderBackend);
+    applyRendererBackend(settings.effectiveRendererBackend);
 
     // Reflect the Verbose-logs setting onto the native GL renderer so its
     // [glrender] stderr diagnostics (which bypass the in-app LogSink) are
-    // silenced when logging is off.
-    await _applyRendererLogging(settings.logsEnabled);
+    // silenced when logging is off. Max-performance always mutes it.
+    await _applyRendererLogging(settings.effectiveLogsEnabled);
 
     // Push the video shader filter settings to the native renderer. The
     // post-processing pass only runs on the GPU renderer path (OPENNOW_RENDERER
     // = gl); on the CPU path this is stored but unused, matching OpenNOW's
-    // web-client-only shader.
-    if (settings.videoShader.hasVisibleEffect) {
+    // web-client-only shader. Max-performance forces the shader off to avoid
+    // the extra FBO + post-pass on mobile GPUs.
+    final effectiveShader = settings.effectiveVideoShader;
+    if (effectiveShader.hasVisibleEffect) {
       _log('Video shader filter active: '
-          'sharpen=${settings.videoShader.sharpen}% '
-          'saturation=${settings.videoShader.saturation}% '
-          'contrast=${settings.videoShader.contrast}% '
-          'brightness=${settings.videoShader.brightness}% '
-          'vibrance=${settings.videoShader.vibrance}% '
-          'grain=${settings.videoShader.filmGrain}%');
+          'sharpen=${effectiveShader.sharpen}% '
+          'saturation=${effectiveShader.saturation}% '
+          'contrast=${effectiveShader.contrast}% '
+          'brightness=${effectiveShader.brightness}% '
+          'vibrance=${effectiveShader.vibrance}% '
+          'grain=${effectiveShader.filmGrain}%');
+    } else if (settings.maxPerformanceMode && settings.videoShader.hasVisibleEffect) {
+      _log('Video shader suppressed by max-performance mode (would have been '
+          'sharpen=${settings.videoShader.sharpen}% sat=${settings.videoShader.saturation}% )');
     }
-    await pushVideoShaderSettings(settings.videoShader);
+    await pushVideoShaderSettings(effectiveShader);
 
     // Android: play the stream audio through the MEDIA stream (STREAM_MUSIC /
     // MODE_NORMAL / USAGE_MEDIA) so the volume keys control the media volume
@@ -1124,7 +1132,7 @@ class WebRtcStreamSession implements StreamTransport {
       },
       'enableDscp': settings.webrtcEnableDscp,
       'maxIPv6Networks': settings.webrtcMaxIpv6Networks,
-      'enableHardwareAcceleration': settings.webrtcHwAccel,
+      'enableHardwareAcceleration': settings.effectiveHwAccel,
       'sdpSemantics': 'unified-plan',
     };
   }
