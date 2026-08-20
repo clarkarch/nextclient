@@ -3,7 +3,7 @@ package com.cloudwebrtc.webrtc;
 /**
  * Thread-safe static holder for video shader filter settings.
  * Set from the platform thread (method channel handler), read on the
- * render thread by {@link ShaderFilterDrawer}. Uses a single volatile
+ * render thread by ShaderVideoFrameDrawer. Uses a single volatile
  * reference for safe cross-thread publication (same pattern as the
  * Linux C++ implementation).
  */

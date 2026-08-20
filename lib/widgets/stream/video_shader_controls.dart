@@ -95,7 +95,8 @@ class VideoShaderControls extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               _available
-                  ? 'GPU post-processing applied to the stream.'
+                  ? 'GPU post-processing applied to the stream. '
+                      'Warning: may reduce stream FPS on slower GPUs.'
                   : 'Requires the GPU renderer (Renderer → GPU shader '
                       'YUV→RGB) on the LIBWEBRTC transport.',
               style: const TextStyle(color: Neon.inkMuted, fontSize: 11.5),

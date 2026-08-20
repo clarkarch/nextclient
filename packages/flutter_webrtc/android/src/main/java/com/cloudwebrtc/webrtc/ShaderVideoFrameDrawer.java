@@ -16,16 +16,10 @@ import java.nio.FloatBuffer;
 /**
  * VideoFrameDrawer subclass that adds a GPU post-processing pass (video shader
  * filter) after the standard rendering.
- *
- * By overriding drawFrame() on the concrete VideoFrameDrawer class (rather than
- * overriding GlDrawer.drawOes() on a GlRectDrawer subclass), we avoid R8
- * devirtualizing the invokeinterface GlDrawer.drawOes() call, which was causing
- * the GlRectDrawer subclass override to be silently bypassed.
  */
 public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
     private static final String TAG = "ShaderVideoFD";
 
-    // ---- GL resources (created lazily on the render thread) ----
     private int fbo = 0;
     private int fboTexture = 0;
     private int postProgram = 0;
@@ -33,9 +27,7 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
     private int fboWidth = 0;
     private int fboHeight = 0;
     private boolean glInitialized = false;
-    private int activeFrameCount = 0;
 
-    // Uniform locations
     private int uFrameLoc = -1;
     private int uTexelSizeLoc = -1;
     private int uSharpenLoc = -1;
@@ -51,7 +43,6 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
 
     private static final long startTimeNs = System.nanoTime();
 
-    // ---- Fullscreen quad ----
     private static final float[] QUAD_VERTICES = {
         -1f, -1f, 0f, 0f,
          1f, -1f, 1f, 0f,
@@ -59,7 +50,6 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
          1f,  1f, 1f, 1f,
     };
 
-    // ---- GLSL ES shaders ----
     private static final String VERTEX_SHADER =
         "attribute vec2 in_pos;\n" +
         "attribute vec2 in_tc;\n" +
@@ -145,48 +135,51 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
     @Override
     public void drawFrame(VideoFrame frame, RendererCommon.GlDrawer drawer,
                           Matrix drawMatrix, int x, int y, int width, int height) {
-        // Unconditional first-line log — if this never appears, the override
-        // is not being reached (R8 devirtualization or wrong class loaded).
-        if (activeFrameCount == 0 && !VideoShaderState.isActive()) {
-            Log.w(TAG, "drawFrame: shader INACTIVE, fast-path (" + width + "x" + height + ")");
-        }
-
         VideoShaderState.Settings s = VideoShaderState.snapshot();
         if (!s.isActive()) {
             super.drawFrame(frame, drawer, drawMatrix, x, y, width, height);
             return;
         }
 
-        // --- Shader ACTIVE path ---
         if (!ensureGl() || width <= 0 || height <= 0) {
-            Log.e(TAG, "drawFrame: ensureGl failed or bad size w=" + width + " h=" + height);
             super.drawFrame(frame, drawer, drawMatrix, x, y, width, height);
             return;
         }
 
-        // CRITICAL: save the SCREEN framebuffer BEFORE ensureFbo() may change it.
         int[] savedFbo = new int[1];
         GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, savedFbo, 0);
 
         if (!ensureFbo(width, height)) {
-            Log.e(TAG, "drawFrame: ensureFbo failed");
             super.drawFrame(frame, drawer, drawMatrix, x, y, width, height);
             return;
         }
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo);
         GLES20.glViewport(0, 0, width, height);
-
         super.drawFrame(frame, drawer, drawMatrix, x, y, width, height);
-
-        activeFrameCount++;
-        if (activeFrameCount <= 3) {
-            Log.i(TAG, "Frame " + activeFrameCount + " → FBO " + width + "x" + height);
-        }
 
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, savedFbo[0]);
         GLES20.glViewport(x, y, width, height);
-        renderPostPass(width, height, s);
+
+        // Post-processing pass
+        resetGlState();
+        GLES20.glUseProgram(postProgram);
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTexture);
+        GLES20.glUniform1i(uFrameLoc, 0);
+        GLES20.glUniform2f(uTexelSizeLoc, 1f / width, 1f / height);
+        GLES20.glUniform1f(uSharpenLoc, s.sharpen / 100f);
+        if (uSharpenAdaptiveLoc >= 0) GLES20.glUniform1f(uSharpenAdaptiveLoc, s.sharpenAdaptive ? 1f : 0f);
+        GLES20.glUniform1f(uSaturationLoc, s.saturation / 100f);
+        GLES20.glUniform1f(uContrastLoc, s.contrast / 100f);
+        GLES20.glUniform1f(uBrightnessLoc, s.brightness / 100f);
+        if (uVibranceLoc >= 0) GLES20.glUniform1f(uVibranceLoc, s.vibrance / 100f);
+        if (uGrainLoc >= 0) GLES20.glUniform1f(uGrainLoc, s.grain / 100f);
+        if (uTimeLoc >= 0) GLES20.glUniform1f(uTimeLoc, (float) ((System.nanoTime() - startTimeNs) / 1e9));
+
+        drawQuad();
+        GLES20.glUseProgram(0);
     }
 
     @Override
@@ -203,15 +196,13 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
         fboWidth = 0; fboHeight = 0; glInitialized = false;
     }
 
-    // ---- GL init ----
-
     private boolean ensureGl() {
         if (glInitialized) return postProgram != 0;
         glInitialized = true;
 
         postProgram = createProgram(VERTEX_SHADER, POST_FRAGMENT_SHADER);
         if (postProgram == 0) {
-            Log.e(TAG, "Post-processing shader compile/link failed");
+            Log.e(TAG, "Shader compile/link failed");
             return false;
         }
 
@@ -242,11 +233,8 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
                 QUAD_VERTICES.length * 4, fb, GLES20.GL_STATIC_DRAW);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
 
-        Log.i(TAG, "Post-processing shader compiled OK");
         return true;
     }
-
-    // ---- FBO ----
 
     private boolean ensureFbo(int width, int height) {
         if (fbo != 0 && fboWidth == width && fboHeight == height) return true;
@@ -254,7 +242,6 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
         if (fbo != 0) { GLES20.glDeleteFramebuffers(1, new int[]{fbo}, 0); fbo = 0; }
         if (fboTexture != 0) { GLES20.glDeleteTextures(1, new int[]{fboTexture}, 0); fboTexture = 0; }
 
-        // Save the CURRENT framebuffer binding BEFORE we touch any FBO state.
         int[] prevFbo = new int[1];
         GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0);
 
@@ -278,28 +265,18 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
 
         int status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
         if (status != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-            Log.e(TAG, "FBO incomplete: 0x" + Integer.toHexString(status));
             GLES20.glDeleteFramebuffers(1, fbos, 0);
             GLES20.glDeleteTextures(1, texs, 0);
             fbo = 0; fboTexture = 0;
             return false;
         }
 
-        // Restore the ORIGINAL framebuffer binding (saved before we bound our FBO).
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo[0]);
-
         fboWidth = width; fboHeight = height;
-        Log.i(TAG, "FBO created: " + width + "x" + height);
         return true;
     }
 
-    // ---- Post-processing pass ----
-
-    private void renderPostPass(int width, int height, VideoShaderState.Settings s) {
-        if (postProgram == 0 || quadVbo == 0) return;
-
-        // Fully reset GL state to a known baseline after GlGenericDrawer
-        // may have left its shader program, VAO state, blend, etc. active.
+    private void resetGlState() {
         GLES20.glDisable(GLES20.GL_BLEND);
         GLES20.glDisable(GLES20.GL_DEPTH_TEST);
         GLES20.glDisable(GLES20.GL_CULL_FACE);
@@ -307,44 +284,20 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
         GLES20.glColorMask(true, true, true, true);
         GLES20.glDepthMask(false);
 
-        GLES20.glUseProgram(postProgram);
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTexture);
-        GLES20.glUniform1i(uFrameLoc, 0);
-
-        GLES20.glUniform2f(uTexelSizeLoc, 1f / width, 1f / height);
-        GLES20.glUniform1f(uSharpenLoc, s.sharpen / 100f);
-        GLES20.glUniform1f(uSharpenAdaptiveLoc, s.sharpenAdaptive ? 1f : 0f);
-        GLES20.glUniform1f(uSaturationLoc, s.saturation / 100f);
-        GLES20.glUniform1f(uContrastLoc, s.contrast / 100f);
-        GLES20.glUniform1f(uBrightnessLoc, s.brightness / 100f);
-        GLES20.glUniform1f(uVibranceLoc, s.vibrance / 100f);
-        GLES20.glUniform1f(uGrainLoc, s.grain / 100f);
-        GLES20.glUniform1f(uTimeLoc, (float) ((System.nanoTime() - startTimeNs) / 1e9));
-
-        // Bind our VBO and set up vertex attribs — override any leftover
-        // state from GlGenericDrawer's FULL_RECTANGLE_BUFFER client pointer.
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, quadVbo);
         GLES20.glEnableVertexAttribArray(aPosLoc);
         GLES20.glVertexAttribPointer(aPosLoc, 2, GLES20.GL_FLOAT, false, 16, 0);
         GLES20.glEnableVertexAttribArray(aTexcoordLoc);
         GLES20.glVertexAttribPointer(aTexcoordLoc, 2, GLES20.GL_FLOAT, false, 16, 8);
+    }
+
+    private void drawQuad() {
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-
-        int err = GLES20.glGetError();
-        if (err != 0 && activeFrameCount <= 5) {
-            Log.e(TAG, "GL error after post-pass: 0x" + Integer.toHexString(err));
-        }
-
         GLES20.glDisableVertexAttribArray(aPosLoc);
         GLES20.glDisableVertexAttribArray(aTexcoordLoc);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
-        GLES20.glUseProgram(0);
         GLES20.glDepthMask(true);
     }
-
-    // ---- Shader helpers ----
 
     private static int createProgram(String vertexSrc, String fragmentSrc) {
         int vs = compileShader(GLES20.GL_VERTEX_SHADER, vertexSrc);
@@ -358,7 +311,6 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
         int[] linkStatus = new int[1];
         GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0);
         if (linkStatus[0] == 0) {
-            Log.e(TAG, "Link failed: " + GLES20.glGetProgramInfoLog(program));
             GLES20.glDeleteProgram(program); program = 0;
         }
         GLES20.glDeleteShader(vs); GLES20.glDeleteShader(fs);
@@ -372,7 +324,6 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
         int[] compiled = new int[1];
         GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0);
         if (compiled[0] == 0) {
-            Log.e(TAG, "Compile failed: " + GLES20.glGetShaderInfoLog(shader));
             GLES20.glDeleteShader(shader); return 0;
         }
         return shader;
