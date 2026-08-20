@@ -14,6 +14,7 @@ import 'package:pointer_lock/pointer_lock.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../main.dart';
+import '../../state/desktop_gamepad.dart';
 import '../../state/gfn_cursor_overlay.dart';
 import '../../state/gfn_input_protocol.dart';
 import '../../state/gfn_mouse_input.dart';
@@ -1222,6 +1223,9 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// Physical Android gamepad (USB/Bluetooth) bridge — automatic, no UI.
   PhysicalGamepad? _physicalGamepad;
 
+  /// Physical desktop (Linux) gamepad subscription — automatic, no UI.
+  StreamSubscription<GamepadState>? _desktopGamepadSub;
+
   /// Bitmask of mouse buttons currently pressed on the video surface, used to
   /// detect which button a down/up event refers to (GFN protocol is 1-based
   /// single-button events).
@@ -1321,6 +1325,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _keyboardFocus.addListener(_onKeyboardFocusChanged);
     _attachCursorOverlay(widget.transport);
     _physicalGamepad = PhysicalGamepad(_onPhysicalGamepadState);
+    // Linux: no Android activity bridge, so read the local gamepad through the
+    // shared DesktopGamepad (SDL-standard mapping) and stream it like Android.
+    if (Platform.isLinux) {
+      DesktopGamepad.instance.start();
+      _desktopGamepadSub = DesktopGamepad.instance.stateStream.listen((s) {
+        _onPhysicalGamepadState(s.buttons, s.lx, s.ly, s.rx, s.ry, s.lt, s.rt);
+      });
+    }
     // Push the video shader filter settings to the native GPU renderer and
     // keep it in sync while this surface is live, so sidebar slider changes
     // apply to the running stream without re-connecting (the GL/D3D post pass
@@ -2055,6 +2067,9 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _keyboardController.dispose();
     _keyboardFocus.dispose();
     _physicalGamepad?.dispose();
+    _desktopGamepadSub?.cancel();
+    _desktopGamepadSub = null;
+    DesktopGamepad.instance.stop();
     _gameFocus.dispose();
     widget.settings.removeListener(_onShaderSettingsChanged);
     WidgetsBinding.instance.removeObserver(this);

@@ -8,6 +8,7 @@
 
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
 #include <fvp/fvp_plugin_c_api.h>
+#include <gamepads_windows/gamepads_windows_plugin_c_api.h>
 #include <pointer_lock/pointer_lock_plugin_c_api.h>
 #include <screen_retriever_windows/screen_retriever_windows_plugin_c_api.h>
 #include <url_launcher_windows/url_launcher_windows.h>
@@ -18,6 +19,8 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("FlutterWebRTCPlugin"));
   FvpPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FvpPluginCApi"));
+  GamepadsWindowsPluginCApiRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("GamepadsWindowsPluginCApi"));
   PointerLockPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("PointerLockPluginCApi"));
   ScreenRetrieverWindowsPluginCApiRegisterWithRegistrar(

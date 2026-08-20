@@ -9,6 +9,7 @@ import 'pages/library/library_page.dart';
 import 'pages/login/login_page.dart';
 import 'pages/settings/settings_page.dart';
 import 'pages/stream/stream_page.dart';
+import 'state/desktop_gamepad.dart';
 import 'state/title_bar_controller.dart';
 import 'theme/neon.dart';
 import 'widgets/neon_bottom_nav.dart';
@@ -196,6 +197,30 @@ class _ShellState extends State<Shell> {
   void initState() {
     super.initState();
     _checkActiveSession();
+    // Surface physical controller connect/disconnect (Linux) app-wide, so the
+    // user sees the gamepad is live before they even reach the stream page.
+    DesktopGamepad.instance.onConnectionChanged = _onGamepadConnection;
+    DesktopGamepad.instance.start();
+  }
+
+  @override
+  void dispose() {
+    DesktopGamepad.instance.onConnectionChanged = null;
+    DesktopGamepad.instance.stop();
+    super.dispose();
+  }
+
+  /// Controller connected/disconnected notification.
+  void _onGamepadConnection(bool connected, String name) {
+    if (!mounted) return;
+    showNeonSnackbar(
+      context,
+      connected
+          ? 'Controller connected: $name'
+          : 'Controller disconnected: $name',
+      copyable: false,
+      duration: Duration(seconds: connected ? 3 : 2),
+    );
   }
 
   /// If a GFN session is already running (e.g. app was restarted), offer to

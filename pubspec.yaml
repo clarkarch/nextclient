@@ -58,6 +58,7 @@ dependencies:
     path: packages/pointer_lock
   video_player: ^2.13.0
   fvp: ^0.37.3
+  gamepads: ^0.1.10+5
 
 dev_dependencies:
   flutter_test:
