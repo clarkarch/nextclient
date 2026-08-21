@@ -26,6 +26,7 @@ import '../../state/user_settings.dart';
 import '../../state/video_shader_settings.dart';
 import '../../state/webrtc_stream_session.dart'
     show pushVideoShaderSettings;
+import '../../theme/controller_theme.dart';
 import '../../theme/neon.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/game_art.dart';
@@ -99,6 +100,7 @@ class _StreamPageState extends State<StreamPage> {
   StreamTransport? _transport;
   String? _webrtcStatus;
   bool _stopInFlight = false;
+  bool _isFullscreen = false;
 
   /// Session-wide stats rollup, recorded to the logs on exit so a laggy
   /// session (high decode ms, low FPS) can be reviewed after the stream ends.
@@ -121,6 +123,16 @@ class _StreamPageState extends State<StreamPage> {
   /// that installed [appCloseHook] clears it, so popping an older page can't
   /// wipe a newer page's hook.
   late final Object _closeHookToken = Object();
+
+  Future<void> _toggleFullscreen() async {
+    if (kIsWeb) return;
+    if (!Platform.isLinux && !Platform.isWindows && !Platform.isMacOS) return;
+    try {
+      final isFs = await windowManager.isFullScreen();
+      await windowManager.setFullScreen(!isFs);
+      if (mounted) setState(() => _isFullscreen = !isFs);
+    } catch (_) {}
+  }
 
   void _onStats() {
     final snap = _transport?.stats.value;
@@ -607,6 +619,13 @@ class _StreamPageState extends State<StreamPage> {
       child: Row(
         children: [
           const Spacer(),
+          NeonOutlineButton(
+            label: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+            icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            borderColor: _isFullscreen ? Neon.accent : Neon.inkMuted,
+            onPressed: _toggleFullscreen,
+          ),
+          const SizedBox(width: 10),
           NeonOutlineButton(
             label: 'Exit',
             icon: Icons.close,
@@ -3153,6 +3172,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
                             bottom: 8,
                           ),
                           child: VirtualGamepad(
+                            theme: widget.settings.controllerTheme,
                             scale: widget.settings.streamGamepadScale,
                             spacing: widget.settings.streamGamepadSpacing,
                             showShoulders:
@@ -3225,6 +3245,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
                     startedAt: _sessionStartedAt,
                     webrtcStatus: widget.webrtcStatus,
                     onStop: widget.onStop,
+                    isFullscreen: _osFullscreen,
+                    onFullscreen: _toggleFullscreen,
                   ),
                 ),
 
@@ -3247,9 +3269,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
                     settings: widget.settings,
                     keyboardOpen: _keyboardOpen,
                     settingsOpen: _streamSettingsOpen,
-                    isFullscreen: _osFullscreen,
                     onKeyboard: _toggleKeyboard,
-                    onFullscreen: _toggleFullscreen,
                     onOpenSettings: () {
                       setState(() {
                         _streamSettingsOpen = !_streamSettingsOpen;
@@ -3368,6 +3388,8 @@ class _TopChrome extends StatelessWidget {
   final DateTime? startedAt;
   final String? webrtcStatus;
   final VoidCallback onStop;
+  final bool isFullscreen;
+  final VoidCallback onFullscreen;
 
   const _TopChrome({
     required this.game,
@@ -3375,6 +3397,8 @@ class _TopChrome extends StatelessWidget {
     this.startedAt,
     this.webrtcStatus,
     required this.onStop,
+    this.isFullscreen = false,
+    required this.onFullscreen,
   });
 
   @override
@@ -3430,10 +3454,28 @@ class _TopChrome extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           IconButton(
+            tooltip: isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+            icon: Icon(isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
+            iconSize: 32,
+            color: isFullscreen ? Neon.accent : Neon.ink,
+            style: IconButton.styleFrom(
+              backgroundColor: isFullscreen
+                  ? Neon.accent.withValues(alpha: 0.14)
+                  : Colors.black.withValues(alpha: 0.28),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: onFullscreen,
+          ),
+          const SizedBox(width: 6),
+          IconButton(
             tooltip: 'Exit stream',
             icon: const Icon(Icons.stop_circle_outlined),
             iconSize: 36,
             color: Neon.error,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.black.withValues(alpha: 0.28),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
             onPressed: onStop,
           ),
         ],
@@ -3442,15 +3484,13 @@ class _TopChrome extends StatelessWidget {
   }
 }
 
-/// Bottom gradient chrome: gamepad / stats toggles + keyboard + fullscreen +
+/// Bottom gradient chrome: gamepad / stats toggles + keyboard +
 /// stream-settings sidebar toggle.
 class _BottomChrome extends StatelessWidget {
   final UserSettings settings;
   final bool keyboardOpen;
   final bool settingsOpen;
-  final bool isFullscreen;
   final VoidCallback onKeyboard;
-  final VoidCallback onFullscreen;
   final VoidCallback onOpenSettings;
   final VoidCallback onHideUi;
 
@@ -3462,9 +3502,7 @@ class _BottomChrome extends StatelessWidget {
     required this.settings,
     required this.keyboardOpen,
     required this.settingsOpen,
-    required this.isFullscreen,
     required this.onKeyboard,
-    required this.onFullscreen,
     required this.onOpenSettings,
     required this.onHideUi,
     required this.onHideChromeKeepKeyboard,
@@ -3517,15 +3555,6 @@ class _BottomChrome extends StatelessWidget {
             active: settings.inputTouchEnabled,
             onTap: () {
               settings.inputTouchEnabled = !settings.inputTouchEnabled;
-              onHideUi();
-            },
-          ),
-          const SizedBox(width: 20),
-          _ChromeButton(
-            icon: isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-            label: isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
-            onTap: () {
-              onFullscreen();
               onHideUi();
             },
           ),
@@ -3720,6 +3749,24 @@ class StreamSettingsSidebar extends StatelessWidget {
                       max: 1.0,
                       divisions: 16,
                       onChanged: (v) => settings.streamGamepadOpacity = v,
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Theme',
+                      style: TextStyle(color: Neon.inkSoft, fontSize: 12),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final t in ControllerTheme.values)
+                          _ControllerThemeChip(
+                            theme: t,
+                            selected: settings.controllerTheme == t,
+                            onTap: () => settings.controllerTheme = t,
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 14),
                     const Text(
@@ -4043,6 +4090,94 @@ class _SliderRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ControllerThemeChip extends StatelessWidget {
+  final ControllerTheme theme;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ControllerThemeChip({
+    required this.theme,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isMinimal = theme.shape == ControllerShape.minimal;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? theme.primary.withValues(alpha: 0.14) : const Color(0xFF1A1A26),
+          borderRadius: BorderRadius.circular(isMinimal ? 6 : 10),
+          border: Border.all(
+            color: selected ? theme.primary : Neon.outlineSoft,
+            width: selected ? 1.4 : 1,
+          ),
+          boxShadow: selected
+              ? [BoxShadow(color: theme.primary.withValues(alpha: 0.28), blurRadius: 10)]
+              : null,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: theme.primary,
+                    shape: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
+                        ? BoxShape.rectangle
+                        : BoxShape.circle,
+                    borderRadius: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
+                        ? BorderRadius.circular(3)
+                        : null,
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: theme.secondary,
+                    shape: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
+                        ? BoxShape.rectangle
+                        : BoxShape.circle,
+                    borderRadius: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
+                        ? BorderRadius.circular(2)
+                        : null,
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              theme.label,
+              style: TextStyle(
+                color: selected ? theme.primary : Neon.inkSoft,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            Text(
+              theme.description,
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 9),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

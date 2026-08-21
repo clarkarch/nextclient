@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../theme/controller_theme.dart';
 import '../../theme/neon.dart';
 import 'analog_stick.dart';
 import 'dpad_widget.dart';
@@ -106,6 +107,9 @@ class VirtualGamepad extends StatefulWidget {
   /// Whether the menu buttons (Select/Start/Home) are shown.
   final bool showMenu;
 
+  /// Visual theme — changes overall look (shape, density, shadows) not just tint.
+  final ControllerTheme theme;
+
   const VirtualGamepad({
     super.key,
     this.onLeftStickDrag,
@@ -138,6 +142,7 @@ class VirtualGamepad extends StatefulWidget {
     this.showDpad = true,
     this.showFaceButtons = true,
     this.showMenu = true,
+    this.theme = ControllerTheme.neon,
   });
 
   @override
@@ -149,13 +154,15 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
   /// the LAYOUT (the base box the pad occupies). The user's component-size
   /// slider is applied separately as a transform (see [build]) so it never
   /// changes this box — i.e. never moves the pad's position on screen.
+  /// Theme density tweaks the overall feel (compact vs arcade).
   double get _adaptiveScale {
     final screenSize = MediaQuery.of(context).size;
     final shortestSide = screenSize.width < screenSize.height
         ? screenSize.width
         : screenSize.height;
     final baseScale = shortestSide / 400;
-    return baseScale.clamp(0.5, 1.5);
+    final themed = baseScale * widget.theme.density;
+    return themed.clamp(0.45, 1.6);
   }
 
   double get _sideContainerSize => 240 * _adaptiveScale;
@@ -221,6 +228,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                   _MenuButton(
                     label: 'SELECT',
                     size: _menuButtonSize,
+                    glowColor: widget.theme.secondary,
                     onPressed: widget.onSelectPressed,
                     onReleased: widget.onSelectReleased,
                   ),
@@ -230,6 +238,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                   _MenuButton(
                     label: 'START',
                     size: _menuButtonSize,
+                    glowColor: widget.theme.secondary,
                     onPressed: widget.onStartPressed,
                     onReleased: widget.onStartReleased,
                   ),
@@ -239,6 +248,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                   _MenuButton(
                     icon: Icons.home_rounded,
                     size: _menuButtonSize * 0.9,
+                    glowColor: widget.theme.primary,
                     onPressed: widget.onHomePressed,
                     onReleased: widget.onHomeReleased,
                     isHome: true,
@@ -252,6 +262,10 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     );
   }
 
+  bool get _isSquare =>
+      widget.theme.shape == ControllerShape.square ||
+      widget.theme.shape == ControllerShape.block;
+
   Widget _buildShoulderButtons() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -263,6 +277,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               _TriggerButton(
                 width: _triggerButtonWidth,
                 height: _triggerButtonHeight,
+                glowColor: widget.theme.primary,
                 onPressed: widget.onLeftTriggerPressed,
                 onReleased: widget.onLeftTriggerReleased,
               ),
@@ -271,6 +286,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               _TriggerButton(
                 width: _triggerButtonWidth,
                 height: _triggerButtonHeight,
+                glowColor: widget.theme.primary,
                 onPressed: widget.onRightTriggerPressed,
                 onReleased: widget.onRightTriggerReleased,
               ),
@@ -286,6 +302,8 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 label: 'LB',
                 width: _shoulderButtonWidth,
                 height: _shoulderButtonHeight,
+                glowColor: widget.theme.secondary,
+                square: _isSquare,
                 onPressed: widget.onLeftBumperPressed,
                 onReleased: widget.onLeftBumperReleased,
               ),
@@ -295,6 +313,8 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 label: 'RB',
                 width: _shoulderButtonWidth,
                 height: _shoulderButtonHeight,
+                glowColor: widget.theme.secondary,
+                square: _isSquare,
                 onPressed: widget.onRightBumperPressed,
                 onReleased: widget.onRightBumperReleased,
               ),
@@ -320,7 +340,10 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 child: _scaled(
                   DPadWidget(
                     size: _dpadSize,
-                    glowColor: Neon.violet,
+                    glowColor: widget.theme.secondary,
+                    baseColor: widget.theme.baseBg == const Color(0x00000000)
+                        ? const Color(0xFF14141F)
+                        : widget.theme.baseBg,
                     onDirectionPressed: widget.onDpadPressed,
                     onDirectionReleased: widget.onDpadReleased,
                   ),
@@ -334,7 +357,10 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               AnalogStick(
                 size: _analogStickSize,
                 knobSize: _analogStickKnobSize,
-                glowColor: Neon.accent,
+                glowColor: widget.theme.primary,
+                baseColor: widget.theme.baseBg == const Color(0x00000000)
+                    ? const Color(0xFF14141F)
+                    : widget.theme.baseBg,
                 onDrag: widget.onLeftStickDrag,
                 onDragEnd: widget.onLeftStickDragEnd,
               ),
@@ -361,6 +387,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 child: _scaled(
                   FaceButtons(
                     buttonSize: _faceButtonSize,
+                    glowColor: widget.theme.primary,
                     onButtonPressed: widget.onFaceButtonPressed,
                     onButtonReleased: widget.onFaceButtonReleased,
                   ),
@@ -374,7 +401,10 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               AnalogStick(
                 size: _analogStickSize,
                 knobSize: _analogStickKnobSize,
-                glowColor: Neon.violet,
+                glowColor: widget.theme.secondary,
+                baseColor: widget.theme.baseBg == const Color(0x00000000)
+                    ? const Color(0xFF14141F)
+                    : widget.theme.baseBg,
                 onDrag: widget.onRightStickDrag,
                 onDragEnd: widget.onRightStickDragEnd,
               ),
@@ -393,6 +423,7 @@ class _MenuButton extends StatefulWidget {
   final VoidCallback? onPressed;
   final VoidCallback? onReleased;
   final bool isHome;
+  final Color glowColor;
 
   const _MenuButton({
     this.label,
@@ -401,6 +432,7 @@ class _MenuButton extends StatefulWidget {
     this.onPressed,
     this.onReleased,
     this.isHome = false,
+    this.glowColor = Neon.accent,
   });
 
   @override
@@ -432,10 +464,10 @@ class _MenuButtonState extends State<_MenuButton> {
         height: widget.size,
         decoration: BoxDecoration(
           color: _isPressed ? Neon.cardHover : Neon.bgC,
-          borderRadius: BorderRadius.circular(widget.size / 3),
+          borderRadius: BorderRadius.circular(widget.isHome ? widget.size / 3 : widget.size / 4),
           border: Border.all(
             color: widget.isHome
-                ? Neon.accent.withValues(alpha: 0.3)
+                ? widget.glowColor.withValues(alpha: 0.38)
                 : Neon.outline,
             width: 1,
           ),
@@ -447,9 +479,7 @@ class _MenuButtonState extends State<_MenuButton> {
             ),
             if (_isPressed)
               BoxShadow(
-                color: (widget.isHome ? Neon.accent : Neon.violet).withValues(
-                  alpha: 0.35,
-                ),
+                color: widget.glowColor.withValues(alpha: 0.38),
                 blurRadius: 8,
               ),
           ],
@@ -459,7 +489,7 @@ class _MenuButtonState extends State<_MenuButton> {
               ? Icon(
                   widget.icon,
                   size: widget.size * 0.5,
-                  color: widget.isHome ? Neon.accent : Neon.inkMuted,
+                  color: widget.isHome ? widget.glowColor : Neon.inkMuted,
                 )
               : Text(
                   widget.label ?? '',
@@ -483,6 +513,8 @@ class _ShoulderButton extends StatefulWidget {
   final double height;
   final VoidCallback? onPressed;
   final VoidCallback? onReleased;
+  final Color glowColor;
+  final bool square;
 
   const _ShoulderButton({
     required this.label,
@@ -490,6 +522,8 @@ class _ShoulderButton extends StatefulWidget {
     required this.height,
     this.onPressed,
     this.onReleased,
+    this.glowColor = Neon.violet,
+    this.square = false,
   });
 
   @override
@@ -520,10 +554,12 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
         width: widget.width,
         height: widget.height,
         decoration: BoxDecoration(
-          color: _isPressed ? Neon.cardHover : Neon.bgC,
-          borderRadius: BorderRadius.circular(6),
+          color: _isPressed
+              ? (widget.square ? widget.glowColor.withValues(alpha: 0.22) : Neon.cardHover)
+              : Neon.bgC,
+          borderRadius: BorderRadius.circular(widget.square ? 4 : 6),
           border: Border.all(
-            color: _isPressed ? Neon.violet : Neon.outline,
+            color: _isPressed ? widget.glowColor : Neon.outline,
             width: 1,
           ),
           boxShadow: [
@@ -534,7 +570,7 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
             ),
             if (_isPressed)
               BoxShadow(
-                color: Neon.violet.withValues(alpha: 0.35),
+                color: widget.glowColor.withValues(alpha: 0.38),
                 blurRadius: 8,
               ),
           ],
@@ -562,12 +598,14 @@ class _TriggerButton extends StatefulWidget {
   final double height;
   final VoidCallback? onPressed;
   final VoidCallback? onReleased;
+  final Color glowColor;
 
   const _TriggerButton({
     required this.width,
     required this.height,
     this.onPressed,
     this.onReleased,
+    this.glowColor = Neon.accent,
   });
 
   @override
@@ -612,7 +650,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
             bottomRight: Radius.circular(4),
           ),
           border: Border.all(
-            color: _isPressed ? Neon.accent : Neon.outline,
+            color: _isPressed ? widget.glowColor : Neon.outline,
             width: 1,
           ),
           boxShadow: [
@@ -630,7 +668,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
             ),
             if (_isPressed)
               BoxShadow(
-                color: Neon.accent.withValues(alpha: 0.4),
+                color: widget.glowColor.withValues(alpha: 0.42),
                 blurRadius: 8,
               ),
           ],
@@ -641,7 +679,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
             height: 4 * (widget.height / 36),
             decoration: BoxDecoration(
               color: _isPressed
-                  ? Neon.accent.withValues(alpha: 0.6)
+                  ? widget.glowColor.withValues(alpha: 0.6)
                   : Neon.inkMuted.withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(2),
             ),
