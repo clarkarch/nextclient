@@ -23,7 +23,7 @@ import 'webrtc_settings_page.dart';
 /// and Logs, which are always reachable), and client-side categories (WebRTC,
 /// UI, Performance) revealed by the Advanced Settings toggle. Server settings
 /// are always visible; the toggle only exposes the client categories below.
-class SettingsPage extends StatefulWidget {
+class SettingsPage extends StatelessWidget {
   final AppServices services;
   final VoidCallback onSignOut;
 
@@ -32,23 +32,6 @@ class SettingsPage extends StatefulWidget {
     required this.services,
     required this.onSignOut,
   });
-
-  @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  final TextEditingController _searchController = TextEditingController();
-  String _query = '';
-
-  AppServices get services => widget.services;
-  VoidCallback get onSignOut => widget.onSignOut;
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
 
   void _open(BuildContext context, Widget page) {
     Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
@@ -73,18 +56,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               _FadeIn(
-                delay: const Duration(milliseconds: 80),
-                child: _searchField(),
-              ),
-              const SizedBox(height: 14),
-              if (_query.trim().isNotEmpty) ...[
-                _SettingsSearchResults(
-                  page: this,
-                  query: _query,
-                  advancedUnlocked: advanced,
-                ),
-              ] else ...[
-              _FadeIn(
                 delay: const Duration(milliseconds: 110),
                 child: _advancedToggleCard(),
               ),
@@ -107,39 +78,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: _advancedSettingsCard(context),
                 ),
               ],
-              ],
             ],
           );
         },
-      ),
-    );
-  }
-
-  Widget _searchField() {
-    return _FancyCard(
-      child: TextField(
-        controller: _searchController,
-        onChanged: (v) => setState(() => _query = v),
-        style: const TextStyle(color: Neon.ink, fontSize: 13.5),
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: 'Search settings…',
-          hintStyle: const TextStyle(color: Neon.inkMuted, fontSize: 13.5),
-          prefixIcon: const Icon(Icons.search, size: 20, color: Neon.inkMuted),
-          suffixIcon: _query.isEmpty
-              ? null
-              : IconButton(
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.close, size: 18, color: Neon.inkMuted),
-                  onPressed: () {
-                    _searchController.clear();
-                    setState(() => _query = '');
-                  },
-                ),
-          border: InputBorder.none,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        ),
       ),
     );
   }
@@ -456,183 +397,6 @@ class _GroupLabel extends StatelessWidget {
           fontWeight: FontWeight.w800,
           letterSpacing: 2,
         ),
-      ),
-    );
-  }
-}
-
-
-/// One searchable destination in settings.
-class _SearchEntry {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-
-  /// Extra match terms beyond [title]/[subtitle].
-  final List<String> keywords;
-
-  /// Only reachable when Advanced Settings is on.
-  final bool advanced;
-
-  final Widget Function(_SettingsPageState page) buildPage;
-
-  const _SearchEntry({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    this.keywords = const [],
-    this.advanced = false,
-    required this.buildPage,
-  });
-
-  bool matches(String rawQuery) {
-    final q = rawQuery.trim().toLowerCase();
-    if (q.isEmpty) return false;
-    final haystack = [title, subtitle, ...keywords].join(' ').toLowerCase();
-    // Every whitespace-separated term must appear somewhere.
-    return q.split(RegExp(r'\s+')).every(haystack.contains);
-  }
-}
-
-/// The full settings index. Advanced-gated entries only surface once the
-/// user has enabled Advanced Settings.
-final List<_SearchEntry> _settingsSearchIndex = [
-  _SearchEntry(
-    title: 'Stream',
-    subtitle: 'Resolution · FPS · bitrate · codec',
-    icon: Icons.high_quality,
-    keywords: [
-      'resolution', 'fps', 'framerate', 'bitrate', 'bandwidth', 'codec',
-      'h264', 'hevc', 'av1', 'hdr', 'color quality', '10bit', '422', '444',
-      'quality', 'streaming',
-    ],
-    buildPage: (page) => StreamQualityPage(services: page.services),
-  ),
-  _SearchEntry(
-    title: 'Region',
-    subtitle: 'Streaming region',
-    icon: Icons.public,
-    keywords: ['server', 'location', 'ping', 'geo', 'datacenter'],
-    buildPage: (page) => RegionPage(services: page.services),
-  ),
-  _SearchEntry(
-    title: 'Language & Input',
-    subtitle: 'Game language · keyboard layout',
-    icon: Icons.language,
-    keywords: ['language', 'locale', 'keyboard layout', 'input language'],
-    buildPage: (page) => LanguagePage(services: page.services),
-  ),
-  _SearchEntry(
-    title: 'Account',
-    subtitle: 'Profile · sign out',
-    icon: Icons.person_outline,
-    keywords: ['profile', 'sign out', 'logout', 'login', 'user'],
-    buildPage: (page) =>
-        AccountPage(services: page.services, onSignOut: page.onSignOut),
-  ),
-  _SearchEntry(
-    title: 'UI',
-    subtitle: 'Background · scale · window',
-    icon: Icons.palette_outlined,
-    keywords: [
-      'background', 'theme', 'glow', 'ui scale', 'text size', 'title bar',
-      'frameless', 'window', 'appearance',
-    ],
-    buildPage: (page) => UiSettingsPage(services: page.services),
-  ),
-  _SearchEntry(
-    title: 'Client',
-    subtitle: 'Transport · renderer · input · shaders',
-    icon: Icons.computer,
-    advanced: true,
-    keywords: [
-      'transport', 'webrtc', 'libwebrtc', 'renderer', 'gpu shader', 'yuv',
-      'ice', 'stun', 'turn', 'relay', 'bundle', 'rtcp mux', 'dscp', 'qos',
-      'nack', 'fec', 'packet loss', 'ipv6', 'candidates', 'l4s', 'gsync',
-      'vrr', 'reflex', 'mouse sensitivity', 'mouse acceleration',
-      'mouse sampling', 'high-precision', 'cursor overlay', 'touch mode',
-      'video shaders', 'sharpen', 'cas', 'saturation', 'contrast',
-      'brightness', 'vibrance', 'film grain', 'shaders',
-    ],
-    buildPage: (page) => WebRtcSettingsPage(services: page.services),
-  ),
-  _SearchEntry(
-    title: 'Performance',
-    subtitle: 'Max performance · decoder · logs',
-    icon: Icons.bolt,
-    advanced: true,
-    keywords: [
-      'max performance', 'decoder', 'hardware acceleration', 'hw accel',
-      'nvdec', 'vaapi', 'verbose logs', 'frame pacing',
-    ],
-    buildPage: (page) => PerformanceSettingsPage(services: page.services),
-  ),
-  _SearchEntry(
-    title: 'Logs',
-    subtitle: 'Debug log viewer',
-    icon: Icons.terminal,
-    advanced: true,
-    keywords: ['log viewer', 'debug logs', 'diagnostics', 'export logs'],
-    buildPage: (page) => LogViewerPage(
-          logSink: page.services.logSink,
-          logFilePath: page.services.logFilePath,
-        ),
-  ),
-  _SearchEntry(
-    title: 'Debug',
-    subtitle: 'Cursor overlay diagnostics',
-    icon: Icons.bug_report_outlined,
-    advanced: true,
-    keywords: ['cursor box', 'overlay diagnostics', 'debug'],
-    buildPage: (page) => DebugSettingsPage(services: page.services),
-  ),
-];
-
-/// Filtered results for the settings search field.
-class _SettingsSearchResults extends StatelessWidget {
-  final _SettingsPageState page;
-  final String query;
-  final bool advancedUnlocked;
-
-  const _SettingsSearchResults({
-    required this.page,
-    required this.query,
-    required this.advancedUnlocked,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final hits = _settingsSearchIndex
-        .where((e) => e.matches(query) && (!e.advanced || advancedUnlocked))
-        .toList();
-
-    if (hits.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 24),
-        child: Center(
-          child: Text(
-            'No settings match "$query"',
-            style: const TextStyle(color: Neon.inkMuted, fontSize: 13),
-          ),
-        ),
-      );
-    }
-
-    return _FancyCard(
-      child: Column(
-        children: [
-          for (var i = 0; i < hits.length; i++) ...[
-            if (i > 0) const Divider(height: 1),
-            NeonSettingTile(
-              icon: hits[i].icon,
-              title: hits[i].title,
-              subtitle: hits[i].subtitle,
-              onTap: () => page._open(context, hits[i].buildPage(page)),
-              trailing:
-                  const Icon(Icons.chevron_right, color: Neon.inkMuted),
-            ),
-          ],
-        ],
       ),
     );
   }
