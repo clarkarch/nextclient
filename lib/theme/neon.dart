@@ -437,7 +437,8 @@ class Neon {
 
   static const ink = Color(0xFFF2F7FF);
   static const inkSoft = Color(0xFF9FB0C9);
-  static const inkMuted = Color(0xFF5C6B85);
+  /// Bumped from #5C6B85 for WCAG AA contrast (~5.5:1) on obsidian.
+  static const inkMuted = Color(0xFF6E80A0);
 
   static const accent = Color(0xFF00D9FF);
   static const accentDim = Color(0xFF0A8FA8);

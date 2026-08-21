@@ -289,6 +289,11 @@ class _RoundIconButton extends StatefulWidget {
   final IconData icon;
   final VoidCallback onTap;
 
+  static final _labels = {
+    Icons.arrow_back: 'Back',
+    Icons.close: 'Close',
+  };
+
   const _RoundIconButton({required this.icon, required this.onTap});
 
   @override
@@ -305,7 +310,9 @@ class _RoundIconButtonState extends State<_RoundIconButton> {
       child: InkWell(
         onTap: widget.onTap,
         borderRadius: BorderRadius.circular(12),
-        child: AnimatedContainer(
+        child: Tooltip(
+          message: _RoundIconButton._labels[widget.icon] ?? 'Action',
+          child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           width: 40,
           height: 40,
@@ -330,6 +337,7 @@ class _RoundIconButtonState extends State<_RoundIconButton> {
           child: Icon(widget.icon,
               size: 20,
               color: _hover ? Neon.accent : Neon.inkSoft),
+          ),
         ),
       ),
     );
