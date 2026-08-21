@@ -154,7 +154,10 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) {
     final games = _games;
-    return NeonPageScaffold(slivers: _slivers(games));
+    return NeonPageScaffold(
+      onRefresh: _load,
+      slivers: _slivers(games),
+    );
   }
 
   List<Widget> _slivers(List<CatalogGame>? games) {
@@ -162,44 +165,42 @@ class _LibraryPageState extends State<LibraryPage> {
     final groups = _filterGroups;
     return [
       SliverToBoxAdapter(
-        child: SectionHeader(
-          title: games == null ? 'Library' : 'My Library · ${games.length}',
-          padding: const EdgeInsets.fromLTRB(0, 20, 0, 14),
+        child: _FadeIn(
+          delay: const Duration(milliseconds: 60),
+          child: SectionHeader(
+            title: games == null ? 'Library' : 'My Library · ${games.length}',
+            padding: const EdgeInsets.fromLTRB(0, 20, 0, 14),
+          ),
         ),
       ),
       if (games != null && groups.isNotEmpty)
         SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 20),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilterSortBar(
-                    groups: groups,
-                    sortOptions: _sortOptions,
-                    sortId: _sortId,
-                    filterIds: _filterIds,
-                    onSortChanged: (id) => setState(() => _sortId = id),
-                    onFiltersChanged: (ids) {
-                      setState(() {
-                        _filterIds
-                          ..clear()
-                          ..addAll(ids);
-                      });
-                    },
+          child: _FadeIn(
+            delay: const Duration(milliseconds: 120),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 22),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilterSortBar(
+                      groups: groups,
+                      sortOptions: _sortOptions,
+                      sortId: _sortId,
+                      filterIds: _filterIds,
+                      onSortChanged: (id) => setState(() => _sortId = id),
+                      onFiltersChanged: (ids) {
+                        setState(() {
+                          _filterIds
+                            ..clear()
+                            ..addAll(ids);
+                        });
+                      },
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: 'Refresh library',
-                  icon: const Icon(
-                    Icons.refresh,
-                    size: 18,
-                    color: Neon.inkSoft,
-                  ),
-                  onPressed: _load,
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  _FancyRefreshButton(onTap: _load),
+                ],
+              ),
             ),
           ),
         ),
@@ -208,21 +209,19 @@ class _LibraryPageState extends State<LibraryPage> {
       else if (_error != null && games == null)
         SliverToBoxAdapter(
           child: SizedBox(
-            height: 320,
+            height: 340,
             child: NeonErrorView(message: _error!, onRetry: _load),
           ),
         )
       else if (list.isEmpty)
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.all(40),
-            child: Center(
-              child: Text(
-                _filterIds.isNotEmpty
-                    ? 'No games match your filters.'
-                    : 'Your library is empty.',
-                style: const TextStyle(color: Neon.inkMuted, fontSize: 13),
-              ),
+            padding: const EdgeInsets.all(36),
+            child: _EmptyLibrary(
+              filtered: _filterIds.isNotEmpty,
+              onClear: _filterIds.isNotEmpty
+                  ? () => setState(() => _filterIds.clear())
+                  : null,
             ),
           ),
         )
@@ -230,30 +229,227 @@ class _LibraryPageState extends State<LibraryPage> {
         SliverPadding(
           padding: const EdgeInsets.only(bottom: 32),
           sliver: GuardedSliverGrid(
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 210,
-              mainAxisExtent: 210 / 1.3,
-              mainAxisSpacing: 26,
+              mainAxisExtent: 184,
+              mainAxisSpacing: 22,
               crossAxisSpacing: 16,
             ),
             delegate: SliverChildBuilderDelegate((context, i) {
               final game = list[i];
-              return CatalogGameCard(
-                game: game,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => GameDetailsPage(
-                        services: widget.services,
-                        game: game,
+              return _StaggeredCard(
+                index: i,
+                child: CatalogGameCard(
+                  game: game,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => GameDetailsPage(
+                          services: widget.services,
+                          game: game,
+                        ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               );
             }, childCount: list.length),
           ),
         ),
     ];
+  }
+}
+
+class _FadeIn extends StatefulWidget {
+  final Widget child;
+  final Duration delay;
+  const _FadeIn({required this.child, this.delay = Duration.zero});
+  @override
+  State<_FadeIn> createState() => _FadeInState();
+}
+
+class _FadeInState extends State<_FadeIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 480),
+  );
+  late final Animation<double> _opacity =
+      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.05),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(widget.delay, () {
+      if (mounted) _c.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+class _StaggeredCard extends StatefulWidget {
+  final int index;
+  final Widget child;
+  const _StaggeredCard({required this.index, required this.child});
+  @override
+  State<_StaggeredCard> createState() => _StaggeredCardState();
+}
+
+class _StaggeredCardState extends State<_StaggeredCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 460),
+  );
+  late final Animation<double> _opacity =
+      CurvedAnimation(parent: _c, curve: Curves.easeOut);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.07),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(Duration(milliseconds: (widget.index % 14) * 38), () {
+      if (mounted) _c.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+class _EmptyLibrary extends StatelessWidget {
+  final bool filtered;
+  final VoidCallback? onClear;
+  const _EmptyLibrary({required this.filtered, this.onClear});
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 26),
+        decoration: BoxDecoration(
+          color: Neon.bgC.withValues(alpha: 0.74),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Neon.outlineSoft),
+          boxShadow: Neon.softShadow(radius: 18),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                gradient: filtered ? Neon.violetGradient : Neon.accentGradient,
+                shape: BoxShape.circle,
+                boxShadow: Neon.glowShadow(radius: 14, alpha: 0.28),
+              ),
+              child: Icon(
+                  filtered ? Icons.filter_alt_off : Icons.library_add_outlined,
+                  color: Neon.bgA,
+                  size: 26),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              filtered ? 'No matches' : 'Your library is empty',
+              style: const TextStyle(
+                  color: Neon.ink, fontSize: 15, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              filtered
+                  ? 'Try clearing filters to see all your games.'
+                  : 'Connect a store account to see your owned games here.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 12.5),
+            ),
+            if (filtered && onClear != null) ...[
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: onClear,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Neon.accent,
+                  side: const BorderSide(color: Neon.accent),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('CLEAR FILTERS'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FancyRefreshButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _FancyRefreshButton({required this.onTap});
+  @override
+  State<_FancyRefreshButton> createState() => _FancyRefreshButtonState();
+}
+
+class _FancyRefreshButtonState extends State<_FancyRefreshButton> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: _hover
+                ? Neon.accent.withValues(alpha: 0.12)
+                : Neon.bgC.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+                color: _hover
+                    ? Neon.accent.withValues(alpha: 0.42)
+                    : Neon.outline),
+            boxShadow: _hover
+                ? [BoxShadow(color: Neon.accent.withValues(alpha: 0.16), blurRadius: 12)]
+                : null,
+          ),
+          child: Icon(Icons.refresh,
+              size: 18,
+              color: _hover ? Neon.accent : Neon.inkSoft),
+        ),
+      ),
+    );
   }
 }

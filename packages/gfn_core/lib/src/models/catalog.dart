@@ -99,6 +99,7 @@ class CatalogGame {
   final String title;
   final String? shortName;
   final String? publisherName;
+  final List<String> genres;
   final List<AppVariant> variants;
   final Map<String, dynamic>? images;
   final String? playabilityState;
@@ -112,6 +113,7 @@ class CatalogGame {
     required this.title,
     this.shortName,
     this.publisherName,
+    this.genres = const [],
     this.variants = const [],
     this.images,
     this.playabilityState,
@@ -161,6 +163,7 @@ class CatalogGame {
       title: app['title'] as String,
       shortName: app['shortName'] as String?,
       publisherName: app['publisherName'] as String?,
+      genres: _stringList(app['genres']),
       variants: variants,
       images: app['images'] as Map<String, dynamic>?,
       playabilityState: (app['gfn'] as Map<String, dynamic>?)?['playabilityState'] as String?,
@@ -170,6 +173,11 @@ class CatalogGame {
       launchAppId: _resolveLaunchAppId(variants, app['id'] as String),
       isInLibrary: variants.any((v) => isOwnedLibraryStatus(v.gfn?.libraryStatus)),
     );
+  }
+
+  static List<String> _stringList(Object? value) {
+    if (value is! List) return const [];
+    return value.whereType<String>().where((s) => s.isNotEmpty).toList();
   }
 
   /// Port of gameAppMapper.ts resolveAppData.numericAppId — the preferred
@@ -194,6 +202,7 @@ class CatalogGame {
       'title': title,
       'shortName': shortName,
       'publisherName': publisherName,
+      'genres': genres,
       'variants': variants.map((v) => v.toJson()).toList(),
       'images': images,
       'playabilityState': playabilityState,

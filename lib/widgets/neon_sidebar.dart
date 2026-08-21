@@ -44,11 +44,18 @@ class NeonSidebar extends StatelessWidget {
       width: expanded ? 250 : 84,
       decoration: BoxDecoration(
         color: Neon.bgB,
+        border: const Border(
+            right: BorderSide(color: Color(0x1F252C3F), width: 1)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.4),
+            color: Colors.black.withValues(alpha: 0.45),
             offset: const Offset(6, 0),
-            blurRadius: 20,
+            blurRadius: 22,
+          ),
+          BoxShadow(
+            color: Neon.accent.withValues(alpha: 0.04),
+            offset: const Offset(1, 0),
+            blurRadius: 0,
           ),
         ],
       ),
@@ -106,7 +113,7 @@ class NeonSidebar extends StatelessWidget {
       Neon.accentGradient.createShader(bounds);
 }
 
-class _SidebarTile extends StatelessWidget {
+class _SidebarTile extends StatefulWidget {
   final RailDestination destination;
   final bool selected;
   final VoidCallback onTap;
@@ -118,44 +125,67 @@ class _SidebarTile extends StatelessWidget {
   });
 
   @override
+  State<_SidebarTile> createState() => _SidebarTileState();
+}
+
+class _SidebarTileState extends State<_SidebarTile> {
+  bool _hover = false;
+  @override
   Widget build(BuildContext context) {
-    final color = selected ? Neon.accent : Neon.inkSoft;
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        color: selected ? Neon.accent.withValues(alpha: 0.1) : Colors.transparent,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-        child: Row(
-          children: [
-            if (selected)
-              Container(
+    final selected = widget.selected;
+    final color = selected
+        ? Neon.accent
+        : (_hover ? Neon.ink : Neon.inkSoft);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: InkWell(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          color: selected
+              ? Neon.accent.withValues(alpha: 0.10)
+              : (_hover
+                  ? Colors.white.withValues(alpha: 0.04)
+                  : Colors.transparent),
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
                 width: 3,
-                height: 20,
-                margin: const EdgeInsets.only(right: 14),
+                height: selected ? 20 : (_hover ? 14 : 0),
+                margin: EdgeInsets.only(right: selected ? 14 : 14),
                 decoration: BoxDecoration(
                   gradient: Neon.accentGradient,
                   borderRadius: BorderRadius.circular(2),
+                  boxShadow: selected
+                      ? [
+                          BoxShadow(
+                              color: Neon.accent.withValues(alpha: 0.45),
+                              blurRadius: 8)
+                        ]
+                      : null,
                 ),
-              )
-            else
-              const SizedBox(width: 17),
-            Icon(
-              selected
-                  ? destination.selectedIcon ?? destination.icon
-                  : destination.icon,
-              size: 20,
-              color: color,
-            ),
-            const SizedBox(width: 12),
-            Text(
-              destination.label,
-              style: TextStyle(
-                color: selected ? Neon.accent : Neon.ink,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
               ),
-            ),
-          ],
+              Icon(
+                selected
+                    ? widget.destination.selectedIcon ?? widget.destination.icon
+                    : widget.destination.icon,
+                size: 20,
+                color: color,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                widget.destination.label,
+                style: TextStyle(
+                  color: selected ? Neon.accent : Neon.ink,
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

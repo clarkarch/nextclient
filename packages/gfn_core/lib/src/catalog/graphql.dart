@@ -54,6 +54,7 @@ fragment minimalGameFields on GameItem {
       HERO_IMAGE
     }
     title
+    genres
     itemMetadata {
       campaignIds
     }
@@ -228,6 +229,7 @@ fragment minimalGameFields on GameItem {
       KEY_ART
     }
     title
+    genres
     itemMetadata {
       campaignIds
     }

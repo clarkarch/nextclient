@@ -115,6 +115,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final all = _all;
     return NeonPageScaffold(
+      onRefresh: _load,
       header: _HomeTopBar(
         services: widget.services,
         onSignOut: widget.onSignOut,
@@ -146,7 +147,7 @@ class _HomePageState extends State<HomePage> {
           child: Padding(
             padding: const EdgeInsets.only(top: 40),
             child: SizedBox(
-              height: 320,
+              height: 340,
               child: NeonErrorView(message: _error!, onRetry: _load),
             ),
           ),
@@ -156,91 +157,112 @@ class _HomePageState extends State<HomePage> {
 
     return [
       if (featured.isNotEmpty) ...[
-        const SliverToBoxAdapter(child: SizedBox(height: 20)),
+        const SliverToBoxAdapter(child: SizedBox(height: 18)),
         SliverToBoxAdapter(
-          child: FeaturedCarousel(
-            slides: featured
-                .map(
-                  (g) => FeaturedSlide(
-                    title: g.title,
-                    subtitle: g.publisherName,
-                    imageUrl: g.marqueeImageUrl,
-                    chips: _slideChips(g),
-                    data: g,
-                  ),
-                )
-                .toList(),
-            onPlay: (s) => _play(s.data as CatalogGame),
-            onSelect: (s) => _openDetails(s.data as CatalogGame),
+          child: _FadeIn(
+            delay: const Duration(milliseconds: 60),
+            child: FeaturedCarousel(
+              slides: featured
+                  .map(
+                    (g) => FeaturedSlide(
+                      title: g.title,
+                      subtitle: g.publisherName,
+                      imageUrl: g.marqueeImageUrl,
+                      chips: _slideChips(g),
+                      data: g,
+                    ),
+                  )
+                  .toList(),
+              onPlay: (s) => _play(s.data as CatalogGame),
+              onSelect: (s) => _openDetails(s.data as CatalogGame),
+            ),
           ),
         ),
-        const SliverToBoxAdapter(child: SizedBox(height: 36)),
+        const SliverToBoxAdapter(child: SizedBox(height: 34)),
       ],
       if (recent.isNotEmpty) ...[
         SliverToBoxAdapter(
-          child: SectionHeader(
-            title: 'Recently Played',
-            actionLabel: 'See All',
-            onAction: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => RecentlyPlayedPage(
-                    services: widget.services,
-                    games: recent,
+          child: _FadeIn(
+            delay: const Duration(milliseconds: 140),
+            child: SectionHeader(
+              title: 'Recently Played',
+              actionLabel: 'See All',
+              onAction: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => RecentlyPlayedPage(
+                      services: widget.services,
+                      games: recent,
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
         SliverToBoxAdapter(
-          child: SizedBox(
-            height: 165,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: recent.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 16),
-              itemBuilder: (context, i) => SizedBox(
-                width: 220,
-                child: CatalogGameCard(
-                  game: recent[i],
-                  onTap: () => _openDetails(recent[i]),
+          child: _FadeIn(
+            delay: const Duration(milliseconds: 180),
+            child: SizedBox(
+              height: 175,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+                itemCount: recent.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 16),
+                itemBuilder: (context, i) => SizedBox(
+                  width: 224,
+                  child: _StaggeredCard(
+                    index: i,
+                    child: CatalogGameCard(
+                      game: recent[i],
+                      onTap: () => _openDetails(recent[i]),
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
         ),
-        const SliverToBoxAdapter(child: SizedBox(height: 36)),
+        const SliverToBoxAdapter(child: SizedBox(height: 34)),
       ],
-      const SliverToBoxAdapter(child: SectionHeader(title: 'All Games')),
+      SliverToBoxAdapter(
+        child: _FadeIn(
+          delay: const Duration(milliseconds: 220),
+          child: const SectionHeader(title: 'All Games'),
+        ),
+      ),
       if (games.isNotEmpty)
         SliverPadding(
           padding: const EdgeInsets.only(bottom: 32),
           sliver: GuardedSliverGrid(
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 210,
-              mainAxisExtent: 210 / 1.3,
-              mainAxisSpacing: 26,
+              mainAxisExtent: 184,
+              mainAxisSpacing: 22,
               crossAxisSpacing: 16,
             ),
             delegate: SliverChildBuilderDelegate((context, i) {
               final game = games[i];
-              return CatalogGameCard(
-                game: game,
-                onTap: () => _openDetails(game),
+              return _StaggeredCard(
+                index: i,
+                child: CatalogGameCard(
+                  game: game,
+                  onTap: () => _openDetails(game),
+                ),
               );
             }, childCount: games.length),
           ),
         ),
       if (games.isEmpty && !_loading)
-        const SliverToBoxAdapter(
+        SliverToBoxAdapter(
           child: Padding(
-            padding: EdgeInsets.all(40),
-            child: Center(
-              child: Text(
-                'No games available.',
-                style: TextStyle(color: Neon.inkMuted, fontSize: 13),
-              ),
+            padding: const EdgeInsets.all(40),
+            child: _EmptyIllustration(
+              icon: Icons.videogame_asset_outlined,
+              title: 'No games yet',
+              subtitle: 'Pull to refresh or check your connection.',
             ),
           ),
         ),
@@ -275,6 +297,143 @@ class _HomePageState extends State<HomePage> {
 
   void _play(CatalogGame game) {
     PlayFlow.launch(context, services: widget.services, game: game);
+  }
+}
+
+class _FadeIn extends StatefulWidget {
+  final Widget child;
+  final Duration delay;
+  const _FadeIn({required this.child, this.delay = Duration.zero});
+  @override
+  State<_FadeIn> createState() => _FadeInState();
+}
+
+class _FadeInState extends State<_FadeIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+  );
+  late final Animation<double> _opacity =
+      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.06),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(widget.delay, () {
+      if (mounted) _c.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+class _StaggeredCard extends StatefulWidget {
+  final int index;
+  final Widget child;
+  const _StaggeredCard({required this.index, required this.child});
+  @override
+  State<_StaggeredCard> createState() => _StaggeredCardState();
+}
+
+class _StaggeredCardState extends State<_StaggeredCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 480),
+  );
+  late final Animation<double> _opacity =
+      CurvedAnimation(parent: _c, curve: Curves.easeOut);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.08),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    final delay = Duration(milliseconds: (widget.index % 12) * 45);
+    Future.delayed(delay, () {
+      if (mounted) _c.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+class _EmptyIllustration extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _EmptyIllustration(
+      {required this.icon, required this.title, required this.subtitle});
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+        decoration: BoxDecoration(
+          color: Neon.bgC.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Neon.outlineSoft),
+          boxShadow: Neon.softShadow(radius: 20),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                gradient: Neon.accentGradient,
+                shape: BoxShape.circle,
+                boxShadow: Neon.glowShadow(radius: 16, alpha: 0.28),
+              ),
+              child: Icon(icon, color: Neon.bgA, size: 28),
+            ),
+            const SizedBox(height: 14),
+            Text(title,
+                style: const TextStyle(
+                    color: Neon.ink,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text(subtitle,
+                textAlign: TextAlign.center,
+                style:
+                    const TextStyle(color: Neon.inkMuted, fontSize: 12.5)),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -372,7 +531,7 @@ class _HomeTopBar extends StatelessWidget {
   }
 }
 
-class _TopIconButton extends StatelessWidget {
+class _TopIconButton extends StatefulWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
@@ -384,21 +543,54 @@ class _TopIconButton extends StatelessWidget {
   });
 
   @override
+  State<_TopIconButton> createState() => _TopIconButtonState();
+}
+
+class _TopIconButtonState extends State<_TopIconButton> {
+  bool _hover = false;
+  bool _pressed = false;
+  @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: const Color(0x0FFFFFFF),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Neon.outline),
+      message: widget.tooltip,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTap: widget.onTap,
+          child: AnimatedScale(
+            scale: _pressed ? 0.94 : (_hover ? 1.06 : 1),
+            duration: const Duration(milliseconds: 140),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: _hover
+                    ? Neon.accent.withValues(alpha: 0.12)
+                    : const Color(0x0FFFFFFF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _hover
+                      ? Neon.accent.withValues(alpha: 0.42)
+                      : Neon.outline,
+                ),
+                boxShadow: _hover
+                    ? [
+                        BoxShadow(
+                            color: Neon.accent.withValues(alpha: 0.18),
+                            blurRadius: 14)
+                      ]
+                    : null,
+              ),
+              child: Icon(widget.icon,
+                  size: 20,
+                  color: _hover ? Neon.accent : Neon.inkSoft),
+            ),
           ),
-          child: Icon(icon, size: 20, color: Neon.inkSoft),
         ),
       ),
     );

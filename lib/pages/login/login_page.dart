@@ -83,112 +83,267 @@ class _LoginPageState extends State<LoginPage> {
             valueListenable: BackgroundGlow.current,
             builder: (context, style, _) => NeonBackground(style: style),
           ),
+          // Floating neon orbs for extra depth — subtle, blurred
+          IgnorePointer(
+            child: Stack(
+              children: [
+                Positioned(
+                  top: -60,
+                  right: -40,
+                  child: Container(
+                    width: 280,
+                    height: 280,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          Neon.accent.withValues(alpha: 0.18),
+                          Colors.transparent
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  bottom: -80,
+                  left: -60,
+                  child: Container(
+                    width: 360,
+                    height: 360,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          Neon.violet.withValues(alpha: 0.14),
+                          Colors.transparent
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 380),
-                child: NeonCard(
-                  padding: const EdgeInsets.all(32),
-                  glow: true,
-                  radius: 24,
+                constraints: const BoxConstraints(maxWidth: 400),
+                child: _FancyLoginCard(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _Brand(),
+                      const _Brand(),
                       const SizedBox(height: 8),
                       const Text(
                         'GE FORCE NOW, but with neon',
                         textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Neon.inkMuted,
-                        fontSize: 12.5,
-                        letterSpacing: 1,
+                        style: TextStyle(
+                          color: Neon.inkMuted,
+                          fontSize: 12.5,
+                          letterSpacing: 1.1,
+                          height: 1.2,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 32),
-                    if (_error != null) ...[
-                      NeonChip(
-                        label: _error!,
-                        tone: NeonChipTone.error,
-                        filled: true,
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    NeonButton(
-                      label: 'Sign in',
-                      icon: Icons.lock_open,
-                      wide: true,
-                      busy: _busy,
-                      onPressed: _loginBrowser,
-                    ),
-                    const SizedBox(height: 12),
-                    NeonOutlineButton(
-                      label: 'Device-code login',
-                      icon: Icons.qr_code,
-                      onPressed: _busy ? null : _startQr,
-                    ),
-                    const SizedBox(height: 20),
-                    const Row(
-                      children: [
-                        Expanded(child: Divider()),
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 12),
-                          child: Text(
-                            'NVIDIA GeForce NOW account required',
-                            style: TextStyle(color: Neon.inkMuted, fontSize: 10.5),
+                      const SizedBox(height: 28),
+                      if (_error != null) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Neon.error.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: Neon.error.withValues(alpha: 0.38)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.error_outline,
+                                  size: 16, color: Neon.error),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _error!,
+                                  style: const TextStyle(
+                                      color: Neon.error, fontSize: 12),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Expanded(child: Divider()),
+                        const SizedBox(height: 16),
                       ],
-                    ),
-                    const SizedBox(height: 12),
-                    const _ThirdPartyDisclaimer(),
-                  ],
+                      NeonButton(
+                        label: 'Sign in',
+                        icon: Icons.lock_open,
+                        wide: true,
+                        busy: _busy,
+                        onPressed: _loginBrowser,
+                      ),
+                      const SizedBox(height: 12),
+                      NeonOutlineButton(
+                        label: 'Device-code login',
+                        icon: Icons.qr_code,
+                        onPressed: _busy ? null : _startQr,
+                      ),
+                      const SizedBox(height: 22),
+                      Row(
+                        children: [
+                          Expanded(
+                              child: Container(
+                                  height: 1,
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        Colors.transparent,
+                                        Neon.outlineSoft
+                                      ],
+                                    ),
+                                  ))),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'NVIDIA GeForce NOW account required',
+                              style: TextStyle(
+                                  color: Neon.inkMuted, fontSize: 10.5),
+                            ),
+                          ),
+                          Expanded(
+                              child: Container(
+                                  height: 1,
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        Neon.outlineSoft,
+                                        Colors.transparent
+                                      ],
+                                    ),
+                                  ))),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      const _ThirdPartyDisclaimer(),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+       ),
+    );
+  }
+}
+
+class _FancyLoginCard extends StatelessWidget {
+  final Widget child;
+  const _FancyLoginCard({required this.child});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: Neon.bgC.withValues(alpha: 0.86),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Neon.outline.withValues(alpha: 0.9)),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.5),
+              blurRadius: 28,
+              offset: const Offset(0, 12)),
+          BoxShadow(
+              color: Neon.accent.withValues(alpha: 0.14),
+              blurRadius: 32,
+              offset: const Offset(0, 0)),
+        ],
+      ),
+      child: child,
+    );
+  }
+}
+
+class _Brand extends StatefulWidget {
+  const _Brand({super.key});
+  @override
+  State<_Brand> createState() => _BrandState();
+}
+
+class _BrandState extends State<_Brand>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2200),
+  )..repeat(reverse: true);
+  late final Animation<double> _glow = Tween<double>(begin: 0.42, end: 0.62)
+      .animate(CurvedAnimation(parent: _c, curve: Curves.easeInOut));
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        AnimatedBuilder(
+          animation: _glow,
+          builder: (context, _) => Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              gradient: Neon.accentGradient,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                    color: Neon.accent.withValues(alpha: _glow.value),
+                    blurRadius: 28,
+                    spreadRadius: 1),
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    blurRadius: 14,
+                    offset: const Offset(0, 6)),
+              ],
+            ),
+            child: const Center(
+              child: Text(
+                'N',
+                style: TextStyle(
+                  color: Neon.bgA,
+                  fontSize: 32,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
                 ),
               ),
             ),
           ),
         ),
-      ],
-      ),
-    );
-  }
-}
-
-class _Brand extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          width: 64,
-          height: 64,
-          decoration: BoxDecoration(
-            gradient: Neon.accentGradient,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: Neon.glowShadow(radius: 24, alpha: 0.5),
-          ),
-          child: const Center(
-            child: Text(
-              'N',
-              style: TextStyle(
-                color: Neon.bgA,
-                fontSize: 30,
-                fontWeight: FontWeight.w900,
-              ),
+        const SizedBox(height: 18),
+        ShaderMask(
+          shaderCallback: (b) => Neon.accentGradient.createShader(b),
+          child: const Text(
+            'NEXTCLIENT',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 4.5,
             ),
           ),
         ),
-        const SizedBox(height: 18),
-        const Text(
-          'NEXTCLIENT',
-          style: TextStyle(
-            color: Neon.ink,
-            fontSize: 28,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 4,
+        const SizedBox(height: 4),
+        Container(
+          width: 56,
+          height: 3,
+          decoration: BoxDecoration(
+            gradient: Neon.accentGradient,
+            borderRadius: BorderRadius.circular(2),
+            boxShadow: [
+              BoxShadow(
+                  color: Neon.accent.withValues(alpha: 0.45), blurRadius: 8)
+            ],
           ),
         ),
       ],

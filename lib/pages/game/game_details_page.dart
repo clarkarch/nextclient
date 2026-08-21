@@ -114,67 +114,95 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
   Widget _hero() {
     final details = _details;
     final heroUrl = details?.heroImageUrl ?? widget.game.imageUrl;
-    return Stack(
-      children: [
-        Container(
-          decoration: BoxDecoration(
-            borderRadius: const BorderRadius.all(Radius.circular(22)),
-            boxShadow: Neon.softShadow(radius: 30),
-          ),
-          child: GameArt(
-            imageUrl: heroUrl,
-            label: widget.game.title,
-            borderRadius: const BorderRadius.all(Radius.circular(22)),
-          ),
-        ),
-        Positioned(
-          left: 20,
-          right: 20,
-          bottom: 16,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.game.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Neon.ink,
-                        fontSize: 30,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.3,
-                        shadows: [Shadow(color: Colors.black, blurRadius: 14)],
-                      ),
-                    ),
-                    if (widget.game.publisherName != null)
-                      Text(
-                        widget.game.publisherName!,
-                        style: const TextStyle(
-                          color: Neon.inkSoft,
-                          fontSize: 13,
-                          shadows: [Shadow(color: Colors.black, blurRadius: 8)],
+    final heroTag = widget.game.imageUrl != null && widget.game.imageUrl!.isNotEmpty
+        ? 'game-art:${widget.game.imageUrl}'
+        : 'game-art:${widget.game.title}';
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Neon.outline.withValues(alpha: 0.55)),
+        boxShadow: Neon.softShadow(radius: 24),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(23),
+        child: Stack(
+          children: [
+            Hero(
+              tag: heroTag,
+              child: GameArt(
+                imageUrl: heroUrl,
+                label: widget.game.title,
+                borderRadius: BorderRadius.zero,
+              ),
+            ),
+            // Bottom scrim for title legibility
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(gradient: Neon.scrim),
+              ),
+            ),
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 16,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          widget.game.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 0.3,
+                            height: 1.05,
+                            shadows: [
+                              Shadow(color: Colors.black, blurRadius: 14),
+                            ],
+                          ),
                         ),
-                      ),
-                  ],
-                ),
+                        if (widget.game.publisherName != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            widget.game.publisherName!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Neon.inkSoft,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              shadows: [
+                                Shadow(color: Colors.black, blurRadius: 8)
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  NeonButton(
+                    label: 'Play',
+                    icon: Icons.play_arrow,
+                    onPressed: () => PlayFlow.launch(
+                      context,
+                      services: widget.services,
+                      game: widget.game,
+                    ),
+                  ),
+                ],
               ),
-              NeonButton(
-                label: 'Play',
-                icon: Icons.play_arrow,
-                onPressed: () => PlayFlow.launch(
-                  context,
-                  services: widget.services,
-                  game: widget.game,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -217,45 +245,257 @@ class _GameDetailsPageState extends State<GameDetailsPage> {
           _InlineError(message: _error!, onRetry: _load),
           const SizedBox(height: 16),
         ],
-        if (chips.isNotEmpty) Wrap(spacing: 8, runSpacing: 8, children: chips),
+        if (chips.isNotEmpty)
+          _FadeIn(
+            delay: const Duration(milliseconds: 140),
+            child: Wrap(spacing: 8, runSpacing: 8, children: chips),
+          ),
         if (details != null && details.screenshots.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          const Text(
-            'SCREENSHOTS',
-            style: TextStyle(
-              color: Neon.ink,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 2.2,
+          const SizedBox(height: 26),
+          _FadeIn(
+            delay: const Duration(milliseconds: 200),
+            child: Row(
+              children: [
+                const Text(
+                  'SCREENSHOTS',
+                  style: TextStyle(
+                    color: Neon.ink,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 2.4,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Container(
+                    height: 1,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Neon.accent.withValues(alpha: 0.35),
+                          Colors.transparent
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 14),
-          SizedBox(
-            height: 170,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: details.screenshots.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (context, i) => SizedBox(
-                width: 300,
-                child: GameArt(
-                  imageUrl: details.screenshots[i],
-                  borderRadius: const BorderRadius.all(Radius.circular(14)),
+          _FadeIn(
+            delay: const Duration(milliseconds: 260),
+            child: SizedBox(
+              height: 176,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                itemCount: details.screenshots.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 14),
+                itemBuilder: (context, i) => _ScreenshotCard(
+                  url: details.screenshots[i],
+                  index: i,
+                  onTap: () => _openScreenshot(
+                      context, details.screenshots, i),
                 ),
               ),
             ),
           ),
         ],
-        const SizedBox(height: 24),
-        Text(
-          description,
-          style: const TextStyle(
-            color: Neon.inkSoft,
-            fontSize: 14,
-            height: 1.6,
+        const SizedBox(height: 26),
+        _FadeIn(
+          delay: const Duration(milliseconds: 320),
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Neon.bgC.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Neon.outlineSoft),
+              boxShadow: Neon.softShadow(radius: 16),
+            ),
+            child: Text(
+              description,
+              style: const TextStyle(
+                color: Neon.inkSoft,
+                fontSize: 14,
+                height: 1.65,
+              ),
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  void _openScreenshot(
+      BuildContext context, List<String> urls, int initial) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.88),
+      builder: (_) => _ScreenshotLightbox(urls: urls, initial: initial),
+    );
+  }
+}
+
+class _FadeIn extends StatefulWidget {
+  final Widget child;
+  final Duration delay;
+  const _FadeIn({required this.child, this.delay = Duration.zero});
+  @override
+  State<_FadeIn> createState() => _FadeInState();
+}
+
+class _FadeInState extends State<_FadeIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+  );
+  late final Animation<double> _opacity =
+      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.06),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(widget.delay, () {
+      if (mounted) _c.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+class _ScreenshotCard extends StatefulWidget {
+  final String url;
+  final int index;
+  final VoidCallback onTap;
+  const _ScreenshotCard(
+      {required this.url, required this.index, required this.onTap});
+  @override
+  State<_ScreenshotCard> createState() => _ScreenshotCardState();
+}
+
+class _ScreenshotCardState extends State<_ScreenshotCard> {
+  bool _hover = false;
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _hover ? 1.03 : 1,
+          duration: const Duration(milliseconds: 180),
+          child: Container(
+            width: 300,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: _hover
+                    ? Neon.accent.withValues(alpha: 0.45)
+                    : Neon.outline.withValues(alpha: 0.6),
+              ),
+              boxShadow: _hover
+                  ? Neon.glowShadow(radius: 18, alpha: 0.28)
+                  : Neon.softShadow(radius: 14),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(15),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  GameArt(
+                    imageUrl: widget.url,
+                    borderRadius: BorderRadius.zero,
+                    cacheWidth: 900,
+                  ),
+                  if (_hover)
+                    Container(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      child: const Center(
+                        child: Icon(Icons.zoom_in,
+                            color: Colors.white, size: 28),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ScreenshotLightbox extends StatefulWidget {
+  final List<String> urls;
+  final int initial;
+  const _ScreenshotLightbox({required this.urls, required this.initial});
+  @override
+  State<_ScreenshotLightbox> createState() => _ScreenshotLightboxState();
+}
+
+class _ScreenshotLightboxState extends State<_ScreenshotLightbox> {
+  late final PageController _c = PageController(initialPage: widget.initial);
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).pop(),
+      child: Stack(
+        children: [
+          PageView.builder(
+            controller: _c,
+            itemCount: widget.urls.length,
+            itemBuilder: (context, i) => Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Image.network(
+                    widget.urls[i],
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 20,
+            right: 20,
+            child: IconButton(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.close, color: Colors.white, size: 28),
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.black.withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

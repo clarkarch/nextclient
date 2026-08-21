@@ -24,6 +24,7 @@ class CatalogGameCard extends StatelessWidget {
     return GameCard(
       title: game.title,
       subtitle: game.publisherName ?? game.shortName,
+      genres: game.genres,
       imageUrl: game.imageUrl,
       inLibrary: showOwnedBadge && game.isInLibrary,
       onTap: onTap,

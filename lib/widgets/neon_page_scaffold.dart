@@ -24,6 +24,10 @@ class NeonPageScaffold extends StatefulWidget {
   /// style explicitly if they need to override it.
   final BackgroundStyle? style;
 
+  /// Optional pull-to-refresh handler — wraps the scroll view with a
+  /// [RefreshIndicator] using neon accent colors.
+  final Future<void> Function()? onRefresh;
+
   const NeonPageScaffold({
     super.key,
     this.title,
@@ -37,6 +41,7 @@ class NeonPageScaffold extends StatefulWidget {
     this.scrollController,
     this.background,
     this.style,
+    this.onRefresh,
   }) : assert(child == null || slivers == null,
             'Provide either child or slivers, not both.');
 
@@ -55,6 +60,9 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
 
   @override
   void dispose() {
+    try {
+      _ownedController?.removeListener(_onScroll);
+    } catch (_) {}
     _ownedController?.dispose();
     super.dispose();
   }
@@ -77,7 +85,36 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
     );
   }
 
+  // Tracks scroll offset to fade the top hairline glow.
+  double _scrollOffset = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _controller.addListener(_onScroll);
+    });
+  }
+
+  void _onScroll() {
+    if (!mounted) return;
+    final offset = _controller.hasClients ? _controller.offset : 0.0;
+    if ((offset - _scrollOffset).abs() > 1) {
+      setState(() => _scrollOffset = offset);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant NeonPageScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController?.removeListener(_onScroll);
+      _controller.addListener(_onScroll);
+    }
+  }
+
   Widget _decorated(BackgroundStyle style) {
+    final showTopGlow = _scrollOffset > 4;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -99,12 +136,67 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
                   title: widget.title,
                   showBack: widget.showBack,
                   actions: widget.actions ?? const [],
+                  scrolled: showTopGlow,
                 ),
+              // Animated top hairline — glows when scrolled
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                height: 1,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: showTopGlow
+                        ? [
+                            Neon.accent.withValues(alpha: 0.0),
+                            Neon.accent.withValues(alpha: 0.28),
+                            Neon.accent.withValues(alpha: 0.0),
+                          ]
+                        : [
+                            Colors.transparent,
+                            Colors.transparent,
+                          ],
+                  ),
+                ),
+              ),
               Expanded(
-                child: Scrollbar(
-                  controller: _controller,
-                  thumbVisibility: true,
-                  child: _scrollView(),
+                child: Stack(
+                  children: [
+                    Scrollbar(
+                      controller: _controller,
+                      thumbVisibility: false,
+                      thickness: 4,
+                      radius: const Radius.circular(8),
+                      interactive: true,
+                      child: widget.onRefresh == null
+                          ? _scrollView()
+                          : RefreshIndicator(
+                              onRefresh: widget.onRefresh!,
+                              color: Neon.accent,
+                              backgroundColor: Neon.bgC,
+                              child: _scrollView(),
+                            ),
+                    ),
+                    // Bottom fade — hints there's more to scroll
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 40,
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.bottomCenter,
+                              end: Alignment.topCenter,
+                              colors: [
+                                Neon.bgA.withValues(alpha: 0.55),
+                                const Color(0x0008080D),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -118,6 +210,8 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
     if (widget.slivers != null) {
       return CustomScrollView(
         controller: _controller,
+        physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics()),
         slivers: [
           for (final sliver in widget.slivers!)
             SliverPadding(padding: widget.sliverPadding, sliver: sliver),
@@ -126,6 +220,8 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
     }
     return SingleChildScrollView(
       controller: _controller,
+      physics:
+          const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
       padding: widget.padding,
       child: widget.child,
     );
@@ -136,18 +232,30 @@ class _TopBar extends StatelessWidget {
   final String? title;
   final bool showBack;
   final List<Widget> actions;
+  final bool scrolled;
 
   const _TopBar({
     required this.title,
     required this.showBack,
     required this.actions,
+    this.scrolled = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: scrolled
+            ? Neon.bgB.withValues(alpha: 0.72)
+            : Colors.transparent,
+        border: scrolled
+            ? const Border(
+                bottom: BorderSide(color: Color(0x1A252C3F), width: 1))
+            : null,
+      ),
       child: Row(
         children: [
           if (showBack) ...[
@@ -165,6 +273,7 @@ class _TopBar extends StatelessWidget {
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.3,
+                shadows: [Shadow(color: Colors.black, blurRadius: 8)],
               ),
             ),
           const Spacer(),
@@ -176,25 +285,52 @@ class _TopBar extends StatelessWidget {
 }
 
 /// Circular ghost icon button used across bars.
-class _RoundIconButton extends StatelessWidget {
+class _RoundIconButton extends StatefulWidget {
   final IconData icon;
   final VoidCallback onTap;
 
   const _RoundIconButton({required this.icon, required this.onTap});
 
   @override
+  State<_RoundIconButton> createState() => _RoundIconButtonState();
+}
+
+class _RoundIconButtonState extends State<_RoundIconButton> {
+  bool _hover = false;
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: const Color(0x0FFFFFFF),
-          borderRadius: BorderRadius.circular(12),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: _hover
+                ? Neon.accent.withValues(alpha: 0.10)
+                : const Color(0x0FFFFFFF),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _hover
+                  ? Neon.accent.withValues(alpha: 0.38)
+                  : Neon.outline.withValues(alpha: 0.55),
+            ),
+            boxShadow: _hover
+                ? [
+                    BoxShadow(
+                        color: Neon.accent.withValues(alpha: 0.18),
+                        blurRadius: 12)
+                  ]
+                : null,
+          ),
+          child: Icon(widget.icon,
+              size: 20,
+              color: _hover ? Neon.accent : Neon.inkSoft),
         ),
-        child: Icon(icon, size: 20, color: Neon.inkSoft),
       ),
     );
   }

@@ -4,7 +4,6 @@ import 'package:gfn_core/gfn_core.dart';
 import '../../main.dart';
 import '../../state/title_bar_controller.dart';
 import '../../theme/neon.dart';
-import '../../widgets/neon_card.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/neon_snackbar.dart';
@@ -48,21 +47,36 @@ class SettingsPage extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SectionHeader(
-                title: 'Settings',
-                actionLabel: 'Reset',
-                onAction: () => _confirmReset(context),
+              _FadeIn(
+                delay: const Duration(milliseconds: 40),
+                child: SectionHeader(
+                  title: 'Settings',
+                  actionLabel: 'Reset',
+                  onAction: () => _confirmReset(context),
+                ),
               ),
-              _advancedToggleCard(),
+              _FadeIn(
+                delay: const Duration(milliseconds: 110),
+                child: _advancedToggleCard(),
+              ),
               const SizedBox(height: 14),
               // Main settings are always visible; the Advanced Settings section
               // the toggle reveals holds the lower-level categories.
-              _mainSettingsCard(context),
+              _FadeIn(
+                delay: const Duration(milliseconds: 170),
+                child: _mainSettingsCard(context),
+              ),
               if (advanced) ...[
-                const SizedBox(height: 20),
-                const _GroupLabel('ADVANCED SETTINGS'),
-                const SizedBox(height: 6),
-                _advancedSettingsCard(context),
+                const SizedBox(height: 22),
+                const _FadeIn(
+                  delay: Duration(milliseconds: 220),
+                  child: _GroupLabel('ADVANCED SETTINGS'),
+                ),
+                const SizedBox(height: 8),
+                _FadeIn(
+                  delay: const Duration(milliseconds: 260),
+                  child: _advancedSettingsCard(context),
+                ),
               ],
             ],
           );
@@ -72,8 +86,8 @@ class SettingsPage extends StatelessWidget {
   }
 
   Widget _advancedToggleCard() {
-    return NeonCard(
-      padding: EdgeInsets.zero,
+    return _FancyCard(
+      glow: services.settings.advancedMode,
       child: NeonSettingTile(
         icon: Icons.tune,
         title: 'Advanced Settings',
@@ -89,8 +103,7 @@ class SettingsPage extends StatelessWidget {
   /// Always-visible settings: the stream server options, account, and the
   /// UI category (kept on the main view since it's a day-to-day preference).
   Widget _mainSettingsCard(BuildContext context) {
-    return NeonCard(
-      padding: EdgeInsets.zero,
+    return _FancyCard(
       child: Column(
         children: [
           NeonSettingTile(
@@ -143,28 +156,76 @@ class SettingsPage extends StatelessWidget {
   Future<void> _confirmReset(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: Neon.bgB,
-        surfaceTintColor: Colors.transparent,
-        title: const Text(
-          'Reset all settings?',
-          style: TextStyle(color: Neon.ink, fontSize: 16),
-        ),
-        content: const Text(
-          'This restores every setting to its default value. Your account '
-          'stays signed in. This cannot be undone.',
-          style: TextStyle(color: Neon.inkSoft, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: Neon.inkSoft)),
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(24),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Neon.bgB,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Neon.outline),
+            boxShadow: Neon.glowShadow(radius: 22, alpha: 0.22),
           ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Reset', style: TextStyle(color: Neon.error)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Neon.error.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: Neon.error.withValues(alpha: 0.35)),
+                    ),
+                    child:
+                        const Icon(Icons.warning_amber, color: Neon.error, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Reset all settings?',
+                    style: TextStyle(
+                        color: Neon.ink,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'This restores every setting to its default value. Your account '
+                'stays signed in. This cannot be undone.',
+                style: TextStyle(color: Neon.inkSoft, fontSize: 13, height: 1.45),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('Cancel',
+                        style: TextStyle(color: Neon.inkSoft)),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      backgroundColor: Neon.error.withValues(alpha: 0.12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: () => Navigator.of(dialogContext).pop(true),
+                    child:
+                        const Text('Reset', style: TextStyle(color: Neon.error)),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
     if (confirmed != true || !context.mounted) return;
@@ -189,8 +250,7 @@ class SettingsPage extends StatelessWidget {
   /// Debug). Experimental options now live inside their own pages, marked with
   /// an EXPERIMENTAL tag instead of a separate category.
   Widget _advancedSettingsCard(BuildContext context) {
-    return NeonCard(
-      padding: EdgeInsets.zero,
+    return _FancyCard(
       child: Column(
         children: [
           NeonSettingTile(
@@ -252,6 +312,97 @@ class SettingsPage extends StatelessWidget {
     final s = services.settings;
     if (s.maxPerformanceMode) return 'Max performance · ENGAGED';
     return 'Verbose logs: ${s.logsEnabled ? 'on' : 'off'}';
+  }
+}
+
+class _FancyCard extends StatelessWidget {
+  final Widget child;
+  final bool glow;
+  const _FancyCard({required this.child, this.glow = false});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Neon.bgC.withValues(alpha: 0.84),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: glow
+                ? Neon.accent.withValues(alpha: 0.38)
+                : Neon.outline.withValues(alpha: 0.9)),
+        boxShadow: glow
+            ? Neon.glowShadow(radius: 18, alpha: 0.24)
+            : Neon.softShadow(radius: 18),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(15),
+        child: Column(
+          children: [
+            // Top hairline sheen
+            Container(
+              height: 1,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: glow
+                      ? [
+                          Neon.accent.withValues(alpha: 0.0),
+                          Neon.accent.withValues(alpha: 0.35),
+                          Colors.transparent
+                        ]
+                      : [
+                          Colors.white.withValues(alpha: 0.06),
+                          Colors.transparent
+                        ],
+                ),
+              ),
+            ),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FadeIn extends StatefulWidget {
+  final Widget child;
+  final Duration delay;
+  const _FadeIn({required this.child, this.delay = Duration.zero});
+  @override
+  State<_FadeIn> createState() => _FadeInState();
+}
+
+class _FadeInState extends State<_FadeIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 480),
+  );
+  late final Animation<double> _opacity =
+      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.05),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _c, curve: Curves.easeOutCubic));
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(widget.delay, () {
+      if (mounted) _c.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
   }
 }
 

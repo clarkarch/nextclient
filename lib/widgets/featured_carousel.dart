@@ -43,7 +43,7 @@ class FeaturedSlide {
 }
 
 class _FeaturedCarouselState extends State<FeaturedCarousel> {
-  final PageController _controller = PageController(viewportFraction: 0.92);
+  final PageController _controller = PageController(viewportFraction: 0.88);
   int _index = 0;
   Timer? _timer;
 
@@ -83,8 +83,8 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
     if (!mounted || !_controller.hasClients) return;
     _controller.animateToPage(
       index,
-      duration: const Duration(milliseconds: 700),
-      curve: Curves.easeInOutCubic,
+      duration: const Duration(milliseconds: 720),
+      curve: Curves.easeInOutCubicEmphasized,
     );
   }
 
@@ -98,39 +98,47 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         // Banner height: 16:9 ratio capped so it never dominates the screen.
-        final height = (width * 9 / 16).clamp(260.0, 460.0);
+        final height = (width * 9 / 16).clamp(250.0, 420.0);
         return Column(
           children: [
             SizedBox(
               height: height,
               child: PageView.builder(
                 controller: _controller,
+                padEnds: false,
+                clipBehavior: Clip.none,
                 itemCount: slides.length,
                 onPageChanged: (i) {
                   setState(() => _index = i);
                   _startTimer();
                 },
                 itemBuilder: (context, i) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: _Slide(
-                    slide: slides[i],
-                    onPlay: widget.onPlay == null
-                        ? null
-                        : () => widget.onPlay!(slides[i]),
-                    onSelect: widget.onSelect == null
-                        ? null
-                        : () => widget.onSelect!(slides[i]),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: _ParallaxSlide(
+                    controller: _controller,
+                    index: i,
+                    child: _Slide(
+                      slide: slides[i],
+                      isActive: i == _index,
+                      onPlay: widget.onPlay == null
+                          ? null
+                          : () => widget.onPlay!(slides[i]),
+                      onSelect: widget.onSelect == null
+                          ? null
+                          : () => widget.onSelect!(slides[i]),
+                    ),
                   ),
                 ),
               ),
             ),
             if (slides.length > 1)
               Padding(
-                padding: const EdgeInsets.only(top: 14),
+                padding: const EdgeInsets.only(top: 16),
                 child: _PagerDots(
                   count: slides.length,
                   index: _index,
                   onTap: _goToPage,
+                  autoAdvance: widget.autoAdvance,
                 ),
               ),
           ],
@@ -140,14 +148,61 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
   }
 }
 
+class _ParallaxSlide extends StatelessWidget {
+  final PageController controller;
+  final int index;
+  final Widget child;
+
+  const _ParallaxSlide(
+      {required this.controller, required this.index, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        double delta = 0;
+        if (controller.hasClients && controller.position.hasContentDimensions) {
+          final page = controller.page ?? controller.initialPage.toDouble();
+          delta = (page - index).clamp(-1.0, 1.0).toDouble();
+        } else if (controller.hasClients) {
+          delta = 0;
+        }
+        final absDelta = delta.abs();
+        final scale = 1 - absDelta * 0.05;
+        final opacity = 1 - absDelta * 0.12;
+        return Transform.scale(
+          scale: scale,
+          child: Opacity(
+            opacity: opacity.clamp(0.78, 1.0),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: Neon.softShadow(radius: 18 + (1 - absDelta) * 6),
+              ),
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// Animated pager indicator: the active dot grows into a pill; solid colors
-/// lerp smoothly so there's no teleporting.
+/// lerp smoothly so there's no teleporting. Includes a subtle auto-advance
+/// progress shimmer on the active pill.
 class _PagerDots extends StatelessWidget {
   final int count;
   final int index;
   final ValueChanged<int>? onTap;
+  final Duration autoAdvance;
 
-  const _PagerDots({required this.count, required this.index, this.onTap});
+  const _PagerDots(
+      {required this.count,
+      required this.index,
+      this.onTap,
+      this.autoAdvance = const Duration(seconds: 6)});
 
   @override
   Widget build(BuildContext context) {
@@ -159,11 +214,11 @@ class _PagerDots extends StatelessWidget {
             onTap: onTap == null ? null : () => onTap!(i),
             behavior: HitTestBehavior.opaque,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 300),
+                duration: const Duration(milliseconds: 280),
                 curve: Curves.easeOutCubic,
-                width: i == index ? 24 : 6,
+                width: i == index ? 22 : 6,
                 height: 6,
                 decoration: BoxDecoration(
                   color: i == index ? Neon.accent : const Color(0x33FFFFFF),
@@ -181,80 +236,84 @@ class _Slide extends StatelessWidget {
   final FeaturedSlide slide;
   final VoidCallback? onPlay;
   final VoidCallback? onSelect;
+  final bool isActive;
 
-  const _Slide({required this.slide, this.onPlay, this.onSelect});
+  const _Slide(
+      {required this.slide, this.onPlay, this.onSelect, this.isActive = true});
 
   @override
   Widget build(BuildContext context) {
+    // No glow/border when inactive — clean, flat card. Keeps the design
+    // calm per user request to remove glow/shining animations.
     return GestureDetector(
       onTap: onSelect,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: Neon.softShadow(radius: 26),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              _CoverImage(url: slide.imageUrl, label: slide.title),
-              DecoratedBox(
-                decoration: BoxDecoration(gradient: Neon.scrim),
-                child: Align(
-                  alignment: Alignment.bottomLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.all(22),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (slide.chips != null && slide.chips!.isNotEmpty)
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 6,
-                              children: slide.chips!,
-                            ),
-                          const SizedBox(height: 8),
-                          Text(
-                            slide.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Neon.ink,
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.3,
-                              shadows: [
-                                Shadow(color: Colors.black, blurRadius: 12),
-                              ],
-                            ),
-                          ),
-                          if (slide.subtitle != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              slide.subtitle!,
-                              style: const TextStyle(
-                                color: Neon.inkSoft,
-                                fontSize: 13,
-                                shadows: [
-                                  Shadow(color: Colors.black, blurRadius: 8),
-                                ],
-                              ),
-                            ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _CoverImage(url: slide.imageUrl, label: slide.title),
+            // Bottom scrim for legibility — no sheen/shimmer
+            DecoratedBox(
+              decoration: const BoxDecoration(gradient: Neon.scrim),
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (slide.chips != null && slide.chips!.isNotEmpty)
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: slide.chips!,
+                        ),
+                      const SizedBox(height: 8),
+                      Text(
+                        slide.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.25,
+                          height: 1.1,
+                          shadows: [
+                            Shadow(color: Colors.black, blurRadius: 12),
                           ],
-                          const SizedBox(height: 12),
-                          if (onPlay != null)
-                            NeonButton(label: 'Play', onPressed: onPlay),
-                        ],
+                        ),
                       ),
-                    ),
+                      if (slide.subtitle != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          slide.subtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Neon.inkSoft,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            shadows: [
+                              Shadow(color: Colors.black, blurRadius: 8),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      if (onPlay != null)
+                        NeonButton(
+                            label: 'Play',
+                            icon: Icons.play_arrow,
+                            onPressed: onPlay),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

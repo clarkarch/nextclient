@@ -7,11 +7,16 @@ import 'package:flutter/material.dart';
 /// *algorithm* used to paint it: how strong the glow is, where it sits, and
 /// whether it animates. [NeonBackground] renders each style.
 enum BackgroundStyle {
+  classic('Classic', animated: false),
   subtle('Subtle', animated: false),
-  glow('Bold glow', animated: false),
+  glow('Glow', animated: false),
   beams('Beams', animated: false),
+  horizon('Horizon', animated: false),
+  spotlight('Spotlight', animated: false),
+  veil('Veil', animated: false),
   pulse('Pulse', animated: true),
-  aurora('Aurora', animated: true);
+  aurora('Aurora', animated: true),
+  tide('Tide', animated: true);
 
   const BackgroundStyle(this.label, {required this.animated});
 
@@ -33,7 +38,8 @@ class BackgroundGlow {
 }
 
 /// The electric-blue accent used by every background style. The hue never
-/// changes; only how the glow is painted does.
+/// changes; only how the glow is painted does — all variants stay in the
+/// blue/cyan family per request (no violet/pink).
 const _electricBlue = Color(0xFF00D9FF);
 const _glowTransparent = Color(0x00000000);
 
@@ -85,63 +91,253 @@ class _NeonBackgroundState extends State<NeonBackground>
     super.dispose();
   }
 
+  bool get _isClassic => widget.style == BackgroundStyle.classic;
+
   @override
   Widget build(BuildContext context) {
+    // Classic: plain single gradient, no grid/shimmer/depth — exactly the
+    // original theme before the fancy pass.
+    if (_isClassic) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Neon.bgA),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.topLeft,
+                radius: 1.4,
+                colors: [Color(0x0F00D9FF), _glowTransparent],
+                stops: [0, 0.5],
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     return AnimatedBuilder(
       animation: _controller,
-      builder: (context, _) => DecoratedBox(
-        decoration: BoxDecoration(gradient: _gradient(_controller.value)),
-        child: const SizedBox.expand(),
+      builder: (context, _) => Stack(
+        fit: StackFit.expand,
+        children: [
+          // Base obsidian
+          const ColoredBox(color: Neon.bgA),
+          // Primary style layer
+          DecoratedBox(
+            decoration: BoxDecoration(gradient: _gradient(_controller.value)),
+          ),
+          // Fancy secondary depth layer — subtle violet/blue orbs that add
+          // depth without changing hue. Only visible on richer styles.
+          if (widget.style != BackgroundStyle.subtle)
+            DecoratedBox(
+              decoration: BoxDecoration(gradient: _depthGradient(_controller.value)),
+            ),
+          // Fine grid overlay — faint 24px lattice for tech texture
+          const _GridOverlay(),
+          // Soft vignette to frame content — keeps edges grounded
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.center,
+                radius: 1.2,
+                colors: [_glowTransparent, Color(0x6608080D)],
+                stops: [0.6, 1.0],
+              ),
+            ),
+          ),
+          // Animated shimmer sweep for beams/pulse/aurora/tide — diagonal specular
+          if (widget.style == BackgroundStyle.beams ||
+              widget.style == BackgroundStyle.pulse ||
+              widget.style == BackgroundStyle.aurora ||
+              widget.style == BackgroundStyle.tide)
+            _ShimmerSweep(t: _controller.value, style: widget.style),
+        ],
       ),
     );
   }
 
   /// Builds the gradient for the given style. [t] is 0..1 and only animates
-  /// the pulsing/drifting styles; static styles ignore it.
+  /// the pulsing/drifting styles; static styles ignore it. Every style stays
+  /// strictly electric-blue (no violet/pink) per user request.
   Gradient _gradient(double t) {
     return switch (widget.style) {
-      BackgroundStyle.subtle => const RadialGradient(
+      BackgroundStyle.classic => const RadialGradient(
           center: Alignment.topLeft,
           radius: 1.4,
           colors: [Color(0x0F00D9FF), _glowTransparent],
           stops: [0, 0.5],
         ),
-      BackgroundStyle.glow => RadialGradient(
+      BackgroundStyle.subtle => const RadialGradient(
           center: Alignment.topLeft,
-          radius: 1.2,
-          colors: [_electricBlue.withValues(alpha: 0.22), _glowTransparent],
-          stops: const [0, 0.55],
+          radius: 1.6,
+          colors: [Color(0x1400D9FF), _glowTransparent],
+          stops: [0, 0.55],
+        ),
+      BackgroundStyle.glow => RadialGradient(
+          center: const Alignment(-0.75, -0.55),
+          radius: 1.35,
+          colors: [
+            _electricBlue.withValues(alpha: 0.28),
+            _electricBlue.withValues(alpha: 0.10),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.35, 0.72],
         ),
       BackgroundStyle.beams => LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            _electricBlue.withValues(alpha: 0.14),
+            _electricBlue.withValues(alpha: 0.18),
             _glowTransparent,
-            _electricBlue.withValues(alpha: 0.08),
+            _electricBlue.withValues(alpha: 0.09),
+            _glowTransparent,
+            _electricBlue.withValues(alpha: 0.07),
+          ],
+          stops: const [0, 0.28, 0.52, 0.76, 1],
+        ),
+      BackgroundStyle.horizon => LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            _electricBlue.withValues(alpha: 0.22),
+            _electricBlue.withValues(alpha: 0.06),
+            _glowTransparent,
+            _electricBlue.withValues(alpha: 0.05),
+          ],
+          stops: const [0, 0.14, 0.32, 1],
+        ),
+      BackgroundStyle.spotlight => RadialGradient(
+          center: const Alignment(0, -0.9),
+          radius: 1.25,
+          colors: [
+            _electricBlue.withValues(alpha: 0.26),
+            _electricBlue.withValues(alpha: 0.11),
             _glowTransparent,
           ],
-          stops: const [0, 0.35, 0.6, 1],
+          stops: const [0, 0.38, 0.78],
+        ),
+      BackgroundStyle.veil => LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            _electricBlue.withValues(alpha: 0.10),
+            _glowTransparent,
+            _electricBlue.withValues(alpha: 0.04),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.38, 0.62, 1],
         ),
       BackgroundStyle.pulse => RadialGradient(
-          center: Alignment.topLeft,
-          radius: 1.2,
+          center: const Alignment(-0.7, -0.6),
+          radius: 1.35,
           colors: [
-            _electricBlue.withValues(alpha: 0.10 + 0.12 * _wave(t)),
+            _electricBlue.withValues(alpha: 0.14 + 0.14 * _wave(t)),
+            _electricBlue.withValues(alpha: 0.06 + 0.05 * _wave(t + 0.25)),
             _glowTransparent,
           ],
-          stops: const [0, 0.55],
+          stops: const [0, 0.42, 0.75],
         ),
       BackgroundStyle.aurora => RadialGradient(
-          center: Alignment(-0.9 + 0.4 * _drift(t), -1.0 + 0.3 * _drift(t + 0.5)),
-          radius: 1.6,
+          center: Alignment(-0.85 + 0.35 * _drift(t), -0.9 + 0.28 * _drift(t + 0.5)),
+          radius: 1.75,
           colors: [
-            _electricBlue.withValues(alpha: 0.16),
-            _electricBlue.withValues(alpha: 0.04),
+            _electricBlue.withValues(alpha: 0.20),
+            _electricBlue.withValues(alpha: 0.07),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.45, 1],
+        ),
+      BackgroundStyle.tide => RadialGradient(
+          center: Alignment(-0.2 + 0.45 * _drift(t), 0.95),
+          radius: 1.55,
+          colors: [
+            _electricBlue.withValues(alpha: 0.16 + 0.07 * _wave(t)),
+            _electricBlue.withValues(alpha: 0.05),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.48, 1],
+        ),
+    };
+  }
+
+  Gradient _depthGradient(double t) {
+    return switch (widget.style) {
+      BackgroundStyle.glow => RadialGradient(
+          center: const Alignment(0.9, 0.85),
+          radius: 1.2,
+          colors: [
+            _electricBlue.withValues(alpha: 0.07),
+            _glowTransparent,
+          ],
+          stops: const [0, 1],
+        ),
+      BackgroundStyle.beams => LinearGradient(
+          begin: Alignment.bottomLeft,
+          end: Alignment.topRight,
+          colors: [
+            _glowTransparent,
+            _electricBlue.withValues(alpha: 0.05),
             _glowTransparent,
           ],
           stops: const [0, 0.5, 1],
         ),
+      BackgroundStyle.horizon => RadialGradient(
+          center: const Alignment(0, 1.05),
+          radius: 1.1,
+          colors: [
+            _electricBlue.withValues(alpha: 0.06),
+            _glowTransparent,
+          ],
+          stops: const [0, 1],
+        ),
+      BackgroundStyle.spotlight => RadialGradient(
+          center: const Alignment(0.85, 0.85),
+          radius: 1.0,
+          colors: [
+            _electricBlue.withValues(alpha: 0.05),
+            _glowTransparent,
+          ],
+          stops: const [0, 1],
+        ),
+      BackgroundStyle.veil => LinearGradient(
+          begin: Alignment.bottomLeft,
+          end: Alignment.topRight,
+          colors: [
+            _glowTransparent,
+            _electricBlue.withValues(alpha: 0.04),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.55, 1],
+        ),
+      BackgroundStyle.pulse => RadialGradient(
+          center: Alignment(0.8, 0.9),
+          radius: 1.1,
+          colors: [
+            _electricBlue.withValues(alpha: 0.06 + 0.04 * _wave(t)),
+            _glowTransparent,
+          ],
+          stops: const [0, 1],
+        ),
+      BackgroundStyle.aurora => RadialGradient(
+          center: Alignment(0.85 + 0.15 * _drift(t + 0.3), 0.75),
+          radius: 1.4,
+          colors: [
+            _electricBlue.withValues(alpha: 0.07),
+            _electricBlue.withValues(alpha: 0.04),
+            _glowTransparent,
+          ],
+          stops: const [0, 0.6, 1],
+        ),
+      BackgroundStyle.tide => RadialGradient(
+          center: Alignment(0.2 + 0.3 * _drift(t + 0.2), -0.3),
+          radius: 1.3,
+          colors: [
+            _electricBlue.withValues(alpha: 0.05 + 0.03 * _wave(t)),
+            _glowTransparent,
+          ],
+          stops: const [0, 1],
+        ),
+      _ => const RadialGradient(colors: [_glowTransparent, _glowTransparent]),
     };
   }
 
@@ -150,6 +346,74 @@ class _NeonBackgroundState extends State<NeonBackground>
 
   /// Slow sinusoidal drift (-1..1) for the aurora style.
   double _drift(double t) => math.sin(t * 2 * math.pi);
+}
+
+class _GridOverlay extends StatelessWidget {
+  const _GridOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _GridPainter(),
+      size: Size.infinite,
+    );
+  }
+}
+
+class _GridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0x0AFFFFFF)
+      ..strokeWidth = 0.6
+      ..style = PaintingStyle.stroke;
+    const step = 28.0;
+    for (double x = 0; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+    // Faint horizontal glow line near top
+    final glow = Paint()
+      ..shader = LinearGradient(
+        colors: [_electricBlue.withValues(alpha: 0.0), _electricBlue.withValues(alpha: 0.08), _glowTransparent],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, 1))
+      ..strokeWidth = 1;
+    canvas.drawLine(Offset(0, size.height * 0.08), Offset(size.width, size.height * 0.08), glow);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _ShimmerSweep extends StatelessWidget {
+  final double t;
+  final BackgroundStyle style;
+
+  const _ShimmerSweep({required this.t, required this.style});
+
+  @override
+  Widget build(BuildContext context) {
+    // Slow diagonal sweep - only visible as faint specular highlight
+    final offset = (t * 1.6) % 1.6 - 0.3;
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment(-1.0 + offset * 2, -0.6),
+            end: Alignment(0.2 + offset * 2, 1.0),
+            colors: [
+              _glowTransparent,
+              _electricBlue.withValues(alpha: style == BackgroundStyle.aurora ? 0.06 : 0.04),
+              _glowTransparent,
+            ],
+            stops: const [0.42, 0.5, 0.58],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Neon Night palette — electric blue accent on layered obsidian.
@@ -161,7 +425,7 @@ class Neon {
   static const bgC = Color(0xFF12121C);
   static const card = Color(0xFF12121C);
   static const cardHover = Color(0xFF181826);
-  static const surfaceGlass = Color(0x66FFFFFF);
+  static const surfaceGlass = Color(0x0FFFFFFF);
 
   /// Subtle dark outline for cards, chips, and controls — a slate-blue hairline
   /// that sits naturally on the obsidian surfaces instead of a washed-out
@@ -188,16 +452,36 @@ class Neon {
     colors: [Color(0xFF00E5FF), Color(0xFF00A8CC)],
   );
 
+  static const violetGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF8B5CF6), Color(0xFF5B21B6)],
+  );
+
   static const heroGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [Color(0xFF00C4F0), Color(0xFF0079A3)],
   );
 
+  static const cardSheen = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0x14FFFFFF), Color(0x00000000), Color(0x0A00D9FF)],
+    stops: [0, 0.55, 1],
+  );
+
   static const scrim = LinearGradient(
     begin: Alignment.bottomCenter,
     end: Alignment.topCenter,
     colors: [Color(0xF008080D), Color(0x0008080D)],
+  );
+
+  static const scrimStrong = LinearGradient(
+    begin: Alignment.bottomCenter,
+    end: Alignment.topCenter,
+    colors: [Color(0xFF08080D), Color(0xCC08080D), Color(0x0008080D)],
+    stops: [0, 0.45, 1],
   );
 
   /// Layered soft shadow used by cards/panels.
@@ -231,6 +515,36 @@ class Neon {
       ),
     ];
   }
+
+  static List<BoxShadow> cardShadow({bool hover = false}) {
+    if (hover) return glowShadow(radius: 26, alpha: 0.38);
+    return [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.5),
+        offset: const Offset(0, 12),
+        blurRadius: 28,
+      ),
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.28),
+        offset: const Offset(0, 4),
+        blurRadius: 10,
+      ),
+      BoxShadow(
+        color: accent.withValues(alpha: 0.06),
+        offset: const Offset(0, 0),
+        blurRadius: 18,
+      ),
+    ];
+  }
+
+  static BoxDecoration glassCard({double radius = 16, bool glow = false}) {
+    return BoxDecoration(
+      color: const Color(0xFF12121C).withValues(alpha: 0.84),
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: const Color(0xFF252C3F).withValues(alpha: 0.9)),
+      boxShadow: glow ? glowShadow(radius: 20, alpha: 0.32) : softShadow(radius: 20),
+    );
+  }
 }
 
 ThemeData buildNeonTheme() {
@@ -261,9 +575,10 @@ ThemeData buildNeonTheme() {
   );
 
   return base.copyWith(
-    splashFactory: NoSplash.splashFactory,
-    highlightColor: Colors.transparent,
-    hoverColor: Colors.transparent,
+    splashFactory: InkSparkle.splashFactory,
+    splashColor: Neon.accent.withValues(alpha: 0.12),
+    highlightColor: Neon.accent.withValues(alpha: 0.06),
+    hoverColor: Neon.accent.withValues(alpha: 0.04),
     textTheme: base.textTheme
         .apply(
           bodyColor: Neon.ink,
