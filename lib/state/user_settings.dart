@@ -153,7 +153,7 @@ class UserSettings extends ChangeNotifier {
   DecoderBackend _decoderBackend = DecoderBackend.vaapi;
   RendererBackend _rendererBackend = RendererBackend.gl;
   VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
-  BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
+  BackgroundStyle _backgroundStyle = BackgroundStyle.circuit;
   double _uiScale = 1.0;
   bool _uiAnimations = true;
   bool _logsEnabled = false;
@@ -1207,7 +1207,7 @@ class UserSettings extends ChangeNotifier {
     _decoderBackend = DecoderBackend.vaapi;
     _rendererBackend = RendererBackend.gl;
     _videoShader = VideoShaderSettings.defaults;
-    _backgroundStyle = BackgroundStyle.beams;
+    _backgroundStyle = BackgroundStyle.circuit;
     _uiScale = 1.0;
     _uiAnimations = true;
     _logsEnabled = false;

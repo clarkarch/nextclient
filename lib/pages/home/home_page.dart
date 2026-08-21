@@ -489,12 +489,6 @@ class _HomeTopBar extends StatelessWidget {
             ),
           const Spacer(),
           _TopIconButton(
-            icon: Icons.refresh,
-            tooltip: 'Refresh catalog',
-            onTap: onRefresh,
-          ),
-          const SizedBox(width: 8),
-          _TopIconButton(
             icon: Icons.search,
             tooltip: 'Search games',
             onTap: () {

@@ -42,7 +42,7 @@ class BackgroundGlow {
 
   /// The currently selected background style.
   static final ValueNotifier<BackgroundStyle> current = ValueNotifier(
-    BackgroundStyle.beams,
+    BackgroundStyle.circuit,
   );
 }
 

@@ -194,8 +194,6 @@ class _LibraryPageState extends State<LibraryPage> {
                       },
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  _FancyRefreshButton(onTap: _load),
                 ],
               ),
             ),
@@ -414,57 +412,6 @@ class _EmptyLibrary extends StatelessWidget {
               ),
             ],
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _FancyRefreshButton extends StatefulWidget {
-  final VoidCallback onTap;
-  const _FancyRefreshButton({required this.onTap});
-  @override
-  State<_FancyRefreshButton> createState() => _FancyRefreshButtonState();
-}
-
-class _FancyRefreshButtonState extends State<_FancyRefreshButton> {
-  bool _hover = false;
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: InkWell(
-        onTap: widget.onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: _hover
-                ? Neon.accent.withValues(alpha: 0.12)
-                : Neon.bgC.withValues(alpha: 0.9),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: _hover
-                  ? Neon.accent.withValues(alpha: 0.42)
-                  : Neon.outline,
-            ),
-            boxShadow: _hover
-                ? [
-                    BoxShadow(
-                      color: Neon.accent.withValues(alpha: 0.16),
-                      blurRadius: 12,
-                    ),
-                  ]
-                : null,
-          ),
-          child: Icon(
-            Icons.refresh,
-            size: 18,
-            color: _hover ? Neon.accent : Neon.inkSoft,
-          ),
         ),
       ),
     );
