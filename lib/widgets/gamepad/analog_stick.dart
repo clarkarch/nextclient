@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-import '../../theme/neon.dart';
+import '../../theme/controller_theme.dart';
 
 /// Callback type for analog stick drag events.
 /// Returns normalized offset where x and y range from -1.0 to 1.0.
@@ -11,7 +12,7 @@ typedef AnalogStickCallback = void Function(Offset normalizedOffset);
 ///
 /// The stick can be dragged within a circular boundary and reports normalized
 /// position values (-1.0 to 1.0) for both axes. Multi-touch safe: each stick
-/// latches its own pointer id.
+/// latches its own pointer id. Visuals come from the active [ControllerTheme].
 class AnalogStick extends StatefulWidget {
   /// Size of the analog stick base circle.
   final double size;
@@ -25,14 +26,23 @@ class AnalogStick extends StatefulWidget {
   /// Callback fired when the stick is released.
   final VoidCallback? onDragEnd;
 
-  /// Color of the stick base.
-  final Color baseColor;
+  /// Active controller look.
+  final ControllerTheme theme;
 
-  /// Color of the stick knob.
-  final Color knobColor;
+  /// Input dead zone as a fraction of full deflection (0.0–0.3). Movement
+  /// inside the zone reports (0,0); beyond it, output is rescaled so full
+  /// deflection still reaches exactly 1.0.
+  final double deadZone;
 
-  /// Primary glow color for active state.
-  final Color glowColor;
+  /// Whether to fire a light haptic pulse when the stick is grabbed.
+  final bool hapticsEnabled;
+
+  /// Whether grab visuals animate (false = instant snap).
+  final bool animationsEnabled;
+
+  /// Press/glow accent for this stick. Left and right sticks use different
+  /// theme accents so southpaw's swap is visible.
+  final Color? accentColor;
 
   const AnalogStick({
     super.key,
@@ -40,21 +50,53 @@ class AnalogStick extends StatefulWidget {
     this.knobSize = 50.0,
     this.onDrag,
     this.onDragEnd,
-    this.baseColor = const Color(0xFF14141F),
-    this.knobColor = const Color(0xFF2A2A3E),
-    this.glowColor = Neon.accent,
+    this.theme = ControllerThemes.neon,
+    this.deadZone = 0.0,
+    this.hapticsEnabled = false,
+    this.animationsEnabled = true,
+    this.accentColor,
   });
 
   @override
   State<AnalogStick> createState() => _AnalogStickState();
 }
 
-class _AnalogStickState extends State<AnalogStick> {
+class _AnalogStickState extends State<AnalogStick>
+    with SingleTickerProviderStateMixin {
   Offset _knobOffset = Offset.zero;
-  bool _isDragging = false;
 
   // Multi-touch: track which pointer is using this stick.
   int? _activePointerId;
+
+  late final AnimationController _grabCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _grabCtrl = AnimationController(
+      vsync: this,
+      duration: widget.animationsEnabled
+          ? const Duration(milliseconds: 110)
+          : Duration.zero,
+      value: 0,
+    )..addListener(() => setState(() {}));
+  }
+
+  @override
+  void didUpdateWidget(AnalogStick oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.animationsEnabled != oldWidget.animationsEnabled) {
+      _grabCtrl.duration = widget.animationsEnabled
+          ? const Duration(milliseconds: 110)
+          : Duration.zero;
+    }
+  }
+
+  @override
+  void dispose() {
+    _grabCtrl.dispose();
+    super.dispose();
+  }
 
   double get _maxRadius => (widget.size - widget.knobSize) / 2;
   Offset get _center => Offset(widget.size / 2, widget.size / 2);
@@ -63,6 +105,8 @@ class _AnalogStickState extends State<AnalogStick> {
     // Latch this pointer to this stick.
     if (_activePointerId != null) return;
     _activePointerId = event.pointer;
+    if (widget.hapticsEnabled) HapticFeedback.lightImpact();
+    _grabCtrl.forward();
     _handleTouch(event.localPosition);
   }
 
@@ -91,13 +135,22 @@ class _AnalogStickState extends State<AnalogStick> {
         ? rawOffset / distance * _maxRadius
         : rawOffset;
 
+    // Normalized output with dead-zone rescaling: inside the zone the stick
+    // reports (0,0); beyond it, values are stretched so full deflection
+    // still reaches exactly 1.0.
+    final magnitude = clampedOffset.distance / _maxRadius;
+    final dz = widget.deadZone.clamp(0.0, 0.9);
+    var normalizedX = 0.0;
+    var normalizedY = 0.0;
+    if (magnitude > dz) {
+      final rescaled = (magnitude - dz) / (1 - dz);
+      normalizedX = clampedOffset.dx / _maxRadius / magnitude * rescaled;
+      normalizedY = -clampedOffset.dy / _maxRadius / magnitude * rescaled;
+    }
+
     setState(() {
       _knobOffset = clampedOffset;
-      _isDragging = distance > (_maxRadius * 0.1); // 10% dead zone
     });
-
-    final normalizedX = clampedOffset.dx / _maxRadius;
-    final normalizedY = -clampedOffset.dy / _maxRadius; // Invert Y for game coords
 
     widget.onDrag?.call(Offset(normalizedX, normalizedY));
   }
@@ -105,9 +158,9 @@ class _AnalogStickState extends State<AnalogStick> {
   void _handleRelease() {
     setState(() {
       _knobOffset = Offset.zero;
-      _isDragging = false;
     });
-    // Immediately send (0,0) — no animation delay for logical output.
+    // Input snaps home instantly above; the knob visual eases back.
+    _grabCtrl.reverse();
     widget.onDrag?.call(Offset.zero);
     widget.onDragEnd?.call();
   }
@@ -124,13 +177,12 @@ class _AnalogStickState extends State<AnalogStick> {
         height: widget.size,
         child: CustomPaint(
           painter: _AnalogStickPainter(
+            theme: widget.theme,
             knobOffset: _knobOffset,
             maxRadius: _maxRadius,
             knobSize: widget.knobSize,
-            isDragging: _isDragging,
-            baseColor: widget.baseColor,
-            knobColor: widget.knobColor,
-            glowColor: widget.glowColor,
+            grabProgress: _grabCtrl.value,
+            accentColor: widget.accentColor,
           ),
         ),
       ),
@@ -138,25 +190,29 @@ class _AnalogStickState extends State<AnalogStick> {
   }
 }
 
-/// CustomPainter for rendering the analog stick with neumorphic shadows.
+/// CustomPainter for rendering the analog stick in the active [ControllerTheme].
 class _AnalogStickPainter extends CustomPainter {
+  final ControllerTheme theme;
   final Offset knobOffset;
   final double maxRadius;
   final double knobSize;
-  final bool isDragging;
-  final Color baseColor;
-  final Color knobColor;
-  final Color glowColor;
+
+  /// Animated grab amount (0..1) driving knob scale/glow.
+  final double grabProgress;
+
+  /// Per-stick accent (falls back to the theme primary).
+  final Color? accentColor;
 
   _AnalogStickPainter({
+    required this.theme,
     required this.knobOffset,
     required this.maxRadius,
     required this.knobSize,
-    required this.isDragging,
-    required this.baseColor,
-    required this.knobColor,
-    required this.glowColor,
+    required this.grabProgress,
+    this.accentColor,
   });
+
+  Color get _accent => accentColor ?? theme.primary;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -171,87 +227,101 @@ class _AnalogStickPainter extends CustomPainter {
   }
 
   void _drawOuterRingShadow(Canvas canvas, Offset center, double radius) {
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.5)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-
-    canvas.drawCircle(center + const Offset(0, 4), radius, shadowPaint);
+    if (!theme.showShadows || theme.material == ControllerMaterial.pixel) {
+      return;
+    }
+    canvas.drawCircle(
+      center + const Offset(0, 4),
+      radius,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.5)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
+    );
   }
 
   void _drawBaseCircle(Canvas canvas, Offset center, double radius) {
-    final basePaint = Paint()
-      ..shader = RadialGradient(
-        colors: [baseColor, baseColor.withValues(alpha: 0.8)],
-        stops: const [0.3, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: radius));
+    theme.paintControlCircle(canvas, center, radius);
 
-    canvas.drawCircle(center, radius, basePaint);
-
-    final borderPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.1)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-
-    canvas.drawCircle(center, radius - 1, borderPaint);
+    canvas.drawCircle(
+      center,
+      radius - 1,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.1)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
   }
 
   void _drawInnerDepression(Canvas canvas, Offset center, double radius) {
-    final innerShadowPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [Colors.black.withValues(alpha: 0.3), Colors.transparent],
-        stops: const [0.7, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: radius));
-
-    canvas.drawCircle(center, radius, innerShadowPaint);
+    // Concave well only makes sense on dimensional materials.
+    if (!theme.showShadows ||
+        (theme.material != ControllerMaterial.neumorphic &&
+            theme.material != ControllerMaterial.metal)) {
+      return;
+    }
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [Colors.black.withValues(alpha: 0.3), Colors.transparent],
+          stops: const [0.7, 1.0],
+        ).createShader(Rect.fromCircle(center: center, radius: radius)),
+    );
   }
 
   void _drawKnob(Canvas canvas, Offset center, double baseRadius) {
     final knobCenter = center + knobOffset;
     final knobRadius = knobSize / 2;
 
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: isDragging ? 0.6 : 0.4)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, isDragging ? 8 : 4);
-
-    canvas.drawCircle(knobCenter + const Offset(0, 2), knobRadius, shadowPaint);
-
-    final knobPaint = Paint()
-      ..shader = RadialGradient(
-        colors: [knobColor, knobColor.withValues(alpha: 0.7)],
-        center: const Alignment(-0.3, -0.3),
-        radius: 1.2,
-      ).createShader(Rect.fromCircle(center: knobCenter, radius: knobRadius));
-
-    canvas.drawCircle(knobCenter, knobRadius, knobPaint);
-
-    final highlightPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.15)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-
-    canvas.drawArc(
-      Rect.fromCircle(center: knobCenter, radius: knobRadius - 2),
-      -math.pi * 0.8,
-      math.pi * 0.6,
-      false,
-      highlightPaint,
+    theme.paintControlCircle(
+      canvas,
+      knobCenter,
+      knobRadius,
+      press: grabProgress.clamp(0.0, 1.0),
+      fill: _accent,
     );
 
-    if (isDragging) {
-      final glowPaint = Paint()
-        ..color = glowColor.withValues(alpha: 0.3)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+    // Specular highlight arc on dimensional knobs.
+    if (theme.material == ControllerMaterial.neumorphic ||
+        theme.material == ControllerMaterial.metal) {
+      canvas.drawArc(
+        Rect.fromCircle(center: knobCenter, radius: knobRadius - 2),
+        -math.pi * 0.8,
+        math.pi * 0.6,
+        false,
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.15)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
 
-      canvas.drawCircle(knobCenter, knobRadius + 4, glowPaint);
+    final grab = grabProgress.clamp(0.0, 1.0);
+    if (grab > 0 && theme.showShadows) {
+      canvas.drawCircle(
+        knobCenter,
+        knobRadius + 4,
+        Paint()
+          ..color = _accent.withValues(alpha: 0.3 * grab)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12),
+      );
     }
   }
 
   void _drawDirectionIndicators(Canvas canvas, Offset center, double radius) {
-    final indicatorRadius = 4.0;
+    // Ghost/pixel looks stay clean without direction dots.
+    if (!theme.showShadows ||
+        theme.material == ControllerMaterial.ghost ||
+        theme.material == ControllerMaterial.pixel) {
+      return;
+    }
+
+    const indicatorRadius = 4.0;
     final indicatorDistance = radius * 0.65;
 
     final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.2)
+      ..color = theme.inkColor.withValues(alpha: 0.22)
       ..style = PaintingStyle.fill;
 
     canvas.drawCircle(center + Offset(0, -indicatorDistance), indicatorRadius, paint);
@@ -263,6 +333,7 @@ class _AnalogStickPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _AnalogStickPainter oldDelegate) {
     return oldDelegate.knobOffset != knobOffset ||
-        oldDelegate.isDragging != isDragging;
+        oldDelegate.grabProgress != grabProgress ||
+        oldDelegate.theme != theme;
   }
 }

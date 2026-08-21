@@ -2,9 +2,13 @@ import 'package:flutter/foundation.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../theme/controller_theme.dart';
 import '../theme/neon.dart';
 import 'stream_transport.dart' show StreamTransportKind;
 import 'video_shader_settings.dart';
+
+/// Layout style of the on-stream stats overlay.
+enum StatsOverlayStyle { compact, detailed }
 
 /// Launch preferences that are sent to the NVIDIA server in the
 /// `SessionCreateRequest`. Persisted locally so launches reuse the last choice.
@@ -36,6 +40,22 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadShowFaceButtons =
       'settings.stream.gamepadShowFaceButtons';
   static const _keyStreamGamepadShowMenu = 'settings.stream.gamepadShowMenu';
+  static const _keyStreamGamepadTheme = 'settings.stream.gamepadTheme';
+  static const _keyStreamGamepadStickScale =
+      'settings.stream.gamepadStickScale';
+  static const _keyStreamGamepadFaceScale =
+      'settings.stream.gamepadFaceScale';
+  static const _keyStreamGamepadDpadScale =
+      'settings.stream.gamepadDpadScale';
+  static const _keyStreamGamepadSouthpaw = 'settings.stream.gamepadSouthpaw';
+  static const _keyStreamGamepadNintendoLayout =
+      'settings.stream.gamepadNintendoLayout';
+  static const _keyStreamGamepadDeadzone = 'settings.stream.gamepadDeadzone';
+  static const _keyStreamGamepadHaptics = 'settings.stream.gamepadHaptics';
+  static const _keyStreamGamepadEffects = 'settings.stream.gamepadEffects';
+  static const _keyStreamGamepadAnimations =
+      'settings.stream.gamepadAnimations';
+  static const _keyStreamStatsStyle = 'settings.stream.statsStyle';
   static const _keyStreamShowFps = 'settings.stream.showFps';
   static const _keyWebrtcIceTransport = 'settings.webrtc.iceTransport';
   static const _keyWebrtcIcePoolSize = 'settings.webrtc.icePoolSize';
@@ -108,6 +128,17 @@ class UserSettings extends ChangeNotifier {
   bool _streamGamepadShowDpad = true;
   bool _streamGamepadShowFaceButtons = true;
   bool _streamGamepadShowMenu = true;
+  ControllerTheme _streamGamepadTheme = ControllerThemes.neon;
+  double _streamGamepadStickScale = 1.0;
+  double _streamGamepadFaceScale = 1.0;
+  double _streamGamepadDpadScale = 1.0;
+  bool _streamGamepadSouthpaw = false;
+  bool _streamGamepadNintendoLayout = false;
+  double _streamGamepadDeadzone = 0.0;
+  bool _streamGamepadHaptics = true;
+  bool _streamGamepadEffects = true;
+  bool _streamGamepadAnimations = true;
+  StatsOverlayStyle _streamStatsStyle = StatsOverlayStyle.detailed;
   bool _streamShowFps = false;
   WebrtcIceTransportPolicy _webrtcIceTransport = WebrtcIceTransportPolicy.all;
   int _webrtcIcePoolSize = 4;
@@ -192,6 +223,35 @@ class UserSettings extends ChangeNotifier {
 
   /// Whether the menu buttons (Select/Start/Home) are shown on the gamepad.
   bool get streamGamepadShowMenu => _streamGamepadShowMenu;
+
+  /// Active controller look (palette + shape language + material preset).
+  ControllerTheme get streamGamepadTheme => _streamGamepadTheme;
+
+  /// Per-group component-size multipliers (0.6–1.5, 1.0 = follow preset).
+  double get streamGamepadStickScale => _streamGamepadStickScale;
+  double get streamGamepadFaceScale => _streamGamepadFaceScale;
+  double get streamGamepadDpadScale => _streamGamepadDpadScale;
+
+  /// Southpaw mode: left/right analog sticks swap positions.
+  bool get streamGamepadSouthpaw => _streamGamepadSouthpaw;
+
+  /// Nintendo glyph layout: A/B and X/Y swap positions on the face cluster.
+  bool get streamGamepadNintendoLayout => _streamGamepadNintendoLayout;
+
+  /// Stick input dead zone as a fraction of full deflection (0.0–0.3).
+  double get streamGamepadDeadzone => _streamGamepadDeadzone;
+
+  /// Light haptic pulse when controls engage.
+  bool get streamGamepadHaptics => _streamGamepadHaptics;
+
+  /// Master toggle for shadows/glows (off = flat rendering).
+  bool get streamGamepadEffects => _streamGamepadEffects;
+
+  /// Whether press visuals animate (false = instant snap for max snappiness).
+  bool get streamGamepadAnimations => _streamGamepadAnimations;
+
+  /// Stats overlay layout (compact pill vs detailed panel).
+  StatsOverlayStyle get streamStatsStyle => _streamStatsStyle;
 
   /// Gamepad overlay opacity (0.2–1.0, 1.0 = fully opaque). Tweaked live
   /// from the stream settings sidebar so the pad can sit semi-transparent
@@ -475,6 +535,87 @@ class UserSettings extends ChangeNotifier {
     if (_streamGamepadShowMenu == v) return;
     _streamGamepadShowMenu = v;
     _save(_keyStreamGamepadShowMenu, v);
+    notifyListeners();
+  }
+
+  set streamGamepadTheme(ControllerTheme v) {
+    if (_streamGamepadTheme == v) return;
+    _streamGamepadTheme = v;
+    _save(_keyStreamGamepadTheme, v.id);
+    notifyListeners();
+  }
+
+  set streamGamepadStickScale(double v) {
+    final clamped = v.clamp(0.6, 1.5);
+    if (_streamGamepadStickScale == clamped) return;
+    _streamGamepadStickScale = clamped;
+    _prefs.setDouble(_keyStreamGamepadStickScale, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadFaceScale(double v) {
+    final clamped = v.clamp(0.6, 1.5);
+    if (_streamGamepadFaceScale == clamped) return;
+    _streamGamepadFaceScale = clamped;
+    _prefs.setDouble(_keyStreamGamepadFaceScale, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadDpadScale(double v) {
+    final clamped = v.clamp(0.6, 1.5);
+    if (_streamGamepadDpadScale == clamped) return;
+    _streamGamepadDpadScale = clamped;
+    _prefs.setDouble(_keyStreamGamepadDpadScale, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadSouthpaw(bool v) {
+    if (_streamGamepadSouthpaw == v) return;
+    _streamGamepadSouthpaw = v;
+    _save(_keyStreamGamepadSouthpaw, v);
+    notifyListeners();
+  }
+
+  set streamGamepadNintendoLayout(bool v) {
+    if (_streamGamepadNintendoLayout == v) return;
+    _streamGamepadNintendoLayout = v;
+    _save(_keyStreamGamepadNintendoLayout, v);
+    notifyListeners();
+  }
+
+  set streamGamepadDeadzone(double v) {
+    final clamped = v.clamp(0.0, 0.3);
+    if (_streamGamepadDeadzone == clamped) return;
+    _streamGamepadDeadzone = clamped;
+    _prefs.setDouble(_keyStreamGamepadDeadzone, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadHaptics(bool v) {
+    if (_streamGamepadHaptics == v) return;
+    _streamGamepadHaptics = v;
+    _save(_keyStreamGamepadHaptics, v);
+    notifyListeners();
+  }
+
+  set streamGamepadEffects(bool v) {
+    if (_streamGamepadEffects == v) return;
+    _streamGamepadEffects = v;
+    _save(_keyStreamGamepadEffects, v);
+    notifyListeners();
+  }
+
+  set streamGamepadAnimations(bool v) {
+    if (_streamGamepadAnimations == v) return;
+    _streamGamepadAnimations = v;
+    _save(_keyStreamGamepadAnimations, v);
+    notifyListeners();
+  }
+
+  set streamStatsStyle(StatsOverlayStyle v) {
+    if (_streamStatsStyle == v) return;
+    _streamStatsStyle = v;
+    _save(_keyStreamStatsStyle, v.name);
     notifyListeners();
   }
 
@@ -834,6 +975,35 @@ class UserSettings extends ChangeNotifier {
             _streamGamepadShowFaceButtons;
     _streamGamepadShowMenu =
         _prefs.getBool(_keyStreamGamepadShowMenu) ?? _streamGamepadShowMenu;
+    _streamGamepadTheme =
+        ControllerThemes.byId(_prefs.getString(_keyStreamGamepadTheme));
+    _streamGamepadStickScale =
+        _prefs.getDouble(_keyStreamGamepadStickScale) ??
+            _streamGamepadStickScale;
+    _streamGamepadFaceScale =
+        _prefs.getDouble(_keyStreamGamepadFaceScale) ??
+            _streamGamepadFaceScale;
+    _streamGamepadDpadScale =
+        _prefs.getDouble(_keyStreamGamepadDpadScale) ??
+            _streamGamepadDpadScale;
+    _streamGamepadSouthpaw =
+        _prefs.getBool(_keyStreamGamepadSouthpaw) ?? _streamGamepadSouthpaw;
+    _streamGamepadNintendoLayout = _prefs
+            .getBool(_keyStreamGamepadNintendoLayout) ??
+        _streamGamepadNintendoLayout;
+    _streamGamepadDeadzone =
+        _prefs.getDouble(_keyStreamGamepadDeadzone) ??
+            _streamGamepadDeadzone;
+    _streamGamepadHaptics =
+        _prefs.getBool(_keyStreamGamepadHaptics) ?? _streamGamepadHaptics;
+    _streamGamepadEffects =
+        _prefs.getBool(_keyStreamGamepadEffects) ?? _streamGamepadEffects;
+    _streamGamepadAnimations =
+        _prefs.getBool(_keyStreamGamepadAnimations) ??
+            _streamGamepadAnimations;
+    _streamStatsStyle = StatsOverlayStyle.values.asNameMap()[
+            _prefs.getString(_keyStreamStatsStyle)] ??
+        _streamStatsStyle;
     _streamShowFps = _prefs.getBool(_keyStreamShowFps) ?? _streamShowFps;
     _webrtcIceTransport = WebrtcIceTransportPolicy
             .values.asNameMap()[_prefs.getString(_keyWebrtcIceTransport)] ??
@@ -968,6 +1138,17 @@ class UserSettings extends ChangeNotifier {
     _streamGamepadShowDpad = true;
     _streamGamepadShowFaceButtons = true;
     _streamGamepadShowMenu = true;
+    _streamGamepadTheme = ControllerThemes.neon;
+    _streamGamepadStickScale = 1.0;
+    _streamGamepadFaceScale = 1.0;
+    _streamGamepadDpadScale = 1.0;
+    _streamGamepadSouthpaw = false;
+    _streamGamepadNintendoLayout = false;
+    _streamGamepadDeadzone = 0.0;
+    _streamGamepadHaptics = true;
+    _streamGamepadEffects = true;
+    _streamGamepadAnimations = true;
+    _streamStatsStyle = StatsOverlayStyle.detailed;
     _streamShowFps = false;
     _webrtcIceTransport = WebrtcIceTransportPolicy.all;
     _webrtcIcePoolSize = 4;
@@ -1032,6 +1213,17 @@ class UserSettings extends ChangeNotifier {
     _keyStreamGamepadShowDpad,
     _keyStreamGamepadShowFaceButtons,
     _keyStreamGamepadShowMenu,
+    _keyStreamGamepadTheme,
+    _keyStreamGamepadStickScale,
+    _keyStreamGamepadFaceScale,
+    _keyStreamGamepadDpadScale,
+    _keyStreamGamepadSouthpaw,
+    _keyStreamGamepadNintendoLayout,
+    _keyStreamGamepadDeadzone,
+    _keyStreamGamepadHaptics,
+    _keyStreamGamepadEffects,
+    _keyStreamGamepadAnimations,
+    _keyStreamStatsStyle,
     _keyStreamShowFps,
     _keyWebrtcIceTransport,
     _keyWebrtcIcePoolSize,

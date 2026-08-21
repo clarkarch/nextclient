@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-import '../../theme/neon.dart';
+import '../../theme/controller_theme.dart';
 import 'analog_stick.dart';
 import 'dpad_widget.dart';
 import 'face_buttons.dart';
@@ -12,6 +13,8 @@ import 'face_buttons.dart';
 /// - Right side: Analog stick + Face buttons (A, B, X, Y) + Menu buttons
 ///
 /// Size is calculated dynamically based on screen size and user preference.
+/// The overall look (palette, shape language, material) comes from the
+/// active [ControllerTheme].
 class VirtualGamepad extends StatefulWidget {
   /// Callback for left analog stick movement.
   final void Function(Offset normalizedOffset)? onLeftStickDrag;
@@ -106,6 +109,32 @@ class VirtualGamepad extends StatefulWidget {
   /// Whether the menu buttons (Select/Start/Home) are shown.
   final bool showMenu;
 
+  /// Active controller look (palette + shape + material).
+  final ControllerTheme theme;
+
+  /// Per-group component-size multipliers (0.6–1.5, 1.0 = follow the preset).
+  final double stickScale;
+  final double faceScale;
+  final double dpadScale;
+
+  /// Southpaw mode: swaps the left/right analog sticks' positions.
+  final bool southpaw;
+
+  /// Nintendo glyph layout on the face buttons (A/B and X/Y swapped).
+  final bool nintendoLayout;
+
+  /// Stick input dead zone as a fraction of full deflection (0.0–0.3).
+  final double deadZone;
+
+  /// Light haptic pulse when controls engage.
+  final bool hapticFeedback;
+
+  /// Master toggle for shadows/glows — off renders flat for max performance.
+  final bool visualEffects;
+
+  /// Whether press visuals animate (false = instant snap).
+  final bool animationsEnabled;
+
   const VirtualGamepad({
     super.key,
     this.onLeftStickDrag,
@@ -138,6 +167,16 @@ class VirtualGamepad extends StatefulWidget {
     this.showDpad = true,
     this.showFaceButtons = true,
     this.showMenu = true,
+    this.theme = ControllerThemes.neon,
+    this.stickScale = 1.0,
+    this.faceScale = 1.0,
+    this.dpadScale = 1.0,
+    this.southpaw = false,
+    this.nintendoLayout = false,
+    this.deadZone = 0.0,
+    this.hapticFeedback = false,
+    this.visualEffects = true,
+    this.animationsEnabled = true,
   });
 
   @override
@@ -145,6 +184,12 @@ class VirtualGamepad extends StatefulWidget {
 }
 
 class _VirtualGamepadState extends State<VirtualGamepad> {
+  /// The active theme with the visual-effects toggle applied: effects off
+  /// forces shadows/glows off regardless of the preset's own setting.
+  ControllerTheme get _theme => widget.visualEffects
+      ? widget.theme
+      : widget.theme.copyWith(showShadows: false);
+
   /// Screen-adaptive base scale, normalized to a 400px reference. This sizes
   /// the LAYOUT (the base box the pad occupies). The user's component-size
   /// slider is applied separately as a transform (see [build]) so it never
@@ -158,16 +203,23 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     return baseScale.clamp(0.5, 1.5);
   }
 
+  /// The theme's baked-in component-size multiplier.
+  double get _density => widget.theme.density;
+
   double get _sideContainerSize => 240 * _adaptiveScale;
-  double get _dpadSize => 160 * _adaptiveScale;
-  double get _analogStickSize => 100 * _adaptiveScale;
-  double get _analogStickKnobSize => 42 * _adaptiveScale;
-  double get _faceButtonSize => 48 * _adaptiveScale;
-  double get _menuButtonSize => 40 * _adaptiveScale;
-  double get _shoulderButtonWidth => 90 * _adaptiveScale;
-  double get _shoulderButtonHeight => 36 * _adaptiveScale;
-  double get _triggerButtonWidth => 70 * _adaptiveScale;
-  double get _triggerButtonHeight => 44 * _adaptiveScale;
+  double get _dpadSize =>
+      160 * _adaptiveScale * _density * widget.dpadScale.clamp(0.6, 1.5);
+  double get _analogStickSize =>
+      100 * _adaptiveScale * _density * widget.stickScale.clamp(0.6, 1.5);
+  double get _analogStickKnobSize =>
+      42 * _adaptiveScale * _density * widget.stickScale.clamp(0.6, 1.5);
+  double get _faceButtonSize =>
+      48 * _adaptiveScale * _density * widget.faceScale.clamp(0.6, 1.5);
+  double get _menuButtonSize => 40 * _adaptiveScale * _density;
+  double get _shoulderButtonWidth => 90 * _adaptiveScale * _density;
+  double get _shoulderButtonHeight => 36 * _adaptiveScale * _density;
+  double get _triggerButtonWidth => 70 * _adaptiveScale * _density;
+  double get _triggerButtonHeight => 44 * _adaptiveScale * _density;
 
   /// Inter-component gaps (offsets) scale with the screen AND the spacing
   /// slider, independently of the control sizes.
@@ -221,6 +273,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                   _MenuButton(
                     label: 'SELECT',
                     size: _menuButtonSize,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                     onPressed: widget.onSelectPressed,
                     onReleased: widget.onSelectReleased,
                   ),
@@ -230,6 +285,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                   _MenuButton(
                     label: 'START',
                     size: _menuButtonSize,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                     onPressed: widget.onStartPressed,
                     onReleased: widget.onStartReleased,
                   ),
@@ -239,6 +297,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                   _MenuButton(
                     icon: Icons.home_rounded,
                     size: _menuButtonSize * 0.9,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                     onPressed: widget.onHomePressed,
                     onReleased: widget.onHomeReleased,
                     isHome: true,
@@ -263,6 +324,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               _TriggerButton(
                 width: _triggerButtonWidth,
                 height: _triggerButtonHeight,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                 onPressed: widget.onLeftTriggerPressed,
                 onReleased: widget.onLeftTriggerReleased,
               ),
@@ -271,6 +335,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               _TriggerButton(
                 width: _triggerButtonWidth,
                 height: _triggerButtonHeight,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                 onPressed: widget.onRightTriggerPressed,
                 onReleased: widget.onRightTriggerReleased,
               ),
@@ -286,6 +353,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 label: 'LB',
                 width: _shoulderButtonWidth,
                 height: _shoulderButtonHeight,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                 onPressed: widget.onLeftBumperPressed,
                 onReleased: widget.onLeftBumperReleased,
               ),
@@ -295,6 +365,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 label: 'RB',
                 width: _shoulderButtonWidth,
                 height: _shoulderButtonHeight,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                 onPressed: widget.onRightBumperPressed,
                 onReleased: widget.onRightBumperReleased,
               ),
@@ -320,7 +393,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 child: _scaled(
                   DPadWidget(
                     size: _dpadSize,
-                    glowColor: Neon.violet,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
                     onDirectionPressed: widget.onDpadPressed,
                     onDirectionReleased: widget.onDpadReleased,
                   ),
@@ -334,9 +409,23 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               AnalogStick(
                 size: _analogStickSize,
                 knobSize: _analogStickKnobSize,
-                glowColor: Neon.accent,
-                onDrag: widget.onLeftStickDrag,
-                onDragEnd: widget.onLeftStickDragEnd,
+                theme: _theme,
+                deadZone: widget.deadZone,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                // Left-position stick carries the primary accent; southpaw
+                // swaps accents along with the functions so the mode is
+                // visible at a glance.
+                accentColor: widget.southpaw
+                    ? _theme.secondary
+                    : _theme.primary,
+                // Southpaw swaps which stick lives on each side.
+                onDrag: widget.southpaw
+                    ? widget.onRightStickDrag
+                    : widget.onLeftStickDrag,
+                onDragEnd: widget.southpaw
+                    ? widget.onRightStickDragEnd
+                    : widget.onLeftStickDragEnd,
               ),
             ),
         ],
@@ -361,6 +450,10 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 child: _scaled(
                   FaceButtons(
                     buttonSize: _faceButtonSize,
+                    theme: _theme,
+                    nintendoLayout: widget.nintendoLayout,
+                    hapticsEnabled: widget.hapticFeedback,
+                    animationsEnabled: widget.animationsEnabled,
                     onButtonPressed: widget.onFaceButtonPressed,
                     onButtonReleased: widget.onFaceButtonReleased,
                   ),
@@ -374,9 +467,19 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
               AnalogStick(
                 size: _analogStickSize,
                 knobSize: _analogStickKnobSize,
-                glowColor: Neon.violet,
-                onDrag: widget.onRightStickDrag,
-                onDragEnd: widget.onRightStickDragEnd,
+                theme: _theme,
+                deadZone: widget.deadZone,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                accentColor: widget.southpaw
+                    ? _theme.primary
+                    : _theme.secondary,
+                onDrag: widget.southpaw
+                    ? widget.onLeftStickDrag
+                    : widget.onRightStickDrag,
+                onDragEnd: widget.southpaw
+                    ? widget.onLeftStickDragEnd
+                    : widget.onRightStickDragEnd,
               ),
             ),
         ],
@@ -385,11 +488,14 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
   }
 }
 
-/// Small menu button widget with neumorphic styling.
+/// Small menu button widget styled by the active [ControllerTheme].
 class _MenuButton extends StatefulWidget {
   final String? label;
   final IconData? icon;
   final double size;
+  final ControllerTheme theme;
+  final bool hapticsEnabled;
+  final bool animationsEnabled;
   final VoidCallback? onPressed;
   final VoidCallback? onReleased;
   final bool isHome;
@@ -398,6 +504,9 @@ class _MenuButton extends StatefulWidget {
     this.label,
     this.icon,
     required this.size,
+    required this.theme,
+    this.hapticsEnabled = false,
+    this.animationsEnabled = true,
     this.onPressed,
     this.onReleased,
     this.isHome = false,
@@ -412,75 +521,78 @@ class _MenuButtonState extends State<_MenuButton> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) {
+    final theme = widget.theme;
+    final accent = widget.isHome ? theme.primary : theme.secondary;
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) {
+        if (_isPressed) return;
         setState(() => _isPressed = true);
+        if (widget.hapticsEnabled) HapticFeedback.lightImpact();
         widget.onPressed?.call();
       },
-      onTapUp: (_) {
-        setState(() => _isPressed = false);
-        widget.onReleased?.call();
-      },
-      onTapCancel: () {
+      onPointerUp: (_) {
         if (!_isPressed) return;
         setState(() => _isPressed = false);
         widget.onReleased?.call();
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 100),
-        width: widget.size,
-        height: widget.size,
-        decoration: BoxDecoration(
-          color: _isPressed ? Neon.cardHover : Neon.bgC,
-          borderRadius: BorderRadius.circular(widget.size / 3),
-          border: Border.all(
-            color: widget.isHome
-                ? Neon.accent.withValues(alpha: 0.3)
-                : Neon.outline,
-            width: 1,
+      onPointerCancel: (_) {
+        if (!_isPressed) return;
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
+      child: AnimatedScale(
+        scale: _isPressed ? 0.90 : 1.0,
+        duration: widget.animationsEnabled
+            ? const Duration(milliseconds: 110)
+            : Duration.zero,
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: widget.animationsEnabled
+              ? const Duration(milliseconds: 120)
+              : Duration.zero,
+          width: widget.size,
+          height: widget.size,
+          decoration: theme.chromeDecoration(
+            pressed: _isPressed,
+            radius: theme.cornerFor(widget.size),
+            accent: accent,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: _isPressed ? 0.3 : 0.4),
-              blurRadius: _isPressed ? 4 : 6,
-              offset: Offset(0, _isPressed ? 1 : 3),
-            ),
-            if (_isPressed)
-              BoxShadow(
-                color: (widget.isHome ? Neon.accent : Neon.violet).withValues(
-                  alpha: 0.35,
-                ),
-                blurRadius: 8,
-              ),
-          ],
-        ),
-        child: Center(
-          child: widget.icon != null
-              ? Icon(
-                  widget.icon,
-                  size: widget.size * 0.5,
-                  color: widget.isHome ? Neon.accent : Neon.inkMuted,
-                )
-              : Text(
-                  widget.label ?? '',
-                  style: TextStyle(
-                    fontSize: widget.size * 0.22,
-                    fontWeight: FontWeight.w600,
-                    color: Neon.inkMuted,
-                    letterSpacing: 0.5,
+          child: Center(
+            child: widget.icon != null
+                ? Icon(
+                    widget.icon,
+                    size: widget.size * 0.5,
+                    color: _isPressed
+                        ? Colors.white
+                        : widget.isHome
+                            ? theme.primary
+                            : theme.chromeInk(pressed: false),
+                  )
+                : Text(
+                    widget.label ?? '',
+                    style: TextStyle(
+                      fontSize: widget.size * 0.22,
+                      fontWeight: FontWeight.w600,
+                      color: theme.chromeInk(pressed: _isPressed),
+                      letterSpacing: 0.5,
+                    ),
                   ),
-                ),
+          ),
         ),
       ),
     );
   }
 }
 
-/// Shoulder button widget (LB/RB).
+/// Shoulder button widget (LB/RB) styled by the active [ControllerTheme].
 class _ShoulderButton extends StatefulWidget {
   final String label;
   final double width;
   final double height;
+  final ControllerTheme theme;
+  final bool hapticsEnabled;
+  final bool animationsEnabled;
   final VoidCallback? onPressed;
   final VoidCallback? onReleased;
 
@@ -488,6 +600,9 @@ class _ShoulderButton extends StatefulWidget {
     required this.label,
     required this.width,
     required this.height,
+    required this.theme,
+    this.hapticsEnabled = false,
+    this.animationsEnabled = true,
     this.onPressed,
     this.onReleased,
   });
@@ -501,52 +616,51 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) {
+    final theme = widget.theme;
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) {
+        if (_isPressed) return;
         setState(() => _isPressed = true);
+        if (widget.hapticsEnabled) HapticFeedback.lightImpact();
         widget.onPressed?.call();
       },
-      onTapUp: (_) {
-        setState(() => _isPressed = false);
-        widget.onReleased?.call();
-      },
-      onTapCancel: () {
+      onPointerUp: (_) {
         if (!_isPressed) return;
         setState(() => _isPressed = false);
         widget.onReleased?.call();
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 80),
-        width: widget.width,
-        height: widget.height,
-        decoration: BoxDecoration(
-          color: _isPressed ? Neon.cardHover : Neon.bgC,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: _isPressed ? Neon.violet : Neon.outline,
-            width: 1,
+      onPointerCancel: (_) {
+        if (!_isPressed) return;
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
+      child: AnimatedScale(
+        scale: _isPressed ? 0.90 : 1.0,
+        duration: widget.animationsEnabled
+            ? const Duration(milliseconds: 110)
+            : Duration.zero,
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: widget.animationsEnabled
+              ? const Duration(milliseconds: 120)
+              : Duration.zero,
+          width: widget.width,
+          height: widget.height,
+          decoration: theme.chromeDecoration(
+            pressed: _isPressed,
+            radius: theme.cornerFor(widget.height),
+            accent: theme.secondary,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: _isPressed ? 0.2 : 0.35),
-              blurRadius: _isPressed ? 3 : 5,
-              offset: Offset(0, _isPressed ? 1 : 2),
-            ),
-            if (_isPressed)
-              BoxShadow(
-                color: Neon.violet.withValues(alpha: 0.35),
-                blurRadius: 8,
+          child: Center(
+            child: Text(
+              widget.label,
+              style: TextStyle(
+                fontSize: 12 * (widget.height / 28),
+                fontWeight: FontWeight.w600,
+                color: theme.chromeInk(pressed: _isPressed),
+                letterSpacing: 0.5,
               ),
-          ],
-        ),
-        child: Center(
-          child: Text(
-            widget.label,
-            style: TextStyle(
-              fontSize: 12 * (widget.height / 28),
-              fontWeight: FontWeight.w600,
-              color: Neon.inkMuted,
-              letterSpacing: 0.5,
             ),
           ),
         ),
@@ -556,16 +670,23 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
 }
 
 /// Trigger button widget (LT/RT) — taller and narrower than bumpers, with a
-/// curved concave design typical of trigger buttons.
+/// curved concave design typical of trigger buttons. Styled by the active
+/// [ControllerTheme].
 class _TriggerButton extends StatefulWidget {
   final double width;
   final double height;
+  final ControllerTheme theme;
+  final bool hapticsEnabled;
+  final bool animationsEnabled;
   final VoidCallback? onPressed;
   final VoidCallback? onReleased;
 
   const _TriggerButton({
     required this.width,
     required this.height,
+    required this.theme,
+    this.hapticsEnabled = false,
+    this.animationsEnabled = true,
     this.onPressed,
     this.onReleased,
   });
@@ -579,71 +700,51 @@ class _TriggerButtonState extends State<_TriggerButton> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) {
+    final theme = widget.theme;
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) {
+        if (_isPressed) return;
         setState(() => _isPressed = true);
+        if (widget.hapticsEnabled) HapticFeedback.lightImpact();
         widget.onPressed?.call();
       },
-      onTapUp: (_) {
-        setState(() => _isPressed = false);
-        widget.onReleased?.call();
-      },
-      onTapCancel: () {
+      onPointerUp: (_) {
         if (!_isPressed) return;
         setState(() => _isPressed = false);
         widget.onReleased?.call();
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 80),
-        width: widget.width,
-        height: widget.height,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: _isPressed
-                ? [Neon.cardHover.withValues(alpha: 0.9), Neon.bgC]
-                : [Neon.bgC, Neon.bgC.withValues(alpha: 0.8)],
+      onPointerCancel: (_) {
+        if (!_isPressed) return;
+        setState(() => _isPressed = false);
+        widget.onReleased?.call();
+      },
+      child: AnimatedScale(
+        scale: _isPressed ? 0.90 : 1.0,
+        duration: widget.animationsEnabled
+            ? const Duration(milliseconds: 110)
+            : Duration.zero,
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: widget.animationsEnabled
+              ? const Duration(milliseconds: 120)
+              : Duration.zero,
+          width: widget.width,
+          height: widget.height,
+          decoration: theme.chromeDecoration(
+            pressed: _isPressed,
+            radius: theme.cornerFor(widget.height) * 0.6,
           ),
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(8),
-            topRight: Radius.circular(8),
-            bottomLeft: Radius.circular(4),
-            bottomRight: Radius.circular(4),
-          ),
-          border: Border.all(
-            color: _isPressed ? Neon.accent : Neon.outline,
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: _isPressed ? 0.2 : 0.35),
-              blurRadius: _isPressed ? 3 : 5,
-              offset: Offset(0, _isPressed ? 1 : 2),
-            ),
-            // Inner shadow for concave effect.
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 2,
-              offset: const Offset(0, 2),
-              spreadRadius: -1,
-            ),
-            if (_isPressed)
-              BoxShadow(
-                color: Neon.accent.withValues(alpha: 0.4),
-                blurRadius: 8,
+          child: Center(
+            child: Container(
+              width: 32 * (widget.width / 56),
+              height: 4 * (widget.height / 36),
+              decoration: BoxDecoration(
+                color: _isPressed
+                    ? Colors.white.withValues(alpha: 0.9)
+                    : theme.inkColor.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(2),
               ),
-          ],
-        ),
-        child: Center(
-          child: Container(
-            width: 32 * (widget.width / 56),
-            height: 4 * (widget.height / 36),
-            decoration: BoxDecoration(
-              color: _isPressed
-                  ? Neon.accent.withValues(alpha: 0.6)
-                  : Neon.inkMuted.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(2),
             ),
           ),
         ),

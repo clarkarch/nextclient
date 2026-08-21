@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-import '../../theme/neon.dart';
+import '../../theme/controller_theme.dart';
 
 /// Direction enum for D-pad inputs.
 enum DPadDirection { up, down, left, right, none }
@@ -11,7 +12,8 @@ typedef DPadCallback = void Function(DPadDirection direction);
 /// D-Pad widget using [CustomPainter].
 ///
 /// Detects tap directions (up/down/left/right) and provides visual feedback
-/// for pressed states. Multi-touch safe via pointer-id latching.
+/// for pressed states. Multi-touch safe via pointer-id latching. Visuals come
+/// from the active [ControllerTheme].
 class DPadWidget extends StatefulWidget {
   /// Size of the D-pad.
   final double size;
@@ -22,32 +24,66 @@ class DPadWidget extends StatefulWidget {
   /// Callback when a direction is released.
   final VoidCallback? onDirectionReleased;
 
-  /// Base color of the D-pad.
-  final Color baseColor;
+  /// Active controller look.
+  final ControllerTheme theme;
 
-  /// Button color when pressed.
-  final Color buttonColor;
+  /// Whether to fire a light haptic pulse when a direction engages.
+  final bool hapticsEnabled;
 
-  /// Glow color for pressed state.
-  final Color glowColor;
+  /// Whether press visuals animate (false = instant snap).
+  final bool animationsEnabled;
 
   const DPadWidget({
     super.key,
     this.size = 140.0,
     this.onDirectionPressed,
     this.onDirectionReleased,
-    this.baseColor = const Color(0xFF10101A),
-    this.buttonColor = const Color(0xFF2A2A3E),
-    this.glowColor = Neon.accent,
+    this.theme = ControllerThemes.neon,
+    this.hapticsEnabled = false,
+    this.animationsEnabled = true,
   });
 
   @override
   State<DPadWidget> createState() => _DPadWidgetState();
 }
 
-class _DPadWidgetState extends State<DPadWidget> {
+class _DPadWidgetState extends State<DPadWidget>
+    with SingleTickerProviderStateMixin {
   DPadDirection _pressedDirection = DPadDirection.none;
+
+  /// The direction whose press visual is currently animating.
+  DPadDirection _visualDirection = DPadDirection.none;
   int? _activePointerId;
+
+  late final AnimationController _pressCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _pressCtrl = AnimationController(
+      vsync: this,
+      duration: widget.animationsEnabled
+          ? const Duration(milliseconds: 110)
+          : Duration.zero,
+      value: 0,
+    )..addListener(() => setState(() {}));
+  }
+
+  @override
+  void didUpdateWidget(DPadWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.animationsEnabled != oldWidget.animationsEnabled) {
+      _pressCtrl.duration = widget.animationsEnabled
+          ? const Duration(milliseconds: 110)
+          : Duration.zero;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pressCtrl.dispose();
+    super.dispose();
+  }
 
   Offset get _center => Offset(widget.size / 2, widget.size / 2);
 
@@ -70,29 +106,40 @@ class _DPadWidgetState extends State<DPadWidget> {
 
     final direction = _getDirectionFromPosition(event.localPosition);
     if (direction != DPadDirection.none) {
-      setState(() => _pressedDirection = direction);
+      if (widget.hapticsEnabled && direction != _pressedDirection) {
+        HapticFeedback.lightImpact();
+      }
+      if (direction != _pressedDirection) {
+        setState(() {
+          _pressedDirection = direction;
+          _visualDirection = direction;
+        });
+        _pressCtrl.forward(from: 0);
+      } else {
+        _pressedDirection = direction;
+      }
       widget.onDirectionPressed?.call(direction);
     }
+  }
+
+  void _release() {
+    if (_pressedDirection == DPadDirection.none) return;
+    widget.onDirectionReleased?.call();
+    setState(() => _pressedDirection = DPadDirection.none);
+    // Input fired instantly above; the visual eases back out.
+    _pressCtrl.reverse();
   }
 
   void _handlePointerUp(PointerUpEvent event) {
     if (event.pointer != _activePointerId) return;
     _activePointerId = null;
-
-    if (_pressedDirection != DPadDirection.none) {
-      widget.onDirectionReleased?.call();
-      setState(() => _pressedDirection = DPadDirection.none);
-    }
+    _release();
   }
 
   void _handlePointerCancel(PointerCancelEvent event) {
     if (event.pointer != _activePointerId) return;
     _activePointerId = null;
-
-    if (_pressedDirection != DPadDirection.none) {
-      widget.onDirectionReleased?.call();
-      setState(() => _pressedDirection = DPadDirection.none);
-    }
+    _release();
   }
 
   @override
@@ -106,10 +153,10 @@ class _DPadWidgetState extends State<DPadWidget> {
         height: widget.size,
         child: CustomPaint(
           painter: _DPadPainter(
+            theme: widget.theme,
             pressedDirection: _pressedDirection,
-            baseColor: widget.baseColor,
-            buttonColor: widget.buttonColor,
-            glowColor: widget.glowColor,
+            visualDirection: _visualDirection,
+            pressProgress: _pressCtrl.value,
           ),
         ),
       ),
@@ -117,18 +164,18 @@ class _DPadWidgetState extends State<DPadWidget> {
   }
 }
 
-/// CustomPainter for rendering the D-pad with neumorphic shadows.
+/// CustomPainter for rendering the D-pad in the active [ControllerTheme].
 class _DPadPainter extends CustomPainter {
+  final ControllerTheme theme;
   final DPadDirection pressedDirection;
-  final Color baseColor;
-  final Color buttonColor;
-  final Color glowColor;
+  final DPadDirection visualDirection;
+  final double pressProgress;
 
   _DPadPainter({
+    required this.theme,
     required this.pressedDirection,
-    required this.baseColor,
-    required this.buttonColor,
-    required this.glowColor,
+    required this.visualDirection,
+    required this.pressProgress,
   });
 
   @override
@@ -138,16 +185,8 @@ class _DPadPainter extends CustomPainter {
     final armWidth = size.width * 0.3;
     final buttonSize = armWidth;
     final armLength = armWidth * 1.25;
-    final cornerRadius = armWidth * 0.15;
 
-    _drawDirectionalButtons(
-      canvas,
-      center,
-      armLength,
-      armWidth,
-      buttonSize,
-      cornerRadius,
-    );
+    _drawDirectionalButtons(canvas, center, armLength, armWidth, buttonSize);
   }
 
   void _drawDirectionalButtons(
@@ -156,7 +195,6 @@ class _DPadPainter extends CustomPainter {
     double armLength,
     double armWidth,
     double buttonSize,
-    double cornerRadius,
   ) {
     final directions = [
       (DPadDirection.up, Offset(0, -armLength * 0.9)),
@@ -168,14 +206,16 @@ class _DPadPainter extends CustomPainter {
     for (final (direction, offset) in directions) {
       final buttonCenter = center + offset;
       final isPressed = pressedDirection == direction;
+      final press =
+          direction == visualDirection ? pressProgress.clamp(0.0, 1.0) : 0.0;
 
       _drawButton(
         canvas,
         buttonCenter,
         buttonSize,
-        cornerRadius * 0.8,
         direction,
         isPressed,
+        press,
       );
     }
   }
@@ -184,56 +224,36 @@ class _DPadPainter extends CustomPainter {
     Canvas canvas,
     Offset center,
     double size,
-    double cornerRadius,
     DPadDirection direction,
     bool isPressed,
+    double press,
   ) {
-    final rect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: size, height: size),
-      Radius.circular(cornerRadius),
+    // Corner radius follows the theme's shape language on top of the classic
+    // 15% base rounding.
+    final corner = switch (theme.shape) {
+      ControllerShape.rounded => size * 0.12,
+      ControllerShape.square => size * 0.04,
+      ControllerShape.block => 1.0,
+      ControllerShape.pill => size * 0.24,
+    };
+
+    theme.paintControlRRect(
+      canvas,
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: center, width: size, height: size),
+        Radius.circular(corner),
+      ),
+      press: press,
     );
 
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: isPressed ? 0.6 : 0.35)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, isPressed ? 6 : 3);
-
-    canvas.drawRRect(rect.shift(const Offset(0, 2)), shadowPaint);
-
-    final buttonPaint = Paint()
-      ..shader = LinearGradient(
-        begin: const Alignment(-0.3, -0.3),
-        end: const Alignment(0.3, 0.3),
-        colors: isPressed
-            ? [buttonColor.withValues(alpha: 0.9), buttonColor]
-            : [buttonColor, buttonColor.withValues(alpha: 0.7)],
-      ).createShader(rect.outerRect);
-
-    canvas.drawRRect(rect, buttonPaint);
-
-    if (!isPressed) {
-      final highlightPaint = Paint()
-        ..color = Colors.white.withValues(alpha: 0.1)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5;
-
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          rect.outerRect.deflate(1),
-          Radius.circular(cornerRadius),
-        ),
-        highlightPaint,
-      );
-    }
-
-    if (isPressed) {
-      final glowPaint = Paint()
-        ..color = glowColor.withValues(alpha: 0.4)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-
-      canvas.drawRRect(rect, glowPaint);
-    }
-
-    _drawArrowIndicator(canvas, center, direction, isPressed, size);
+    _drawArrowIndicator(
+      canvas,
+      center,
+      direction,
+      isPressed,
+      size,
+      press,
+    );
   }
 
   void _drawArrowIndicator(
@@ -242,16 +262,18 @@ class _DPadPainter extends CustomPainter {
     DPadDirection direction,
     bool isPressed,
     double buttonSize,
+    double press,
   ) {
     final arrowSize = 8.0 * (buttonSize / 48.0);
 
+    // Arrow brightens from the dim secondary glow to full primary accent.
     final arrowPaint = Paint()
-      ..color = isPressed ? glowColor : glowColor.withValues(alpha: 0.35)
+      ..color = Color.lerp(theme.dpadGlow, theme.primary, press)!
       ..style = PaintingStyle.fill;
 
-    if (!isPressed) {
+    if (press < 1 && theme.showShadows) {
       final glowPaint = Paint()
-        ..color = glowColor.withValues(alpha: 0.15)
+        ..color = theme.dpadGlow.withValues(alpha: 0.15 * (1 - press))
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
       _drawArrowPath(canvas, center, direction, arrowSize, glowPaint);
     }
@@ -300,6 +322,9 @@ class _DPadPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DPadPainter oldDelegate) {
-    return oldDelegate.pressedDirection != pressedDirection;
+    return oldDelegate.pressedDirection != pressedDirection ||
+        oldDelegate.visualDirection != visualDirection ||
+        oldDelegate.pressProgress != pressProgress ||
+        oldDelegate.theme != theme;
   }
 }

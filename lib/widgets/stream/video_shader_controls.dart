@@ -103,38 +103,74 @@ class VideoShaderControls extends StatelessWidget {
             ),
             if (shader.enabled) ...[
               const SizedBox(height: 4),
-              for (final control in _controls) ...[
-                const SizedBox(height: 10),
-                _ShaderSlider(
-                  control: control,
-                  value: shader,
-                  onChanged: (next) => settings.videoShader = next,
-                ),
-              ],
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton(
-                  onPressed: () => settings.videoShader =
-                      VideoShaderSettings.defaults.copyWith(enabled: true),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Neon.inkSoft,
-                    side: const BorderSide(color: Neon.outline),
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    textStyle: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                  child: const Text('RESET FILTERS'),
-                ),
-              ),
+              VideoShaderFilterSliders(settings: settings),
             ],
           ],
         );
       },
+    );
+  }
+}
+
+/// Headerless shader hint + sliders + reset — embedded in the stream
+/// sidebar's VIDEO EFFECTS section (whose header switch owns enable/disable).
+/// Keeps the same availability warning as the full [VideoShaderControls].
+class VideoShaderFilterSliders extends StatelessWidget {
+  final UserSettings settings;
+
+  const VideoShaderFilterSliders({super.key, required this.settings});
+
+  /// Same availability rule as [VideoShaderControls]: the shader pipeline
+  /// only runs on the GPU renderer path.
+  bool get _available =>
+      (Platform.isAndroid ||
+          settings.rendererBackend == RendererBackend.gl) &&
+      settings.streamTransport == StreamTransportKind.flutterWebrtc;
+
+  @override
+  Widget build(BuildContext context) {
+    final shader = settings.videoShader;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          _available
+              ? 'GPU post-processing applied to the stream. '
+                  'Warning: may reduce stream FPS on slower GPUs.'
+              : 'Requires the GPU renderer (Renderer → GPU shader '
+                  'YUV→RGB) on the LIBWEBRTC transport.',
+          style: const TextStyle(color: Neon.inkMuted, fontSize: 11.5),
+        ),
+        const SizedBox(height: 4),
+        for (final control in _controls) ...[
+          const SizedBox(height: 10),
+          _ShaderSlider(
+            control: control,
+            value: shader,
+            onChanged: (next) => settings.videoShader = next,
+          ),
+        ],
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton(
+            onPressed: () => settings.videoShader =
+                VideoShaderSettings.defaults.copyWith(enabled: true),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Neon.inkSoft,
+              side: const BorderSide(color: Neon.outline),
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              textStyle: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.4,
+              ),
+            ),
+            child: const Text('RESET FILTERS'),
+          ),
+        ),
+      ],
     );
   }
 }
