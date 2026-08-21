@@ -35,7 +35,8 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadOpacity = 'settings.stream.gamepadOpacity';
   static const _keyStreamGamepadShowShoulders =
       'settings.stream.gamepadShowShoulders';
-  static const _keyStreamGamepadShowSticks = 'settings.stream.gamepadShowSticks';
+  static const _keyStreamGamepadShowSticks =
+      'settings.stream.gamepadShowSticks';
   static const _keyStreamGamepadShowDpad = 'settings.stream.gamepadShowDpad';
   static const _keyStreamGamepadShowFaceButtons =
       'settings.stream.gamepadShowFaceButtons';
@@ -43,10 +44,8 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadTheme = 'settings.stream.gamepadTheme';
   static const _keyStreamGamepadStickScale =
       'settings.stream.gamepadStickScale';
-  static const _keyStreamGamepadFaceScale =
-      'settings.stream.gamepadFaceScale';
-  static const _keyStreamGamepadDpadScale =
-      'settings.stream.gamepadDpadScale';
+  static const _keyStreamGamepadFaceScale = 'settings.stream.gamepadFaceScale';
+  static const _keyStreamGamepadDpadScale = 'settings.stream.gamepadDpadScale';
   static const _keyStreamGamepadSouthpaw = 'settings.stream.gamepadSouthpaw';
   static const _keyStreamGamepadNintendoLayout =
       'settings.stream.gamepadNintendoLayout';
@@ -74,13 +73,13 @@ class UserSettings extends ChangeNotifier {
   static const _keyVideoShader = 'settings.videoShader';
   static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
   static const _keyUiScale = 'settings.ui.scale';
+  static const _keyUiAnimations = 'settings.ui.animations';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
   static const _keyMaxPerformanceMode = 'settings.perf.maxPerformance';
   // --- Experimental stream optimizations --------------------------------
   static const _keyOptLowLatency = 'settings.experimental.opt.lowLatency';
-  static const _keyOptRecovery =
-      'settings.experimental.opt.recoveryProfile';
+  static const _keyOptRecovery = 'settings.experimental.opt.recoveryProfile';
   static const _keyOptMinBitrate = 'settings.experimental.opt.minBitrate';
   static const _keyOptNack = 'settings.experimental.opt.enableNack';
   static const _keyOptFec = 'settings.experimental.opt.enableFec';
@@ -156,6 +155,7 @@ class UserSettings extends ChangeNotifier {
   VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
   BackgroundStyle _backgroundStyle = BackgroundStyle.beams;
   double _uiScale = 1.0;
+  bool _uiAnimations = true;
   bool _logsEnabled = false;
   bool _hideTitleBar = false;
   bool _maxPerformanceMode = false;
@@ -283,6 +283,10 @@ class UserSettings extends ChangeNotifier {
   /// the stream chrome all grow/shrink together regardless of hardcoded sizes.
   double get uiScale => _uiScale;
 
+  /// Master switch for decorative UI motion (entrance fades, staggered
+  /// cards, animated backgrounds, carousel auto-advance).
+  bool get uiAnimations => _uiAnimations;
+
   bool get logsEnabled => _logsEnabled;
   bool get hideTitleBar => _hideTitleBar;
 
@@ -296,8 +300,9 @@ class UserSettings extends ChangeNotifier {
   /// streaming pipeline should read these instead of the raw persisted values
   /// so the boost is reversible without losing the user's saved preferences.
   bool get effectiveLogsEnabled => _maxPerformanceMode ? false : _logsEnabled;
-  VideoShaderSettings get effectiveVideoShader =>
-      _maxPerformanceMode ? const VideoShaderSettings(enabled: false) : _videoShader;
+  VideoShaderSettings get effectiveVideoShader => _maxPerformanceMode
+      ? const VideoShaderSettings(enabled: false)
+      : _videoShader;
   RendererBackend get effectiveRendererBackend =>
       _maxPerformanceMode ? RendererBackend.gl : _rendererBackend;
   DecoderBackend get effectiveDecoderBackend =>
@@ -305,8 +310,10 @@ class UserSettings extends ChangeNotifier {
   bool get effectiveHwAccel => _maxPerformanceMode ? true : _webrtcHwAccel;
   BackgroundStyle get effectiveBackgroundStyle =>
       _maxPerformanceMode ? BackgroundStyle.subtle : _backgroundStyle;
-  Duration get statsPollInterval =>
-      _maxPerformanceMode ? const Duration(milliseconds: 1000) : const Duration(milliseconds: 500);
+  bool get effectiveUiAnimations => _maxPerformanceMode ? false : _uiAnimations;
+  Duration get statsPollInterval => _maxPerformanceMode
+      ? const Duration(milliseconds: 1000)
+      : const Duration(milliseconds: 500);
   bool get performanceShadowsEnabled => !_maxPerformanceMode;
 
   bool get optLowLatencyMode => _optLowLatencyMode;
@@ -772,6 +779,14 @@ class UserSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  set uiAnimations(bool v) {
+    if (_uiAnimations == v) return;
+    _uiAnimations = v;
+    _save(_keyUiAnimations, v);
+    UiMotion.enabled.value = effectiveUiAnimations;
+    notifyListeners();
+  }
+
   set logsEnabled(bool v) {
     if (_logsEnabled == v) return;
     _logsEnabled = v;
@@ -798,6 +813,7 @@ class UserSettings extends ChangeNotifier {
     } else {
       BackgroundGlow.current.value = _backgroundStyle;
     }
+    UiMotion.enabled.value = effectiveUiAnimations;
     notifyListeners();
   }
 
@@ -936,21 +952,27 @@ class UserSettings extends ChangeNotifier {
     _resolution = _prefs.getString(_keyResolution) ?? _resolution;
     _fps = _prefs.getInt(_keyFps) ?? _fps;
     _maxBitrateMbps = _prefs.getInt(_keyBitrate) ?? _maxBitrateMbps;
-    _codec = VideoCodec.values.asNameMap()[_prefs.getString(_keyCodec)] ?? _codec;
-    _colorQuality = _parseColorQuality(_prefs.getString(_keyColorQuality)) ?? _colorQuality;
+    _codec =
+        VideoCodec.values.asNameMap()[_prefs.getString(_keyCodec)] ?? _codec;
+    _colorQuality =
+        _parseColorQuality(_prefs.getString(_keyColorQuality)) ?? _colorQuality;
     _keyboardLayout =
-        KeyboardLayout.values.asNameMap()[_prefs.getString(_keyKeyboardLayout)] ??
-            _keyboardLayout;
+        KeyboardLayout.values.asNameMap()[_prefs.getString(
+          _keyKeyboardLayout,
+        )] ??
+        _keyboardLayout;
     _gameLanguage =
         GameLanguage.values.asNameMap()[_prefs.getString(_keyGameLanguage)] ??
-            _gameLanguage;
+        _gameLanguage;
     _enableL4S = _prefs.getBool(_keyL4S) ?? _enableL4S;
     _enableCloudGsync = _prefs.getBool(_keyCloudGsync) ?? _enableCloudGsync;
     _appLaunchMode =
         AppLaunchMode.values.asNameMap()[_prefs.getString(_keyAppLaunchMode)] ??
-            _appLaunchMode;
-    _nativeCloudGsyncMode = NativeStreamerFeatureMode.values
-            .asNameMap()[_prefs.getString(_keyNativeCloudGsyncMode)] ??
+        _appLaunchMode;
+    _nativeCloudGsyncMode =
+        NativeStreamerFeatureMode.values.asNameMap()[_prefs.getString(
+          _keyNativeCloudGsyncMode,
+        )] ??
         _nativeCloudGsyncMode;
     _selectedRegionUrl = _prefs.getString(_keyRegionUrl);
     _advancedMode = _prefs.getBool(_keyAdvancedMode) ?? _advancedMode;
@@ -965,93 +987,111 @@ class UserSettings extends ChangeNotifier {
         _prefs.getDouble(_keyStreamGamepadOpacity) ?? _streamGamepadOpacity;
     _streamGamepadShowShoulders =
         _prefs.getBool(_keyStreamGamepadShowShoulders) ??
-            _streamGamepadShowShoulders;
+        _streamGamepadShowShoulders;
     _streamGamepadShowSticks =
         _prefs.getBool(_keyStreamGamepadShowSticks) ?? _streamGamepadShowSticks;
     _streamGamepadShowDpad =
         _prefs.getBool(_keyStreamGamepadShowDpad) ?? _streamGamepadShowDpad;
     _streamGamepadShowFaceButtons =
         _prefs.getBool(_keyStreamGamepadShowFaceButtons) ??
-            _streamGamepadShowFaceButtons;
+        _streamGamepadShowFaceButtons;
     _streamGamepadShowMenu =
         _prefs.getBool(_keyStreamGamepadShowMenu) ?? _streamGamepadShowMenu;
-    _streamGamepadTheme =
-        ControllerThemes.byId(_prefs.getString(_keyStreamGamepadTheme));
+    _streamGamepadTheme = ControllerThemes.byId(
+      _prefs.getString(_keyStreamGamepadTheme),
+    );
     _streamGamepadStickScale =
         _prefs.getDouble(_keyStreamGamepadStickScale) ??
-            _streamGamepadStickScale;
+        _streamGamepadStickScale;
     _streamGamepadFaceScale =
-        _prefs.getDouble(_keyStreamGamepadFaceScale) ??
-            _streamGamepadFaceScale;
+        _prefs.getDouble(_keyStreamGamepadFaceScale) ?? _streamGamepadFaceScale;
     _streamGamepadDpadScale =
-        _prefs.getDouble(_keyStreamGamepadDpadScale) ??
-            _streamGamepadDpadScale;
+        _prefs.getDouble(_keyStreamGamepadDpadScale) ?? _streamGamepadDpadScale;
     _streamGamepadSouthpaw =
         _prefs.getBool(_keyStreamGamepadSouthpaw) ?? _streamGamepadSouthpaw;
-    _streamGamepadNintendoLayout = _prefs
-            .getBool(_keyStreamGamepadNintendoLayout) ??
+    _streamGamepadNintendoLayout =
+        _prefs.getBool(_keyStreamGamepadNintendoLayout) ??
         _streamGamepadNintendoLayout;
     _streamGamepadDeadzone =
-        _prefs.getDouble(_keyStreamGamepadDeadzone) ??
-            _streamGamepadDeadzone;
+        _prefs.getDouble(_keyStreamGamepadDeadzone) ?? _streamGamepadDeadzone;
     _streamGamepadHaptics =
         _prefs.getBool(_keyStreamGamepadHaptics) ?? _streamGamepadHaptics;
     _streamGamepadEffects =
         _prefs.getBool(_keyStreamGamepadEffects) ?? _streamGamepadEffects;
     _streamGamepadAnimations =
-        _prefs.getBool(_keyStreamGamepadAnimations) ??
-            _streamGamepadAnimations;
-    _streamStatsStyle = StatsOverlayStyle.values.asNameMap()[
-            _prefs.getString(_keyStreamStatsStyle)] ??
+        _prefs.getBool(_keyStreamGamepadAnimations) ?? _streamGamepadAnimations;
+    _streamStatsStyle =
+        StatsOverlayStyle.values.asNameMap()[_prefs.getString(
+          _keyStreamStatsStyle,
+        )] ??
         _streamStatsStyle;
     _streamShowFps = _prefs.getBool(_keyStreamShowFps) ?? _streamShowFps;
-    _webrtcIceTransport = WebrtcIceTransportPolicy
-            .values.asNameMap()[_prefs.getString(_keyWebrtcIceTransport)] ??
+    _webrtcIceTransport =
+        WebrtcIceTransportPolicy.values.asNameMap()[_prefs.getString(
+          _keyWebrtcIceTransport,
+        )] ??
         _webrtcIceTransport;
     _webrtcIcePoolSize =
         _prefs.getInt(_keyWebrtcIcePoolSize) ?? _webrtcIcePoolSize;
-    _webrtcBundle = WebrtcBundlePolicy.values
-            .asNameMap()[_prefs.getString(_keyWebrtcBundle)] ??
+    _webrtcBundle =
+        WebrtcBundlePolicy.values.asNameMap()[_prefs.getString(
+          _keyWebrtcBundle,
+        )] ??
         _webrtcBundle;
-    _webrtcRtcpMux = WebrtcRtcpMuxPolicy.values
-            .asNameMap()[_prefs.getString(_keyWebrtcRtcpMux)] ??
+    _webrtcRtcpMux =
+        WebrtcRtcpMuxPolicy.values.asNameMap()[_prefs.getString(
+          _keyWebrtcRtcpMux,
+        )] ??
         _webrtcRtcpMux;
     _webrtcHwAccel = _prefs.getBool(_keyWebrtcHwAccel) ?? _webrtcHwAccel;
     _webrtcStunServer = _prefs.getString(_keyWebrtcStun) ?? _webrtcStunServer;
-    _webrtcEnableDscp =
-        _prefs.getBool(_keyWebrtcDscp) ?? _webrtcEnableDscp;
+    _webrtcEnableDscp = _prefs.getBool(_keyWebrtcDscp) ?? _webrtcEnableDscp;
     _webrtcMaxIpv6Networks =
         _prefs.getInt(_keyWebrtcMaxIpv6Networks) ?? _webrtcMaxIpv6Networks;
-    _streamPriority = StreamPriority.values.asNameMap()[
-            _prefs.getString(_keyStreamPriority)] ??
+    _streamPriority =
+        StreamPriority.values.asNameMap()[_prefs.getString(
+          _keyStreamPriority,
+        )] ??
         _streamPriority;
     _streamPriorityEnabled =
         _prefs.getBool(_keyStreamPriorityEnabled) ?? _streamPriorityEnabled;
-    _streamTransport = StreamTransportKind.values.asNameMap()[
-            _prefs.getString(_keyStreamTransport)] ??
+    _streamTransport =
+        StreamTransportKind.values.asNameMap()[_prefs.getString(
+          _keyStreamTransport,
+        )] ??
         _streamTransport;
-    _decoderBackend = DecoderBackend.values.asNameMap()[
-            _prefs.getString(_keyDecoderBackend)] ??
+    _decoderBackend =
+        DecoderBackend.values.asNameMap()[_prefs.getString(
+          _keyDecoderBackend,
+        )] ??
         _decoderBackend;
-    _rendererBackend = RendererBackend.values.asNameMap()[
-            _prefs.getString(_keyRendererBackend)] ??
+    _rendererBackend =
+        RendererBackend.values.asNameMap()[_prefs.getString(
+          _keyRendererBackend,
+        )] ??
         _rendererBackend;
-    _videoShader =
-        VideoShaderSettings.fromPersistedString(_prefs.getString(_keyVideoShader));
-    _backgroundStyle = BackgroundStyle.values.asNameMap()[
-            _prefs.getString(_keyBackgroundStyle)] ??
+    _videoShader = VideoShaderSettings.fromPersistedString(
+      _prefs.getString(_keyVideoShader),
+    );
+    _backgroundStyle =
+        BackgroundStyle.values.asNameMap()[_prefs.getString(
+          _keyBackgroundStyle,
+        )] ??
         _backgroundStyle;
     _uiScale = _prefs.getDouble(_keyUiScale) ?? _uiScale;
+    _uiAnimations = _prefs.getBool(_keyUiAnimations) ?? _uiAnimations;
     _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
     _hideTitleBar = _prefs.getBool(_keyHideTitleBar) ?? _hideTitleBar;
-    _maxPerformanceMode = _prefs.getBool(_keyMaxPerformanceMode) ?? _maxPerformanceMode;
+    _maxPerformanceMode =
+        _prefs.getBool(_keyMaxPerformanceMode) ?? _maxPerformanceMode;
     _optLowLatencyMode =
         _prefs.getBool(_keyOptLowLatency) ?? _optLowLatencyMode;
-    _optRecoveryProfile = StreamRecoveryProfile.values.asNameMap()[
-            _prefs.getString(_keyOptRecovery)] ??
+    _optRecoveryProfile =
+        StreamRecoveryProfile.values.asNameMap()[_prefs.getString(
+          _keyOptRecovery,
+        )] ??
         _optRecoveryProfile;
-    _optMinBitrateKbps =
-        _prefs.getInt(_keyOptMinBitrate) ?? _optMinBitrateKbps;
+    _optMinBitrateKbps = _prefs.getInt(_keyOptMinBitrate) ?? _optMinBitrateKbps;
     _optEnableNack = _prefs.getBool(_keyOptNack) ?? _optEnableNack;
     _optEnableFec = _prefs.getBool(_keyOptFec) ?? _optEnableFec;
     _optConstantQuality =
@@ -1080,8 +1120,10 @@ class UserSettings extends ChangeNotifier {
         _prefs.getBool(_keyInputCursorOverlay) ?? _inputCursorOverlay;
     _inputCursorNative =
         _prefs.getBool(_keyInputCursorNative) ?? _inputCursorNative;
-    _inputTouchMode = TouchInputMode.values.asNameMap()[
-            _prefs.getString(_keyInputTouchMode)] ??
+    _inputTouchMode =
+        TouchInputMode.values.asNameMap()[_prefs.getString(
+          _keyInputTouchMode,
+        )] ??
         _inputTouchMode;
     _inputTouchEnabled =
         _prefs.getBool(_keyInputTouchEnabled) ?? _inputTouchEnabled;
@@ -1090,6 +1132,7 @@ class UserSettings extends ChangeNotifier {
     _debugCursorOverlayBox =
         _prefs.getBool(_keyDebugCursorOverlayBox) ?? _debugCursorOverlayBox;
     BackgroundGlow.current.value = effectiveBackgroundStyle;
+    UiMotion.enabled.value = effectiveUiAnimations;
   }
 
   void _save(String key, Object value) {
@@ -1166,6 +1209,7 @@ class UserSettings extends ChangeNotifier {
     _videoShader = VideoShaderSettings.defaults;
     _backgroundStyle = BackgroundStyle.beams;
     _uiScale = 1.0;
+    _uiAnimations = true;
     _logsEnabled = false;
     _hideTitleBar = false;
     _maxPerformanceMode = false;
@@ -1186,6 +1230,7 @@ class UserSettings extends ChangeNotifier {
     _keyboardTapToDismiss = false;
     _debugCursorOverlayBox = false;
     BackgroundGlow.current.value = _backgroundStyle;
+    UiMotion.enabled.value = effectiveUiAnimations;
     notifyListeners();
   }
 
@@ -1241,6 +1286,7 @@ class UserSettings extends ChangeNotifier {
     _keyVideoShader,
     _keyBackgroundStyle,
     _keyUiScale,
+    _keyUiAnimations,
     _keyLogsEnabled,
     _keyHideTitleBar,
     _keyMaxPerformanceMode,

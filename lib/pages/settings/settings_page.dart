@@ -180,18 +180,23 @@ class SettingsPage extends StatelessWidget {
                       color: Neon.error.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(
-                          color: Neon.error.withValues(alpha: 0.35)),
+                        color: Neon.error.withValues(alpha: 0.35),
+                      ),
                     ),
-                    child:
-                        const Icon(Icons.warning_amber, color: Neon.error, size: 20),
+                    child: const Icon(
+                      Icons.warning_amber,
+                      color: Neon.error,
+                      size: 20,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   const Text(
                     'Reset all settings?',
                     style: TextStyle(
-                        color: Neon.ink,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800),
+                      color: Neon.ink,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ],
               ),
@@ -199,7 +204,11 @@ class SettingsPage extends StatelessWidget {
               const Text(
                 'This restores every setting to its default value. Your account '
                 'stays signed in. This cannot be undone.',
-                style: TextStyle(color: Neon.inkSoft, fontSize: 13, height: 1.45),
+                style: TextStyle(
+                  color: Neon.inkSoft,
+                  fontSize: 13,
+                  height: 1.45,
+                ),
               ),
               const SizedBox(height: 20),
               Row(
@@ -207,19 +216,24 @@ class SettingsPage extends StatelessWidget {
                 children: [
                   TextButton(
                     onPressed: () => Navigator.of(dialogContext).pop(false),
-                    child: const Text('Cancel',
-                        style: TextStyle(color: Neon.inkSoft)),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(color: Neon.inkSoft),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   TextButton(
                     style: TextButton.styleFrom(
                       backgroundColor: Neon.error.withValues(alpha: 0.12),
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                     onPressed: () => Navigator.of(dialogContext).pop(true),
-                    child:
-                        const Text('Reset', style: TextStyle(color: Neon.error)),
+                    child: const Text(
+                      'Reset',
+                      style: TextStyle(color: Neon.error),
+                    ),
                   ),
                 ],
               ),
@@ -329,10 +343,7 @@ class _FancyCard extends StatelessWidget {
             ? Neon.glowShadow(radius: 18, alpha: 0.24)
             : Neon.softShadow(radius: 18),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: child,
-      ),
+      child: ClipRRect(borderRadius: BorderRadius.circular(16), child: child),
     );
   }
 }
@@ -345,14 +356,15 @@ class _FadeIn extends StatefulWidget {
   State<_FadeIn> createState() => _FadeInState();
 }
 
-class _FadeInState extends State<_FadeIn>
-    with SingleTickerProviderStateMixin {
+class _FadeInState extends State<_FadeIn> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 480),
   );
-  late final Animation<double> _opacity =
-      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<double> _opacity = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOutCubic,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.05),
     end: Offset.zero,
@@ -360,6 +372,7 @@ class _FadeInState extends State<_FadeIn>
   @override
   void initState() {
     super.initState();
+    if (!UiMotion.enabled.value) return;
     Future.delayed(widget.delay, () {
       if (mounted) _c.forward();
     });
@@ -373,6 +386,7 @@ class _FadeInState extends State<_FadeIn>
 
   @override
   Widget build(BuildContext context) {
+    if (!UiMotion.enabled.value) return widget.child;
     return FadeTransition(
       opacity: _opacity,
       child: SlideTransition(position: _slide, child: widget.child),

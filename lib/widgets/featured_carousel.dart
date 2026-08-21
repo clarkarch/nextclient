@@ -62,6 +62,7 @@ class _FeaturedCarouselState extends State<FeaturedCarousel> {
 
   void _startTimer() {
     _timer?.cancel();
+    if (!UiMotion.enabled.value) return;
     if (widget.slides.length < 2) return;
     _timer = Timer.periodic(widget.autoAdvance, (_) {
       if (!mounted || !_controller.hasClients) return;
@@ -153,8 +154,11 @@ class _ParallaxSlide extends StatelessWidget {
   final int index;
   final Widget child;
 
-  const _ParallaxSlide(
-      {required this.controller, required this.index, required this.child});
+  const _ParallaxSlide({
+    required this.controller,
+    required this.index,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -199,11 +203,12 @@ class _PagerDots extends StatelessWidget {
   final ValueChanged<int>? onTap;
   final Duration autoAdvance;
 
-  const _PagerDots(
-      {required this.count,
-      required this.index,
-      this.onTap,
-      this.autoAdvance = const Duration(seconds: 6)});
+  const _PagerDots({
+    required this.count,
+    required this.index,
+    this.onTap,
+    this.autoAdvance = const Duration(seconds: 6),
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -239,8 +244,12 @@ class _Slide extends StatelessWidget {
   final VoidCallback? onSelect;
   final bool isActive;
 
-  const _Slide(
-      {required this.slide, this.onPlay, this.onSelect, this.isActive = true});
+  const _Slide({
+    required this.slide,
+    this.onPlay,
+    this.onSelect,
+    this.isActive = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -266,11 +275,7 @@ class _Slide extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       if (slide.chips != null && slide.chips!.isNotEmpty)
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: slide.chips!,
-                        ),
+                        Wrap(spacing: 8, runSpacing: 6, children: slide.chips!),
                       const SizedBox(height: 8),
                       Text(
                         slide.title,
@@ -306,9 +311,10 @@ class _Slide extends StatelessWidget {
                       const SizedBox(height: 12),
                       if (onPlay != null)
                         NeonButton(
-                            label: 'Play',
-                            icon: Icons.play_arrow,
-                            onPressed: onPlay),
+                          label: 'Play',
+                          icon: Icons.play_arrow,
+                          onPressed: onPlay,
+                        ),
                     ],
                   ),
                 ),

@@ -308,14 +308,15 @@ class _FadeIn extends StatefulWidget {
   State<_FadeIn> createState() => _FadeInState();
 }
 
-class _FadeInState extends State<_FadeIn>
-    with SingleTickerProviderStateMixin {
+class _FadeInState extends State<_FadeIn> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 520),
   );
-  late final Animation<double> _opacity =
-      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<double> _opacity = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOutCubic,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.06),
     end: Offset.zero,
@@ -324,6 +325,7 @@ class _FadeInState extends State<_FadeIn>
   @override
   void initState() {
     super.initState();
+    if (!UiMotion.enabled.value) return;
     Future.delayed(widget.delay, () {
       if (mounted) _c.forward();
     });
@@ -337,6 +339,7 @@ class _FadeInState extends State<_FadeIn>
 
   @override
   Widget build(BuildContext context) {
+    if (!UiMotion.enabled.value) return widget.child;
     return FadeTransition(
       opacity: _opacity,
       child: SlideTransition(position: _slide, child: widget.child),
@@ -358,8 +361,10 @@ class _StaggeredCardState extends State<_StaggeredCard>
     vsync: this,
     duration: const Duration(milliseconds: 480),
   );
-  late final Animation<double> _opacity =
-      CurvedAnimation(parent: _c, curve: Curves.easeOut);
+  late final Animation<double> _opacity = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOut,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.08),
     end: Offset.zero,
@@ -368,6 +373,7 @@ class _StaggeredCardState extends State<_StaggeredCard>
   @override
   void initState() {
     super.initState();
+    if (!UiMotion.enabled.value) return;
     final delay = Duration(milliseconds: (widget.index % 12) * 45);
     Future.delayed(delay, () {
       if (mounted) _c.forward();
@@ -382,6 +388,7 @@ class _StaggeredCardState extends State<_StaggeredCard>
 
   @override
   Widget build(BuildContext context) {
+    if (!UiMotion.enabled.value) return widget.child;
     return FadeTransition(
       opacity: _opacity,
       child: SlideTransition(position: _slide, child: widget.child),
@@ -393,8 +400,11 @@ class _EmptyIllustration extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
-  const _EmptyIllustration(
-      {required this.icon, required this.title, required this.subtitle});
+  const _EmptyIllustration({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -420,16 +430,20 @@ class _EmptyIllustration extends StatelessWidget {
               child: Icon(icon, color: Neon.bgA, size: 28),
             ),
             const SizedBox(height: 14),
-            Text(title,
-                style: const TextStyle(
-                    color: Neon.ink,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800)),
+            Text(
+              title,
+              style: const TextStyle(
+                color: Neon.ink,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
             const SizedBox(height: 6),
-            Text(subtitle,
-                textAlign: TextAlign.center,
-                style:
-                    const TextStyle(color: Neon.inkMuted, fontSize: 12.5)),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Neon.inkMuted, fontSize: 12.5),
+            ),
           ],
         ),
       ),
@@ -581,14 +595,17 @@ class _TopIconButtonState extends State<_TopIconButton> {
                 boxShadow: _hover
                     ? [
                         BoxShadow(
-                            color: Neon.accent.withValues(alpha: 0.18),
-                            blurRadius: 14)
+                          color: Neon.accent.withValues(alpha: 0.18),
+                          blurRadius: 14,
+                        ),
                       ]
                     : null,
               ),
-              child: Icon(widget.icon,
-                  size: 20,
-                  color: _hover ? Neon.accent : Neon.inkSoft),
+              child: Icon(
+                widget.icon,
+                size: 20,
+                color: _hover ? Neon.accent : Neon.inkSoft,
+              ),
             ),
           ),
         ),

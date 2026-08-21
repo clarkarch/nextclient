@@ -28,8 +28,9 @@ class UiSettingsPage extends StatelessWidget {
         listenable: services.settings,
         builder: (context, _) {
           final selected = services.settings.backgroundStyle;
-          final scalePercent =
-              (services.settings.uiScale * 100).round().toDouble();
+          final scalePercent = (services.settings.uiScale * 100)
+              .round()
+              .toDouble();
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -51,6 +52,20 @@ class UiSettingsPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
               ],
+              NeonCard(
+                padding: EdgeInsets.zero,
+                child: NeonSettingTile(
+                  icon: Icons.animation,
+                  title: 'Animations',
+                  subtitle:
+                      'Entrance fades, staggered cards, moving backgrounds',
+                  trailing: NeonSwitch(
+                    value: services.settings.uiAnimations,
+                    onChanged: (v) => services.settings.uiAnimations = v,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               NeonCard(
                 padding: EdgeInsets.zero,
                 child: Padding(
@@ -109,8 +124,7 @@ class UiSettingsPage extends StatelessWidget {
                         max: 150,
                         divisions: 15,
                         label: '${scalePercent.round()}%',
-                        onChanged: (v) =>
-                            services.settings.uiScale = v / 100,
+                        onChanged: (v) => services.settings.uiScale = v / 100,
                       ),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -166,8 +180,9 @@ class UiSettingsPage extends StatelessWidget {
                                 _StyleOption(
                                   option: option,
                                   selected: option == selected,
-                                  onTap: () => services.settings
-                                      .backgroundStyle = option,
+                                  onTap: () =>
+                                      services.settings.backgroundStyle =
+                                          option,
                                 ),
                             ],
                           ),

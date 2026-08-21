@@ -154,10 +154,7 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) {
     final games = _games;
-    return NeonPageScaffold(
-      onRefresh: _load,
-      slivers: _slivers(games),
-    );
+    return NeonPageScaffold(onRefresh: _load, slivers: _slivers(games));
   }
 
   List<Widget> _slivers(List<CatalogGame>? games) {
@@ -268,14 +265,15 @@ class _FadeIn extends StatefulWidget {
   State<_FadeIn> createState() => _FadeInState();
 }
 
-class _FadeInState extends State<_FadeIn>
-    with SingleTickerProviderStateMixin {
+class _FadeInState extends State<_FadeIn> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 480),
   );
-  late final Animation<double> _opacity =
-      CurvedAnimation(parent: _c, curve: Curves.easeOutCubic);
+  late final Animation<double> _opacity = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOutCubic,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.05),
     end: Offset.zero,
@@ -283,6 +281,7 @@ class _FadeInState extends State<_FadeIn>
   @override
   void initState() {
     super.initState();
+    if (!UiMotion.enabled.value) return;
     Future.delayed(widget.delay, () {
       if (mounted) _c.forward();
     });
@@ -296,6 +295,7 @@ class _FadeInState extends State<_FadeIn>
 
   @override
   Widget build(BuildContext context) {
+    if (!UiMotion.enabled.value) return widget.child;
     return FadeTransition(
       opacity: _opacity,
       child: SlideTransition(position: _slide, child: widget.child),
@@ -317,8 +317,10 @@ class _StaggeredCardState extends State<_StaggeredCard>
     vsync: this,
     duration: const Duration(milliseconds: 460),
   );
-  late final Animation<double> _opacity =
-      CurvedAnimation(parent: _c, curve: Curves.easeOut);
+  late final Animation<double> _opacity = CurvedAnimation(
+    parent: _c,
+    curve: Curves.easeOut,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.07),
     end: Offset.zero,
@@ -326,6 +328,7 @@ class _StaggeredCardState extends State<_StaggeredCard>
   @override
   void initState() {
     super.initState();
+    if (!UiMotion.enabled.value) return;
     Future.delayed(Duration(milliseconds: (widget.index % 14) * 38), () {
       if (mounted) _c.forward();
     });
@@ -339,6 +342,7 @@ class _StaggeredCardState extends State<_StaggeredCard>
 
   @override
   Widget build(BuildContext context) {
+    if (!UiMotion.enabled.value) return widget.child;
     return FadeTransition(
       opacity: _opacity,
       child: SlideTransition(position: _slide, child: widget.child),
@@ -373,15 +377,19 @@ class _EmptyLibrary extends StatelessWidget {
                 boxShadow: Neon.glowShadow(radius: 14, alpha: 0.28),
               ),
               child: Icon(
-                  filtered ? Icons.filter_alt_off : Icons.library_add_outlined,
-                  color: Neon.bgA,
-                  size: 26),
+                filtered ? Icons.filter_alt_off : Icons.library_add_outlined,
+                color: Neon.bgA,
+                size: 26,
+              ),
             ),
             const SizedBox(height: 14),
             Text(
               filtered ? 'No matches' : 'Your library is empty',
               style: const TextStyle(
-                  color: Neon.ink, fontSize: 15, fontWeight: FontWeight.w800),
+                color: Neon.ink,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
             ),
             const SizedBox(height: 6),
             Text(
@@ -399,7 +407,8 @@ class _EmptyLibrary extends StatelessWidget {
                   foregroundColor: Neon.accent,
                   side: const BorderSide(color: Neon.accent),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 child: const Text('CLEAR FILTERS'),
               ),
@@ -438,16 +447,24 @@ class _FancyRefreshButtonState extends State<_FancyRefreshButton> {
                 : Neon.bgC.withValues(alpha: 0.9),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-                color: _hover
-                    ? Neon.accent.withValues(alpha: 0.42)
-                    : Neon.outline),
+              color: _hover
+                  ? Neon.accent.withValues(alpha: 0.42)
+                  : Neon.outline,
+            ),
             boxShadow: _hover
-                ? [BoxShadow(color: Neon.accent.withValues(alpha: 0.16), blurRadius: 12)]
+                ? [
+                    BoxShadow(
+                      color: Neon.accent.withValues(alpha: 0.16),
+                      blurRadius: 12,
+                    ),
+                  ]
                 : null,
           ),
-          child: Icon(Icons.refresh,
-              size: 18,
-              color: _hover ? Neon.accent : Neon.inkSoft),
+          child: Icon(
+            Icons.refresh,
+            size: 18,
+            color: _hover ? Neon.accent : Neon.inkSoft,
+          ),
         ),
       ),
     );
