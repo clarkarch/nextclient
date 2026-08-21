@@ -325,39 +325,13 @@ class _FancyCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Neon.bgC.withValues(alpha: 0.84),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: glow
-                ? Neon.accent.withValues(alpha: 0.38)
-                : Neon.outline.withValues(alpha: 0.9)),
         boxShadow: glow
             ? Neon.glowShadow(radius: 18, alpha: 0.24)
             : Neon.softShadow(radius: 18),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(15),
-        child: Column(
-          children: [
-            // Top hairline sheen
-            Container(
-              height: 1,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: glow
-                      ? [
-                          Neon.accent.withValues(alpha: 0.0),
-                          Neon.accent.withValues(alpha: 0.35),
-                          Colors.transparent
-                        ]
-                      : [
-                          Colors.white.withValues(alpha: 0.06),
-                          Colors.transparent
-                        ],
-                ),
-              ),
-            ),
-            child,
-          ],
-        ),
+        borderRadius: BorderRadius.circular(16),
+        child: child,
       ),
     );
   }

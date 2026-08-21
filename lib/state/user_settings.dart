@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../theme/controller_theme.dart' show ControllerTheme;
 import '../theme/neon.dart';
 import 'stream_transport.dart' show StreamTransportKind;
 import 'video_shader_settings.dart';
@@ -37,7 +36,6 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadShowFaceButtons =
       'settings.stream.gamepadShowFaceButtons';
   static const _keyStreamGamepadShowMenu = 'settings.stream.gamepadShowMenu';
-  static const _keyControllerTheme = 'settings.stream.controllerTheme';
   static const _keyStreamShowFps = 'settings.stream.showFps';
   static const _keyWebrtcIceTransport = 'settings.webrtc.iceTransport';
   static const _keyWebrtcIcePoolSize = 'settings.webrtc.icePoolSize';
@@ -110,7 +108,6 @@ class UserSettings extends ChangeNotifier {
   bool _streamGamepadShowDpad = true;
   bool _streamGamepadShowFaceButtons = true;
   bool _streamGamepadShowMenu = true;
-  ControllerTheme _controllerTheme = ControllerTheme.neon;
   bool _streamShowFps = false;
   WebrtcIceTransportPolicy _webrtcIceTransport = WebrtcIceTransportPolicy.all;
   int _webrtcIcePoolSize = 4;
@@ -195,8 +192,6 @@ class UserSettings extends ChangeNotifier {
 
   /// Whether the menu buttons (Select/Start/Home) are shown on the gamepad.
   bool get streamGamepadShowMenu => _streamGamepadShowMenu;
-
-  ControllerTheme get controllerTheme => _controllerTheme;
 
   /// Gamepad overlay opacity (0.2–1.0, 1.0 = fully opaque). Tweaked live
   /// from the stream settings sidebar so the pad can sit semi-transparent
@@ -480,13 +475,6 @@ class UserSettings extends ChangeNotifier {
     if (_streamGamepadShowMenu == v) return;
     _streamGamepadShowMenu = v;
     _save(_keyStreamGamepadShowMenu, v);
-    notifyListeners();
-  }
-
-  set controllerTheme(ControllerTheme v) {
-    if (_controllerTheme == v) return;
-    _controllerTheme = v;
-    _save(_keyControllerTheme, v.name);
     notifyListeners();
   }
 
@@ -846,9 +834,6 @@ class UserSettings extends ChangeNotifier {
             _streamGamepadShowFaceButtons;
     _streamGamepadShowMenu =
         _prefs.getBool(_keyStreamGamepadShowMenu) ?? _streamGamepadShowMenu;
-    _controllerTheme = ControllerTheme.values.asNameMap()[
-            _prefs.getString(_keyControllerTheme)] ??
-        _controllerTheme;
     _streamShowFps = _prefs.getBool(_keyStreamShowFps) ?? _streamShowFps;
     _webrtcIceTransport = WebrtcIceTransportPolicy
             .values.asNameMap()[_prefs.getString(_keyWebrtcIceTransport)] ??
@@ -983,7 +968,6 @@ class UserSettings extends ChangeNotifier {
     _streamGamepadShowDpad = true;
     _streamGamepadShowFaceButtons = true;
     _streamGamepadShowMenu = true;
-    _controllerTheme = ControllerTheme.neon;
     _streamShowFps = false;
     _webrtcIceTransport = WebrtcIceTransportPolicy.all;
     _webrtcIcePoolSize = 4;
@@ -1048,7 +1032,6 @@ class UserSettings extends ChangeNotifier {
     _keyStreamGamepadShowDpad,
     _keyStreamGamepadShowFaceButtons,
     _keyStreamGamepadShowMenu,
-    _keyControllerTheme,
     _keyStreamShowFps,
     _keyWebrtcIceTransport,
     _keyWebrtcIcePoolSize,

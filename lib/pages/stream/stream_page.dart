@@ -26,7 +26,6 @@ import '../../state/user_settings.dart';
 import '../../state/video_shader_settings.dart';
 import '../../state/webrtc_stream_session.dart'
     show pushVideoShaderSettings;
-import '../../theme/controller_theme.dart';
 import '../../theme/neon.dart';
 import '../../utils/friendly_error.dart';
 import '../../widgets/game_art.dart';
@@ -3172,7 +3171,6 @@ class _ReadySurfaceState extends State<_ReadySurface>
                             bottom: 8,
                           ),
                           child: VirtualGamepad(
-                            theme: widget.settings.controllerTheme,
                             scale: widget.settings.streamGamepadScale,
                             spacing: widget.settings.streamGamepadSpacing,
                             showShoulders:
@@ -3752,24 +3750,6 @@ class StreamSettingsSidebar extends StatelessWidget {
                     ),
                     const SizedBox(height: 14),
                     const Text(
-                      'Theme',
-                      style: TextStyle(color: Neon.inkSoft, fontSize: 12),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final t in ControllerTheme.values)
-                          _ControllerThemeChip(
-                            theme: t,
-                            selected: settings.controllerTheme == t,
-                            onTap: () => settings.controllerTheme = t,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
                       'Elements',
                       style: TextStyle(color: Neon.inkSoft, fontSize: 12),
                     ),
@@ -4090,94 +4070,6 @@ class _SliderRow extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ControllerThemeChip extends StatelessWidget {
-  final ControllerTheme theme;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ControllerThemeChip({
-    required this.theme,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isMinimal = theme.shape == ControllerShape.minimal;
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? theme.primary.withValues(alpha: 0.14) : const Color(0xFF1A1A26),
-          borderRadius: BorderRadius.circular(isMinimal ? 6 : 10),
-          border: Border.all(
-            color: selected ? theme.primary : Neon.outlineSoft,
-            width: selected ? 1.4 : 1,
-          ),
-          boxShadow: selected
-              ? [BoxShadow(color: theme.primary.withValues(alpha: 0.28), blurRadius: 10)]
-              : null,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 14,
-                  height: 14,
-                  decoration: BoxDecoration(
-                    color: theme.primary,
-                    shape: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
-                        ? BoxShape.rectangle
-                        : BoxShape.circle,
-                    borderRadius: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
-                        ? BorderRadius.circular(3)
-                        : null,
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: theme.secondary,
-                    shape: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
-                        ? BoxShape.rectangle
-                        : BoxShape.circle,
-                    borderRadius: theme.shape == ControllerShape.square || theme.shape == ControllerShape.block
-                        ? BorderRadius.circular(2)
-                        : null,
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              theme.label,
-              style: TextStyle(
-                color: selected ? theme.primary : Neon.inkSoft,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            Text(
-              theme.description,
-              style: const TextStyle(color: Neon.inkMuted, fontSize: 9),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
