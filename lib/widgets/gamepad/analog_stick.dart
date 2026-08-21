@@ -79,7 +79,7 @@ class _AnalogStickState extends State<AnalogStick>
           ? const Duration(milliseconds: 110)
           : Duration.zero,
       value: 0,
-    )..addListener(() => setState(() {}));
+    );
   }
 
   @override
@@ -175,14 +175,19 @@ class _AnalogStickState extends State<AnalogStick>
       child: SizedBox(
         width: widget.size,
         height: widget.size,
-        child: CustomPaint(
-          painter: _AnalogStickPainter(
-            theme: widget.theme,
-            knobOffset: _knobOffset,
-            maxRadius: _maxRadius,
-            knobSize: widget.knobSize,
-            grabProgress: _grabCtrl.value,
-            accentColor: widget.accentColor,
+        // Only the CustomPaint rebuilds per animation tick — the grab
+        // controller no longer setState()s the whole control.
+        child: AnimatedBuilder(
+          animation: _grabCtrl,
+          builder: (context, _) => CustomPaint(
+            painter: _AnalogStickPainter(
+              theme: widget.theme,
+              knobOffset: _knobOffset,
+              maxRadius: _maxRadius,
+              knobSize: widget.knobSize,
+              grabProgress: _grabCtrl.value,
+              accentColor: widget.accentColor,
+            ),
           ),
         ),
       ),

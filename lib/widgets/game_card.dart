@@ -99,11 +99,12 @@ class _GameCardState extends State<GameCard> {
                               ),
                             ),
                           ),
-                          // Hover shimmer sweep
+                          // Hover shimmer sweep — the controller only runs
+                          // while hovered so idle cards never tick.
                           AnimatedOpacity(
                             opacity: _hover ? 1 : 0,
                             duration: const Duration(milliseconds: 280),
-                            child: const _SheenSweep(),
+                            child: _SheenSweep(active: _hover),
                           ),
                           // Bottom scrim for badge legibility
                           Positioned.fill(
@@ -220,7 +221,9 @@ class _GameCardState extends State<GameCard> {
 }
 
 class _SheenSweep extends StatefulWidget {
-  const _SheenSweep();
+  final bool active;
+
+  const _SheenSweep({this.active = false});
 
   @override
   State<_SheenSweep> createState() => _SheenSweepState();
@@ -231,7 +234,22 @@ class _SheenSweepState extends State<_SheenSweep>
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
-  )..repeat();
+  );
+
+  @override
+  void didUpdateWidget(covariant _SheenSweep oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Run only while hovered: an always-on controller in every grid card
+    // costs a rebuild + repaint mark per card per frame, forever.
+    if (widget.active != oldWidget.active) {
+      if (widget.active) {
+        _c.repeat();
+      } else {
+        _c.stop();
+        _c.value = 0;
+      }
+    }
+  }
 
   @override
   void dispose() {

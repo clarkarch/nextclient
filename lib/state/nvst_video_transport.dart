@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/widgets.dart';
 import 'package:gfn_core/gfn_core.dart';
 
+import 'frame_retirement.dart';
 import 'gfn_cursor_overlay.dart' show GfnCursorOverlayUpdate;
 import 'gfn_sdp_munger.dart';
 import 'nvst_bridge_ffi.dart';
@@ -47,6 +48,10 @@ class NvstVideoTransport implements StreamTransport {
   bool _disposed = false;
   int _frameSeq = 0;
   int _lastShownSeq = -1;
+
+  /// The image currently rendered by [buildVideoView]; retired (disposed)
+  /// two frames after being replaced so the raster pipeline can drain.
+  ui.Image? _lastShownImage;
   Timer? _statsTimer;
   bool _statsPollInFlight = false;
   int _lastFramesDecoded = 0;
@@ -143,26 +148,31 @@ class NvstVideoTransport implements StreamTransport {
       ffi.Pointer<ffi.Uint8> rgba, int rtpTimestamp) {
     final rowBytes = width * 4;
     final total = stride > 0 && height > 0 ? stride * height : 0;
-    if (total <= 0) {
+    if (total <= 0 || rowBytes <= 0) {
       _bridge?.freePtr(rgba.cast());
       return;
     }
-    final copy = Uint8List(total);
-    copy.setAll(0, rgba.asTypedList(total));
-    _bridge?.freePtr(rgba.cast());
-
-    Uint8List packed = copy;
-    if (stride != rowBytes) {
+    // Single copy from native memory. When the rows are GPU-padded
+    // (stride != rowBytes) the repack reads straight from the C buffer —
+    // no intermediate full-frame Dart allocation.
+    final src = rgba.asTypedList(total);
+    final Uint8List packed;
+    if (stride == rowBytes) {
+      packed = Uint8List(total);
+      packed.setAll(0, src);
+    } else {
       packed = Uint8List(rowBytes * height);
       for (var y = 0; y < height; y++) {
         packed.setRange(
           y * rowBytes,
-          y * rowBytes + rowBytes,
-          copy,
+          (y + 1) * rowBytes,
+          src,
           y * stride,
         );
       }
     }
+    _bridge?.freePtr(rgba.cast());
+
     _videoWidth = width;
     _videoHeight = height;
     final seq = ++_frameSeq;
@@ -172,9 +182,16 @@ class NvstVideoTransport implements StreamTransport {
       height,
       ui.PixelFormat.rgba8888,
       (img) {
-        if (seq <= _lastShownSeq) return;
+        if (seq <= _lastShownSeq) {
+          // Never displayed, nothing references it — free immediately.
+          img.dispose();
+          return;
+        }
         _lastShownSeq = seq;
+        final old = _lastShownImage;
+        _lastShownImage = img;
         frameImage.value = img;
+        if (old != null) FrameRetirement.retire(old);
       },
     );
   }
@@ -322,6 +339,10 @@ class NvstVideoTransport implements StreamTransport {
     _bridge = null;
     bridge?.dispose();
     frameImage.value = null;
+    final last = _lastShownImage;
+    _lastShownImage = null;
+    // Deferred: a built layer tree may still reference it for one more frame.
+    if (last != null) FrameRetirement.retire(last);
 
     await _input.dispose();
     _log('NVST transport torn down');

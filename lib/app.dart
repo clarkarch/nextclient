@@ -343,14 +343,26 @@ class _ShellState extends State<Shell> {
         MediaQuery.of(context).orientation == Orientation.portrait;
 
     final pages = <Widget>[
-      HomePage(
-        services: widget.services,
-        onSignOut: widget.onSignOut,
-        // No sidebar in portrait — always show the brand in the top bar.
-        showBrand: isPortrait || !_sidebarExpanded,
+      // TickerMode pauses every animation controller on hidden tabs (animated
+      // backgrounds, shimmer, etc.) — IndexedStack keeps them mounted but
+      // otherwise lets their tickers run at full rate behind the scenes.
+      TickerMode(
+        enabled: _index == 0,
+        child: HomePage(
+          services: widget.services,
+          onSignOut: widget.onSignOut,
+          // No sidebar in portrait — always show the brand in the top bar.
+          showBrand: isPortrait || !_sidebarExpanded,
+        ),
       ),
-      LibraryPage(services: widget.services),
-      SettingsPage(services: widget.services, onSignOut: widget.onSignOut),
+      TickerMode(
+        enabled: _index == 1,
+        child: LibraryPage(services: widget.services),
+      ),
+      TickerMode(
+        enabled: _index == 2,
+        child: SettingsPage(services: widget.services, onSignOut: widget.onSignOut),
+      ),
     ];
 
     if (isPortrait) {

@@ -52,6 +52,11 @@ class NeonPageScaffold extends StatefulWidget {
 class _NeonPageScaffoldState extends State<NeonPageScaffold> {
   ScrollController? _ownedController;
 
+  /// Whether the content is scrolled far enough to light the top hairline.
+  /// A notifier instead of setState so scrolling never rebuilds the page —
+  /// only the top bar + hairline listen to this.
+  final ValueNotifier<bool> _topGlow = ValueNotifier(false);
+
   ScrollController get _controller {
     final external = widget.scrollController;
     if (external != null) return external;
@@ -64,6 +69,7 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
       _ownedController?.removeListener(_onScroll);
     } catch (_) {}
     _ownedController?.dispose();
+    _topGlow.dispose();
     super.dispose();
   }
 
@@ -86,7 +92,7 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
   }
 
   // Tracks scroll offset to fade the top hairline glow.
-  double _scrollOffset = 0;
+  bool _scrolled = false;
 
   @override
   void initState() {
@@ -99,8 +105,10 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
   void _onScroll() {
     if (!mounted) return;
     final offset = _controller.hasClients ? _controller.offset : 0.0;
-    if ((offset - _scrollOffset).abs() > 1) {
-      setState(() => _scrollOffset = offset);
+    final scrolled = offset > 4;
+    if (scrolled != _scrolled) {
+      _scrolled = scrolled;
+      _topGlow.value = scrolled;
     }
   }
 
@@ -114,7 +122,50 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
   }
 
   Widget _decorated(BackgroundStyle style) {
-    final showTopGlow = _scrollOffset > 4;
+    // Content is built once here; only the top bar + hairline rebuild when
+    // the scroll glow flips.
+    final content = Expanded(
+      child: Stack(
+        children: [
+          Scrollbar(
+            controller: _controller,
+            thumbVisibility: false,
+            thickness: 4,
+            radius: const Radius.circular(8),
+            interactive: true,
+            child: widget.onRefresh == null
+                ? _scrollView()
+                : RefreshIndicator(
+                    onRefresh: widget.onRefresh!,
+                    color: Neon.accent,
+                    backgroundColor: Neon.bgC,
+                    child: _scrollView(),
+                  ),
+          ),
+          // Bottom fade — hints there's more to scroll
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 40,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Neon.bgA.withValues(alpha: 0.55),
+                      const Color(0x0008080D),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -127,78 +178,46 @@ class _NeonPageScaffoldState extends State<NeonPageScaffold> {
           bottom: false,
           child: Column(
             children: [
-              if (widget.header != null)
-                widget.header!
-              else if (widget.title != null ||
-                  widget.showBack ||
-                  (widget.actions != null && widget.actions!.isNotEmpty))
-                _TopBar(
-                  title: widget.title,
-                  showBack: widget.showBack,
-                  actions: widget.actions ?? const [],
-                  scrolled: showTopGlow,
-                ),
-              // Animated top hairline — glows when scrolled
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                height: 1,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: showTopGlow
-                        ? [
-                            Neon.accent.withValues(alpha: 0.0),
-                            Neon.accent.withValues(alpha: 0.28),
-                            Neon.accent.withValues(alpha: 0.0),
-                          ]
-                        : [
-                            Colors.transparent,
-                            Colors.transparent,
-                          ],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Stack(
+              ValueListenableBuilder<bool>(
+                valueListenable: _topGlow,
+                builder: (context, showTopGlow, _) => Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Scrollbar(
-                      controller: _controller,
-                      thumbVisibility: false,
-                      thickness: 4,
-                      radius: const Radius.circular(8),
-                      interactive: true,
-                      child: widget.onRefresh == null
-                          ? _scrollView()
-                          : RefreshIndicator(
-                              onRefresh: widget.onRefresh!,
-                              color: Neon.accent,
-                              backgroundColor: Neon.bgC,
-                              child: _scrollView(),
-                            ),
-                    ),
-                    // Bottom fade — hints there's more to scroll
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 0,
-                      height: 40,
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.bottomCenter,
-                              end: Alignment.topCenter,
-                              colors: [
-                                Neon.bgA.withValues(alpha: 0.55),
-                                const Color(0x0008080D),
-                              ],
-                            ),
-                          ),
+                    if (widget.header != null)
+                      widget.header!
+                    else if (widget.title != null ||
+                        widget.showBack ||
+                        (widget.actions != null &&
+                            widget.actions!.isNotEmpty))
+                      _TopBar(
+                        title: widget.title,
+                        showBack: widget.showBack,
+                        actions: widget.actions ?? const [],
+                        scrolled: showTopGlow,
+                      ),
+                    // Animated top hairline — glows when scrolled
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      height: 1,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: showTopGlow
+                              ? [
+                                  Neon.accent.withValues(alpha: 0.0),
+                                  Neon.accent.withValues(alpha: 0.28),
+                                  Neon.accent.withValues(alpha: 0.0),
+                                ]
+                              : [
+                                  Colors.transparent,
+                                  Colors.transparent,
+                                ],
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
+              content,
             ],
           ),
         ),

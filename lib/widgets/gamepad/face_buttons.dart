@@ -77,7 +77,7 @@ class _FaceButtonsState extends State<FaceButtons>
           ? const Duration(milliseconds: 110)
           : Duration.zero,
       value: 0,
-    )..addListener(() => setState(() {}));
+    );
   }
 
   @override
@@ -196,15 +196,19 @@ class _FaceButtonsState extends State<FaceButtons>
       child: SizedBox(
         width: totalSize,
         height: totalSize,
-        child: CustomPaint(
-          painter: _FaceButtonsPainter(
-            theme: widget.theme,
-            buttonSize: widget.buttonSize,
-            spacingFactor: _spacingFactor,
-            pressedButton: _pressedButton,
-            visualButton: _visualButton,
-            pressProgress: _pressCtrl.value,
-            buttonPositions: _buttonPositions,
+        // Only the CustomPaint rebuilds per animation tick.
+        child: AnimatedBuilder(
+          animation: _pressCtrl,
+          builder: (context, _) => CustomPaint(
+            painter: _FaceButtonsPainter(
+              theme: widget.theme,
+              buttonSize: widget.buttonSize,
+              spacingFactor: _spacingFactor,
+              pressedButton: _pressedButton,
+              visualButton: _visualButton,
+              pressProgress: _pressCtrl.value,
+              buttonPositions: _buttonPositions,
+            ),
           ),
         ),
       ),

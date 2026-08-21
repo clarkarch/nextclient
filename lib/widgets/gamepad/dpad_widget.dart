@@ -66,7 +66,7 @@ class _DPadWidgetState extends State<DPadWidget>
           ? const Duration(milliseconds: 110)
           : Duration.zero,
       value: 0,
-    )..addListener(() => setState(() {}));
+    );
   }
 
   @override
@@ -151,12 +151,16 @@ class _DPadWidgetState extends State<DPadWidget>
       child: SizedBox(
         width: widget.size,
         height: widget.size,
-        child: CustomPaint(
-          painter: _DPadPainter(
-            theme: widget.theme,
-            pressedDirection: _pressedDirection,
-            visualDirection: _visualDirection,
-            pressProgress: _pressCtrl.value,
+        // Only the CustomPaint rebuilds per animation tick.
+        child: AnimatedBuilder(
+          animation: _pressCtrl,
+          builder: (context, _) => CustomPaint(
+            painter: _DPadPainter(
+              theme: widget.theme,
+              pressedDirection: _pressedDirection,
+              visualDirection: _visualDirection,
+              pressProgress: _pressCtrl.value,
+            ),
           ),
         ),
       ),

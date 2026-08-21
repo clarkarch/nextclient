@@ -115,23 +115,43 @@ class _NeonBackgroundState extends State<NeonBackground>
         ],
       );
     }
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) => Stack(
+    // RepaintBoundary keeps the per-frame gradient repaints contained to the
+    // background layer — without it the dirty region propagates to the
+    // nearest ancestor boundary and repaints the page content above too.
+    return RepaintBoundary(
+      child: Stack(
         fit: StackFit.expand,
         children: [
-          // Base obsidian
+          // Base obsidian (static — never rebuilt by the animation).
           const ColoredBox(color: Neon.bgA),
-          // Primary style layer
-          DecoratedBox(
-            decoration: BoxDecoration(gradient: _gradient(_controller.value)),
-          ),
-          // Fancy secondary depth layer — subtle violet/blue orbs that add
-          // depth without changing hue. Only visible on richer styles.
-          if (widget.style != BackgroundStyle.subtle)
-            DecoratedBox(
-              decoration: BoxDecoration(gradient: _depthGradient(_controller.value)),
+          // Only the time-varying layers live inside the AnimatedBuilder;
+          // everything static below stays out of the per-tick rebuild path.
+          AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) => Stack(
+              fit: StackFit.expand,
+              children: [
+                // Primary style layer
+                DecoratedBox(
+                  decoration:
+                      BoxDecoration(gradient: _gradient(_controller.value)),
+                ),
+                // Fancy secondary depth layer — subtle violet/blue orbs that add
+                // depth without changing hue. Only visible on richer styles.
+                if (widget.style != BackgroundStyle.subtle)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                        gradient: _depthGradient(_controller.value)),
+                  ),
+                // Animated shimmer sweep for beams/pulse/aurora/tide — diagonal specular
+                if (widget.style == BackgroundStyle.beams ||
+                    widget.style == BackgroundStyle.pulse ||
+                    widget.style == BackgroundStyle.aurora ||
+                    widget.style == BackgroundStyle.tide)
+                  _ShimmerSweep(t: _controller.value, style: widget.style),
+              ],
             ),
+          ),
           // Fine grid overlay — faint 24px lattice for tech texture
           const _GridOverlay(),
           // Soft vignette to frame content — keeps edges grounded
@@ -145,12 +165,6 @@ class _NeonBackgroundState extends State<NeonBackground>
               ),
             ),
           ),
-          // Animated shimmer sweep for beams/pulse/aurora/tide — diagonal specular
-          if (widget.style == BackgroundStyle.beams ||
-              widget.style == BackgroundStyle.pulse ||
-              widget.style == BackgroundStyle.aurora ||
-              widget.style == BackgroundStyle.tide)
-            _ShimmerSweep(t: _controller.value, style: widget.style),
         ],
       ),
     );

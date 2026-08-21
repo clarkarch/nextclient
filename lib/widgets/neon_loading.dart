@@ -54,6 +54,9 @@ class NeonLoadingView extends StatelessWidget {
 }
 
 /// Shimmer-style skeleton card for loading grids.
+///
+/// Standalone use owns its controller; [GameGridSkeleton] shares one
+/// controller across the whole grid instead of one ticking ticker per tile.
 class SkeletonCard extends StatefulWidget {
   final double aspectRatio;
 
@@ -78,13 +81,33 @@ class _SkeletonCardState extends State<SkeletonCard>
 
   @override
   Widget build(BuildContext context) {
-    return AspectRatio(
+    return SkeletonTile(
       aspectRatio: widget.aspectRatio,
+      controller: _controller,
+    );
+  }
+}
+
+/// One skeleton tile painted from an externally-owned [controller].
+class SkeletonTile extends StatelessWidget {
+  final double aspectRatio;
+  final Animation<double> controller;
+
+  const SkeletonTile({
+    super.key,
+    required this.controller,
+    this.aspectRatio = 16 / 9,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AspectRatio(
+      aspectRatio: aspectRatio,
       child: AnimatedBuilder(
-        animation: _controller,
+        animation: controller,
         builder: (context, _) {
-          final t = _controller.value;
-          return Container(
+          final t = controller.value;
+          return DecoratedBox(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
               gradient: LinearGradient(
@@ -103,47 +126,68 @@ class _SkeletonCardState extends State<SkeletonCard>
   }
 }
 
-/// Responsive placeholder grid while games load.
-class GameGridSkeleton extends StatelessWidget {
+/// Responsive placeholder grid while games load. One shared animation
+/// controller drives every tile (12 independent tickers otherwise).
+class GameGridSkeleton extends StatefulWidget {
   final int columns;
   final int rows;
 
   const GameGridSkeleton({super.key, this.columns = 6, this.rows = 2});
 
   @override
+  State<GameGridSkeleton> createState() => _GameGridSkeletonState();
+}
+
+class _GameGridSkeletonState extends State<GameGridSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (var r = 0; r < rows; r++)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 22),
-            child: Row(
-              children: [
-                for (var c = 0; c < columns; c++)
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SkeletonCard(),
-                          const SizedBox(height: 8),
-                          Container(
-                            width: double.infinity,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1A1A26),
-                              borderRadius: BorderRadius.circular(4),
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) => Column(
+        children: [
+          for (var r = 0; r < widget.rows; r++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 22),
+              child: Row(
+                children: [
+                  for (var c = 0; c < widget.columns; c++)
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SkeletonTile(controller: _controller),
+                            const SizedBox(height: 8),
+                            Container(
+                              width: double.infinity,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1A1A26),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

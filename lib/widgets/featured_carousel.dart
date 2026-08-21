@@ -158,27 +158,28 @@ class _ParallaxSlide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The slide subtree is built ONCE and passed as [AnimatedBuilder.child] —
+    // only the lightweight transform wrappers rebuild during a swipe.
     return AnimatedBuilder(
       animation: controller,
-      builder: (context, _) {
+      child: child,
+      builder: (context, child) {
         double delta = 0;
         if (controller.hasClients && controller.position.hasContentDimensions) {
           final page = controller.page ?? controller.initialPage.toDouble();
           delta = (page - index).clamp(-1.0, 1.0).toDouble();
-        } else if (controller.hasClients) {
-          delta = 0;
         }
         final absDelta = delta.abs();
         final scale = 1 - absDelta * 0.05;
-        final opacity = 1 - absDelta * 0.12;
+        final opacity = (1 - absDelta * 0.12).clamp(0.78, 1.0);
         return Transform.scale(
           scale: scale,
           child: Opacity(
-            opacity: opacity.clamp(0.78, 1.0),
+            opacity: opacity,
             child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(22),
-                boxShadow: Neon.softShadow(radius: 18 + (1 - absDelta) * 6),
+                boxShadow: Neon.softShadow(radius: 18),
               ),
               child: child,
             ),

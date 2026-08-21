@@ -10,6 +10,7 @@ import 'package:flutter/widgets.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:path_provider/path_provider.dart' show getTemporaryDirectory;
 
+import 'frame_retirement.dart';
 import 'gfn_cursor_overlay.dart' show GfnCursorOverlayUpdate;
 import 'gfn_input_protocol.dart';
 import 'gfn_keyboard_mapping.dart';
@@ -73,6 +74,10 @@ class WebRtcBinFfiTransport implements StreamTransport {
   // stale frame's decode could overwrite a newer frame already on screen.
   int _frameSeq = 0;
   int _lastShownSeq = -1;
+
+  /// The image currently rendered by [buildVideoView]; retired (disposed)
+  /// two frames after being replaced so the raster pipeline can drain.
+  ui.Image? _lastShownImage;
 
   int _gamepadBitmap = 0x0000;
   bool _gamepadTouched = false;
@@ -466,32 +471,33 @@ class WebRtcBinFfiTransport implements StreamTransport {
 
   void _onNativeFrame(int width, int height, int stride,
       ffi.Pointer<ffi.Uint8> rgba, int rtpTimestamp) {
-    // The bridge handed us a malloc'd RGBA copy; copy it into a Dart-owned
-    // buffer, free the C buffer, then decode.
     final rowBytes = width * 4;
     final total = stride > 0 && height > 0 ? stride * height : 0;
-    if (total <= 0) {
+    if (total <= 0 || rowBytes <= 0) {
       _bridge?.freePtr(rgba.cast());
       return;
     }
-    final copy = Uint8List(total);
-    copy.setAll(0, rgba.asTypedList(total));
-    _bridge?.freePtr(rgba.cast());
-
-    // RGBA is tightly packed here (stride may be padded to a GPU alignment) —
-    // strip padding rows so decodeImageFromPixels gets rowBytes == width*4.
-    Uint8List packed = copy;
-    if (stride != rowBytes) {
+    // Single copy from native memory. When the rows are GPU-padded
+    // (stride != rowBytes) the repack reads straight from the C buffer —
+    // no intermediate full-frame Dart allocation.
+    final src = rgba.asTypedList(total);
+    final Uint8List packed;
+    if (stride == rowBytes) {
+      packed = Uint8List(total);
+      packed.setAll(0, src);
+    } else {
       packed = Uint8List(rowBytes * height);
       for (var y = 0; y < height; y++) {
         packed.setRange(
           y * rowBytes,
-          y * rowBytes + rowBytes,
-          copy,
+          (y + 1) * rowBytes,
+          src,
           y * stride,
         );
       }
     }
+    _bridge?.freePtr(rgba.cast());
+
     _established = true;
     _videoWidth = width;
     _videoHeight = height;
@@ -502,11 +508,16 @@ class WebRtcBinFfiTransport implements StreamTransport {
       height,
       ui.PixelFormat.rgba8888,
       (img) {
-        // Only display the newest completed decode; older completions are
-        // dropped (the image is GC-reclaimed).
-        if (seq <= _lastShownSeq) return;
+        if (seq <= _lastShownSeq) {
+          // Never displayed, nothing references it — free immediately.
+          img.dispose();
+          return;
+        }
         _lastShownSeq = seq;
+        final old = _lastShownImage;
+        _lastShownImage = img;
         frameImage.value = img;
+        if (old != null) FrameRetirement.retire(old);
       },
     );
   }
@@ -817,6 +828,10 @@ class WebRtcBinFfiTransport implements StreamTransport {
     _bridge = null;
     bridge?.dispose();
     frameImage.value = null;
+    final last = _lastShownImage;
+    _lastShownImage = null;
+    // Deferred: a built layer tree may still reference it for one more frame.
+    if (last != null) FrameRetirement.retire(last);
     _log('GStreamer bridge torn down');
   }
 }
