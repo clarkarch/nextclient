@@ -547,37 +547,6 @@ class Neon {
   }
 }
 
-/// Fade-through-style page transition: outgoing page fades, incoming page
-/// fades in while rising ~3% of its height. Applied app-wide via
-/// [pageTransitionsTheme].
-class _FadeRiseTransitionsBuilder extends PageTransitionsBuilder {
-  const _FadeRiseTransitionsBuilder();
-
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    final curved = CurvedAnimation(
-      parent: animation,
-      curve: Curves.easeOutCubic,
-    );
-    return FadeTransition(
-      opacity: curved,
-      child: SlideTransition(
-        position: Tween(
-          begin: const Offset(0, 0.03),
-          end: Offset.zero,
-        ).animate(curved),
-        child: child,
-      ),
-    );
-  }
-}
-
 ThemeData buildNeonTheme() {
   const scheme = ColorScheme(
     brightness: Brightness.dark,
@@ -607,17 +576,6 @@ ThemeData buildNeonTheme() {
 
   return base.copyWith(
     splashFactory: InkSparkle.splashFactory,
-    // Every MaterialPageRoute gets a soft fade + tiny rise instead of the
-    // platform-default horizontal slide — reads calmer on the dark theme.
-    pageTransitionsTheme: const PageTransitionsTheme(
-      builders: {
-        TargetPlatform.android: _FadeRiseTransitionsBuilder(),
-        TargetPlatform.iOS: _FadeRiseTransitionsBuilder(),
-        TargetPlatform.linux: _FadeRiseTransitionsBuilder(),
-        TargetPlatform.macOS: _FadeRiseTransitionsBuilder(),
-        TargetPlatform.windows: _FadeRiseTransitionsBuilder(),
-      },
-    ),
     splashColor: Neon.accent.withValues(alpha: 0.12),
     highlightColor: Neon.accent.withValues(alpha: 0.06),
     hoverColor: Neon.accent.withValues(alpha: 0.04),

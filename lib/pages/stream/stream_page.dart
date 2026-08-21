@@ -3525,17 +3525,6 @@ class _BottomChrome extends StatelessWidget {
     required this.onHideChromeKeepKeyboard,
   });
 
-  /// Brief confirmation for quick toggles — the chrome hides itself right
-  /// after, so without this the change would be completely silent.
-  void _toast(BuildContext context, String message) {
-    showNeonSnackbar(
-      context,
-      message,
-      copyable: false,
-      duration: const Duration(milliseconds: 1200),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -3563,9 +3552,6 @@ class _BottomChrome extends StatelessWidget {
             active: settings.streamGamepad,
             onTap: () {
               settings.streamGamepad = !settings.streamGamepad;
-              _toast(context, settings.streamGamepad
-                  ? 'Gamepad on'
-                  : 'Gamepad off');
               onHideUi();
             },
           ),
@@ -3576,9 +3562,6 @@ class _BottomChrome extends StatelessWidget {
             active: settings.streamShowFps,
             onTap: () {
               settings.streamShowFps = !settings.streamShowFps;
-              _toast(context, settings.streamShowFps
-                  ? 'Stats overlay on'
-                  : 'Stats overlay off');
               onHideUi();
             },
           ),
@@ -3589,9 +3572,6 @@ class _BottomChrome extends StatelessWidget {
             active: settings.inputTouchEnabled,
             onTap: () {
               settings.inputTouchEnabled = !settings.inputTouchEnabled;
-              _toast(context, settings.inputTouchEnabled
-                  ? 'Touch input on'
-                  : 'Touch input off');
               onHideUi();
             },
           ),
@@ -3608,9 +3588,6 @@ class _BottomChrome extends StatelessWidget {
               settings.videoShader = settings.videoShader.copyWith(
                 enabled: !settings.videoShader.enabled,
               );
-              _toast(context, settings.videoShader.enabled
-                  ? 'Video effects on'
-                  : 'Video effects off');
             },
           ),
           const SizedBox(width: 20),
@@ -3665,25 +3642,20 @@ class _ChromeButton extends StatelessWidget {
       child: GestureDetector(
         onTap: enabled ? onTap : null,
         behavior: HitTestBehavior.opaque,
-        // Comfortable touch target even though the visual is compact.
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 26),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: active ? Neon.accent : Neon.inkSoft,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: active ? Neon.accent : Neon.inkSoft,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
