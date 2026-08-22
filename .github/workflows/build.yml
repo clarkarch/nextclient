@@ -89,5 +89,5 @@ jobs:
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
-          name: next-android
+          name: nextclient-android
           path: build/app/outputs/flutter-apk/*.apk
