@@ -34,6 +34,8 @@ class MainActivity : FlutterActivity() {
 
     private var channel: MethodChannel? = null
     private var perfChannel: MethodChannel? = null
+    private var wifiLock: Any? = null
+    private var wifiLowLatencyActive = false
     private var buttons = 0
     private var lx = 0.0
     private var ly = 0.0
@@ -53,6 +55,11 @@ class MainActivity : FlutterActivity() {
                     "setMaxPerformance" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
                         runOnUiThread { applyMaxPerformance(enabled) }
+                        result.success(null)
+                    }
+                    "setWifiLowLatency" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        runOnUiThread { applyWifiLowLatency(enabled) }
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -107,6 +114,48 @@ class MainActivity : FlutterActivity() {
                     w.attributes = lp
                 } catch (_: Exception) {}
             }
+        }
+    }
+
+    /// Holds a low-latency WifiLock while streaming so the chipset skips its
+    /// power-save doze between frame bursts — without it, arrival jitter
+    /// climbs over a session (11ms -> 17ms+ class of symptoms).
+    ///
+    /// Accessed reflectively (mode ints: 3 = FULL_HIGH_PERF, 4 =
+    /// FULL_LOW_LATENCY on API 29+) so compilation never depends on the
+    /// WifiLock symbol.
+    private fun applyWifiLowLatency(enabled: Boolean) {
+        if (enabled == wifiLowLatencyActive) return
+        try {
+            val wm = application.getSystemService(android.content.Context.WIFI_SERVICE)
+                ?: return
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) 4 else 3
+            if (enabled) {
+                val lock = wm.javaClass
+                    .getMethod(
+                        "createWifiLock",
+                        Integer.TYPE,
+                        java.lang.String::class.java,
+                    )
+                    .invoke(wm, mode, "nextclient:stream")
+                lock.javaClass
+                    .getMethod("setReferenceCounted", java.lang.Boolean.TYPE)
+                    .invoke(lock, false)
+                lock.javaClass.getMethod("acquire").invoke(lock)
+                wifiLock = lock
+                wifiLowLatencyActive = true
+            } else {
+                val lock = wifiLock
+                if (lock != null) {
+                    val held =
+                        lock.javaClass.getMethod("isHeld").invoke(lock) as Boolean
+                    if (held) lock.javaClass.getMethod("release").invoke(lock)
+                    wifiLock = null
+                }
+                wifiLowLatencyActive = false
+            }
+        } catch (_: Throwable) {
+            // WifiLock unavailable or blocked — streaming continues unaffected.
         }
     }
 

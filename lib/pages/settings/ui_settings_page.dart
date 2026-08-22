@@ -99,8 +99,9 @@ class UiSettingsPage extends StatelessWidget {
                         children: [
                           const Expanded(
                             child: Text(
-                              'Overall app text size. Scales dialogs, labels '
-                              'and the stream chrome together; 100% is default.',
+                              'Overall app size. Zooms the entire interface '
+                              '(layout, chrome and text) — lower it on small '
+                              'phone screens; 100% is default.',
                               style: TextStyle(
                                 color: Neon.inkMuted,
                                 fontSize: 12,
@@ -120,9 +121,9 @@ class UiSettingsPage extends StatelessWidget {
                       ),
                       Slider(
                         value: scalePercent,
-                        min: 75,
+                        min: 60,
                         max: 150,
-                        divisions: 15,
+                        divisions: 18,
                         label: '${scalePercent.round()}%',
                         onChanged: (v) => services.settings.uiScale = v / 100,
                       ),

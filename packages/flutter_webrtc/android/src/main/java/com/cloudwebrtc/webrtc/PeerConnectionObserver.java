@@ -1194,6 +1194,38 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
     result.success(params.toMap());
   }
 
+  // Pins the audio jitter buffer's minimum delay so playout latency cannot
+  // creep upward from floor-based buffering during long sessions.
+  public void setJitterBufferMinimumDelay(Double seconds, Result result) {
+    int touched = 0;
+    for (RtpReceiver receiver : peerConnection.getReceivers()) {
+      MediaStreamTrack track = receiver.track();
+      if (track == null || !"audio".equals(track.kind())) continue;
+      try {
+        java.lang.reflect.Method target = null;
+        for (java.lang.reflect.Method m : receiver.getClass().getMethods()) {
+          if (!"SetJitterBufferMinimumDelay".equals(m.getName())) continue;
+          if (m.getParameterTypes().length != 1) continue;
+          Class<?> p = m.getParameterTypes()[0];
+          if (p == double.class || p == Double.class) {
+            target = m;
+            break;
+          }
+        }
+        if (target != null) {
+          target.invoke(receiver, seconds);
+          touched++;
+        }
+      } catch (Throwable t) {
+        // SetJitterBufferMinimumDelay is not available in this libwebrtc
+        // build — leave the default behavior untouched.
+      }
+    }
+    ConstraintsMap params = new ConstraintsMap();
+    params.putInt("receivers", touched);
+    result.success(params.toMap());
+  }
+
   public void getTransceivers(Result result) {
     List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
     ConstraintsArray transceiversParams = new ConstraintsArray();

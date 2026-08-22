@@ -46,22 +46,24 @@ class PerformanceSettingsPage extends StatelessWidget {
                           services.settings.maxPerformanceMode = v;
                           // Effective logs follow max-perf (forced off when engaged)
                           services.logSink.setEnabledForAll(
-                              services.settings.effectiveLogsEnabled);
+                            services.settings.effectiveLogsEnabled,
+                          );
                           services.logSink.log(
                             LogLevel.info,
                             'perf',
                             'Max performance ${v ? 'ENGAGED' : 'disengaged'} '
-                            '(hwAccel=${services.settings.effectiveHwAccel} '
-                            'renderer=${services.settings.effectiveRendererBackend.name} '
-                            'shader=${services.settings.effectiveVideoShader.enabled ? 'on' : 'off'} '
-                            'poll=${services.settings.statsPollInterval.inMilliseconds}ms)',
+                                '(hwAccel=${services.settings.effectiveHwAccel} '
+                                'renderer=${services.settings.effectiveRendererBackend.name} '
+                                'shader=${services.settings.effectiveVideoShader.enabled ? 'on' : 'off'} '
+                                'poll=${services.settings.statsPollInterval.inMilliseconds}ms)',
                           );
                           if (v) {
                             // Push the forced-off shader immediately so the
                             // native EGL/D3D post-pass drops its FBO on next
                             // frame without waiting for a new session.
-                            services.settings
-                                .addListener(() {}); // ensure rebuild
+                            services.settings.addListener(
+                              () {},
+                            ); // ensure rebuild
                           }
                         },
                       ),
@@ -86,31 +88,73 @@ class PerformanceSettingsPage extends StatelessWidget {
                 child: Column(
                   children: [
                     NeonSettingTile(
+                      icon: Icons.schedule,
+                      title: 'Latency guard',
+                      subtitle: maxPerf
+                          ? 'Active (max performance keeps it on): keyframe '
+                                'resync when the stream falls behind'
+                          : 'Auto keyframe resync when the stream falls '
+                                'behind over time. Off = best picture '
+                                'consistency, manual recovery only.',
+                      trailing: NeonSwitch(
+                        value: maxPerf
+                            ? true
+                            : services.settings.latencyGuardEnabled,
+                        onChanged: (v) {
+                          if (!maxPerf) {
+                            services.settings.latencyGuardEnabled = v;
+                          }
+                        },
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    NeonSettingTile(
+                      icon: Icons.speed,
+                      title: 'Zero playout delay',
+                      subtitle:
+                          'Render frames instantly instead of smoothing '
+                          'arrival bursts. Lowest delay; may stutter on '
+                          'unstable Wi-Fi. Applies after restart.',
+                      trailing: NeonSwitch(
+                        value: services.settings.zeroPlayoutDelayEnabled,
+                        onChanged: (v) =>
+                            services.settings.zeroPlayoutDelayEnabled = v,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              NeonCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    NeonSettingTile(
                       icon: Icons.terminal,
                       title: 'Verbose logs',
                       subtitle: maxPerf
                           ? 'Suppressed by max performance (forced off)'
                           : 'Record app activity into the log buffer',
                       trailing: Opacity(
-                      opacity: maxPerf ? 0.45 : 1,
-                      child: IgnorePointer(
-                        ignoring: maxPerf,
-                        child: NeonSwitch(
-                          value: logsEnabled,
-                          onChanged: (v) {
-                            // Log the transition before flipping the sink so the
-                            // toggle event itself is always captured.
-                            services.logSink.log(
-                              LogLevel.info,
-                              'perf',
-                              'Verbose logging ${v ? 'enabled' : 'disabled'}',
-                            );
-                            services.settings.logsEnabled = v;
-                            services.logSink.setEnabledForAll(v);
-                          },
+                        opacity: maxPerf ? 0.45 : 1,
+                        child: IgnorePointer(
+                          ignoring: maxPerf,
+                          child: NeonSwitch(
+                            value: logsEnabled,
+                            onChanged: (v) {
+                              // Log the transition before flipping the sink so the
+                              // toggle event itself is always captured.
+                              services.logSink.log(
+                                LogLevel.info,
+                                'perf',
+                                'Verbose logging ${v ? 'enabled' : 'disabled'}',
+                              );
+                              services.settings.logsEnabled = v;
+                              services.logSink.setEnabledForAll(v);
+                            },
+                          ),
                         ),
                       ),
-                    ),
                     ),
                     if (!maxPerf) ...[
                       const Divider(height: 1),
@@ -126,7 +170,9 @@ class PerformanceSettingsPage extends StatelessWidget {
                           'kept). Turn it on before reproducing an issue so the Logs '
                           'viewer captures what happens.',
                           style: const TextStyle(
-                              color: Neon.inkMuted, fontSize: 12),
+                            color: Neon.inkMuted,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ] else
@@ -137,7 +183,9 @@ class PerformanceSettingsPage extends StatelessWidget {
                           'avoid formatting/scrubbing overhead per frame. Disable max '
                           'performance to re-enable it (currently ${rawLogs ? 'on' : 'off'} underneath).',
                           style: const TextStyle(
-                              color: Neon.inkMuted, fontSize: 12),
+                            color: Neon.inkMuted,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                   ],

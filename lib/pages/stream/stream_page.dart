@@ -24,8 +24,7 @@ import '../../state/stream_stats.dart';
 import '../../state/stream_transport.dart';
 import '../../state/user_settings.dart';
 import '../../state/video_shader_settings.dart';
-import '../../state/webrtc_stream_session.dart'
-    show pushVideoShaderSettings;
+import '../../state/webrtc_stream_session.dart' show pushVideoShaderSettings;
 import '../../theme/controller_theme.dart';
 import '../../theme/neon.dart';
 import '../../utils/friendly_error.dart';
@@ -49,9 +48,24 @@ const MethodChannel _androidPerfChannel = MethodChannel('next_client/perf');
 Future<void> _applyAndroidMaxPerformance(bool enabled) async {
   if (kIsWeb || !Platform.isAndroid) return;
   try {
-    await _androidPerfChannel.invokeMethod('setMaxPerformance', {'enabled': enabled});
+    await _androidPerfChannel.invokeMethod('setMaxPerformance', {
+      'enabled': enabled,
+    });
   } catch (_) {
     // Channel absent on old installs — ignore, streaming still works.
+  }
+}
+
+/// Low-latency WifiLock: keeps the chipset out of power-save doze so packet
+/// arrival jitter stays flat over long sessions instead of climbing.
+Future<void> _applyAndroidWifiLowLatency(bool enabled) async {
+  if (kIsWeb || !Platform.isAndroid) return;
+  try {
+    await _androidPerfChannel.invokeMethod('setWifiLowLatency', {
+      'enabled': enabled,
+    });
+  } catch (_) {
+    // Channel absent on old installs — ignore.
   }
 }
 
@@ -100,7 +114,6 @@ class _StreamPageState extends State<StreamPage> {
   StreamTransport? _transport;
   String? _webrtcStatus;
   bool _stopInFlight = false;
-  bool _isFullscreen = false;
 
   /// Session-wide stats rollup, recorded to the logs on exit so a laggy
   /// session (high decode ms, low FPS) can be reviewed after the stream ends.
@@ -123,16 +136,6 @@ class _StreamPageState extends State<StreamPage> {
   /// that installed [appCloseHook] clears it, so popping an older page can't
   /// wipe a newer page's hook.
   late final Object _closeHookToken = Object();
-
-  Future<void> _toggleFullscreen() async {
-    if (kIsWeb) return;
-    if (!Platform.isLinux && !Platform.isWindows && !Platform.isMacOS) return;
-    try {
-      final isFs = await windowManager.isFullScreen();
-      await windowManager.setFullScreen(!isFs);
-      if (mounted) setState(() => _isFullscreen = !isFs);
-    } catch (_) {}
-  }
 
   void _onStats() {
     final snap = _transport?.stats.value;
@@ -209,12 +212,12 @@ class _StreamPageState extends State<StreamPage> {
         'shader',
         s.videoShader.hasVisibleEffect
             ? 'on sharpen=${s.videoShader.sharpen}% '
-                '${s.videoShader.sharpenAdaptive ? 'adaptive' : 'uniform'} '
-                'sat=${s.videoShader.saturation}% '
-                'contrast=${s.videoShader.contrast}% '
-                'brightness=${s.videoShader.brightness}% '
-                'vibrance=${s.videoShader.vibrance}% '
-                'grain=${s.videoShader.filmGrain}%'
+                  '${s.videoShader.sharpenAdaptive ? 'adaptive' : 'uniform'} '
+                  'sat=${s.videoShader.saturation}% '
+                  'contrast=${s.videoShader.contrast}% '
+                  'brightness=${s.videoShader.brightness}% '
+                  'vibrance=${s.videoShader.vibrance}% '
+                  'grain=${s.videoShader.filmGrain}%'
             : 'off',
       ),
       line(
@@ -226,8 +229,8 @@ class _StreamPageState extends State<StreamPage> {
         'gamepad',
         s.streamGamepad
             ? 'on ${s.streamGamepadScale.toStringAsFixed(1)}x '
-                'off=${s.streamGamepadSpacing.toStringAsFixed(1)}x '
-                'vpos=${s.streamGamepadPosition.toStringAsFixed(1)}'
+                  'off=${s.streamGamepadSpacing.toStringAsFixed(1)}x '
+                  'vpos=${s.streamGamepadPosition.toStringAsFixed(1)}'
             : 'off',
       ),
       line(
@@ -619,13 +622,6 @@ class _StreamPageState extends State<StreamPage> {
       child: Row(
         children: [
           const Spacer(),
-          NeonOutlineButton(
-            label: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
-            icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-            borderColor: _isFullscreen ? Neon.accent : Neon.inkMuted,
-            onPressed: _toggleFullscreen,
-          ),
-          const SizedBox(width: 10),
           NeonOutlineButton(
             label: 'Exit',
             icon: Icons.close,
@@ -1263,6 +1259,12 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// Physical Android gamepad (USB/Bluetooth) bridge — automatic, no UI.
   PhysicalGamepad? _physicalGamepad;
 
+  /// Physical home/GUIDE button: never forwarded to the game. Holding it
+  /// (~600 ms) while the chrome is hidden reveals the stream UI.
+  static const int _gamepadGuideBit = 0x0400;
+  bool _guideWasDown = false;
+  Timer? _guideHoldTimer;
+
   /// Physical desktop (Linux) gamepad subscription — automatic, no UI.
   StreamSubscription<GamepadState>? _desktopGamepadSub;
 
@@ -1386,6 +1388,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
     // performance keeps them too, but even without the toggle a streaming
     // session benefits from stable 60Hz vs 90/120Hz bouncing.
     unawaited(_applyAndroidMaxPerformance(true));
+    unawaited(_applyAndroidWifiLowLatency(true));
   }
 
   /// Forwards shader filter changes to the native renderer (deduped on the
@@ -2117,6 +2120,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _keyboardFocus.removeListener(_onKeyboardFocusChanged);
     _keyboardController.dispose();
     _keyboardFocus.dispose();
+    _guideHoldTimer?.cancel();
+    _guideHoldTimer = null;
     _physicalGamepad?.dispose();
     _desktopGamepadSub?.cancel();
     _desktopGamepadSub = null;
@@ -2130,6 +2135,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
     // Drop Android sustained-perf hints when the surface goes away
     // (stream exit). No-op on non-Android.
     unawaited(_applyAndroidMaxPerformance(false));
+    unawaited(_applyAndroidWifiLowLatency(false));
     super.dispose();
   }
 
@@ -2555,8 +2561,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
     // scroll down), so negate here or scrolling is backwards. Also clamp to
     // int16 — fast scrolling can exceed it and the encoder's setInt16 throws
     // outside that range.
-    final dy =
-        (-event.scrollDelta.dy).round().clamp(-32768, 32767).toInt();
+    final dy = (-event.scrollDelta.dy).round().clamp(-32768, 32767).toInt();
     if (dy != 0) widget.transport?.sendMouseWheel(delta: dy);
   }
 
@@ -2572,7 +2577,28 @@ class _ReadySurfaceState extends State<_ReadySurface>
     double rt,
   ) {
     if (!mounted) return;
-    _gamepadButtons = buttons;
+
+    // Home/GUIDE is a client-side key, not a game input: strip it from the
+    // forwarded state and use hold-to-reveal for the stream UI instead.
+    final guideDown = (buttons & _gamepadGuideBit) != 0;
+    final outButtons = buttons & ~_gamepadGuideBit;
+    if (guideDown && !_guideWasDown) {
+      _guideHoldTimer?.cancel();
+      if (!_chromeVisible) {
+        _guideHoldTimer = Timer(const Duration(milliseconds: 600), () {
+          _guideHoldTimer = null;
+          if (mounted && !_chromeVisible) {
+            _toggleChromeFromKey();
+          }
+        });
+      }
+    } else if (!guideDown && _guideWasDown) {
+      _guideHoldTimer?.cancel();
+      _guideHoldTimer = null;
+    }
+    _guideWasDown = guideDown;
+
+    _gamepadButtons = outButtons;
     _leftStickX = lx;
     _leftStickY = -ly;
     _rightStickX = rx;
@@ -2774,10 +2800,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
       if (rune >= 0x30 && rune <= 0x39) {
         flush();
         final digit = rune - 0x30;
-        _sendSyntheticKey(
-          _digitLogicalKeys[digit],
-          _digitPhysicalKeys[digit],
-        );
+        _sendSyntheticKey(_digitLogicalKeys[digit], _digitPhysicalKeys[digit]);
       } else {
         buf.writeCharCode(rune);
       }
@@ -2837,7 +2860,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
     if (lastBack != null && now.difference(lastBack) < _backDedupeWindow) {
       return true;
     }
-    final keyboardUp = _keyboardOpen ||
+    final keyboardUp =
+        _keyboardOpen ||
         _keyboardFocus.hasFocus ||
         View.of(context).viewInsets.bottom > 0;
     if (keyboardUp) {
@@ -2998,371 +3022,382 @@ class _ReadySurfaceState extends State<_ReadySurface>
               builder: (context, _) => Stack(
                 fit: StackFit.expand,
                 children: [
+                  // Top-edge escape: while in-game, moving the cursor to the top
+                  // edge shows the stream UI. This is the mouse-only way out that
+                  // works even when the keyboard stops reaching the app (some
+                  // Wayland compositors drop focus during OS fullscreen) — the
+                  // double-Esc path can't be relied on there.
+                  if (!_chromeVisible)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: _edgeZoneHeight,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.basic,
+                        // Explicit opaque so the zone is hit-testable over its whole
+                        // area (not just the child), and onHover so it also fires
+                        // when the cursor is already parked here as the chrome hides.
+                        opaque: true,
+                        onHover: (_) => _showChromeFromEdge(),
+                        child: const SizedBox.expand(),
+                      ),
+                    ),
 
-              // Top-edge escape: while in-game, moving the cursor to the top
-              // edge shows the stream UI. This is the mouse-only way out that
-              // works even when the keyboard stops reaching the app (some
-              // Wayland compositors drop focus during OS fullscreen) — the
-              // double-Esc path can't be relied on there.
-              if (!_chromeVisible)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: _edgeZoneHeight,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.basic,
-                    // Explicit opaque so the zone is hit-testable over its whole
-                    // area (not just the child), and onHover so it also fires
-                    // when the cursor is already parked here as the chrome hides.
-                    opaque: true,
-                    onHover: (_) => _showChromeFromEdge(),
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-
-              // In-game cursor overlay: draws the game cursor (custom bitmap
-              // from the WebRTC cursor_channel, or the built-in predefined style
-              // decoded from the ported ICO table) at the tracked position. The
-              // OS cursor stays hidden in-game (_videoCursor); this bitmap is
-              // what the user sees, rendered under both soft lock and native
-              // grabs (under a grab the OS cursor is captured, so without this
-              // overlay the game cursor would be invisible).
-              if (widget.settings.inputCursorOverlay &&
-                  !_chromeVisible &&
-                  _cursorVisible &&
-                  _cursorPositionKnown &&
-                  (_cursorImageBytes != null || _cursorPredefinedImage != null))
-                Positioned.fill(
-                  child: IgnorePointer(
-                    // Rebuild on tracked-position changes so the cursor follows
-                    // the mouse per-delta, without rebuilding the whole surface.
-                    child: ValueListenableBuilder<Offset>(
-                      valueListenable: _cursorPos,
-                      builder: (context, _, _) => LayoutBuilder(
-                        builder: (context, constraints) {
-                          final w = constraints.maxWidth;
-                          final h = constraints.maxHeight;
-                          if (w <= 0 || h <= 0) return const SizedBox.shrink();
-                          final dpr = MediaQuery.devicePixelRatioOf(context);
-                          final baseW = _cursorBitmapW.toDouble();
-                          final baseH = _cursorBitmapH.toDouble();
-                          // Render at native bitmap resolution on any display
-                          // scale (bitmap px / dpr = logical px), like OpenNOW's
-                          // image-set 2x cursor handling.
-                          final imgW = baseW / dpr * _cursorScale;
-                          final imgH = baseH / dpr * _cursorScale;
-                          // Map the server cursor within the fitted video
-                          // content rectangle (not the letterboxed window) so
-                          // it matches where absolute-input clicks land.
-                          final rect = _videoContentRect(Size(w, h));
-                          final left =
-                              (rect.left +
-                                      _cursorNormX / 65535 * rect.width -
-                                      _cursorHotspotX / dpr * _cursorScale)
-                                  .clamp(-imgW, w);
-                          final top =
-                              (rect.top +
-                                      _cursorNormY / 65535 * rect.height -
-                                      _cursorHotspotY / dpr * _cursorScale)
-                                  .clamp(-imgH, h);
-                          // Positioned must be a direct Stack child, so the
-                          // LayoutBuilder returns its own Stack for the image.
-                          // Custom cursors are drawn with a decoded ui.Image via
-                          // RawImage (the same robust path as predefined); the raw
-                          // Image.memory fallback only covers a still-decoding
-                          // frame. The debug box wraps the bitmap so its placement
-                          // can be inspected independently of the pixel content.
-                          final Widget customChild;
-                          if (_cursorCustomImage != null) {
-                            customChild = RawImage(
-                              image: _cursorCustomImage!,
-                              width: imgW,
-                              height: imgH,
-                              fit: BoxFit.fill,
-                              filterQuality: FilterQuality.none,
-                            );
-                          } else {
-                            customChild = _cursorImageBytes != null
-                                ? Image.memory(
-                                    _cursorImageBytes!,
-                                    width: imgW,
-                                    height: imgH,
-                                    fit: BoxFit.fill,
-                                    filterQuality: FilterQuality.none,
-                                    gaplessPlayback: true,
-                                    errorBuilder: (_, _, _) =>
-                                        const SizedBox.shrink(),
-                                  )
-                                : const SizedBox.shrink();
-                          }
-                          final cursorChild =
-                              widget.settings.debugCursorOverlayBox
-                              ? Container(
+                  // In-game cursor overlay: draws the game cursor (custom bitmap
+                  // from the WebRTC cursor_channel, or the built-in predefined style
+                  // decoded from the ported ICO table) at the tracked position. The
+                  // OS cursor stays hidden in-game (_videoCursor); this bitmap is
+                  // what the user sees, rendered under both soft lock and native
+                  // grabs (under a grab the OS cursor is captured, so without this
+                  // overlay the game cursor would be invisible).
+                  if (widget.settings.inputCursorOverlay &&
+                      !_chromeVisible &&
+                      _cursorVisible &&
+                      _cursorPositionKnown &&
+                      (_cursorImageBytes != null ||
+                          _cursorPredefinedImage != null))
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        // Rebuild on tracked-position changes so the cursor follows
+                        // the mouse per-delta, without rebuilding the whole surface.
+                        child: ValueListenableBuilder<Offset>(
+                          valueListenable: _cursorPos,
+                          builder: (context, _, _) => LayoutBuilder(
+                            builder: (context, constraints) {
+                              final w = constraints.maxWidth;
+                              final h = constraints.maxHeight;
+                              if (w <= 0 || h <= 0) {
+                                return const SizedBox.shrink();
+                              }
+                              final dpr = MediaQuery.devicePixelRatioOf(
+                                context,
+                              );
+                              final baseW = _cursorBitmapW.toDouble();
+                              final baseH = _cursorBitmapH.toDouble();
+                              // Render at native bitmap resolution on any display
+                              // scale (bitmap px / dpr = logical px), like OpenNOW's
+                              // image-set 2x cursor handling.
+                              final imgW = baseW / dpr * _cursorScale;
+                              final imgH = baseH / dpr * _cursorScale;
+                              // Map the server cursor within the fitted video
+                              // content rectangle (not the letterboxed window) so
+                              // it matches where absolute-input clicks land.
+                              final rect = _videoContentRect(Size(w, h));
+                              final left =
+                                  (rect.left +
+                                          _cursorNormX / 65535 * rect.width -
+                                          _cursorHotspotX / dpr * _cursorScale)
+                                      .clamp(-imgW, w);
+                              final top =
+                                  (rect.top +
+                                          _cursorNormY / 65535 * rect.height -
+                                          _cursorHotspotY / dpr * _cursorScale)
+                                      .clamp(-imgH, h);
+                              // Positioned must be a direct Stack child, so the
+                              // LayoutBuilder returns its own Stack for the image.
+                              // Custom cursors are drawn with a decoded ui.Image via
+                              // RawImage (the same robust path as predefined); the raw
+                              // Image.memory fallback only covers a still-decoding
+                              // frame. The debug box wraps the bitmap so its placement
+                              // can be inspected independently of the pixel content.
+                              final Widget customChild;
+                              if (_cursorCustomImage != null) {
+                                customChild = RawImage(
+                                  image: _cursorCustomImage!,
                                   width: imgW,
                                   height: imgH,
-                                  color: const Color(0x60FF1493),
-                                  alignment: Alignment.center,
-                                  child: customChild,
-                                )
-                              : customChild;
-                          return Stack(
-                            children: [
-                              Positioned(
-                                left: left,
-                                top: top,
-                                width: imgW,
-                                height: imgH,
-                                child: _cursorPredefinedImage != null
-                                    ? RawImage(
-                                        image: _cursorPredefinedImage!,
+                                  fit: BoxFit.fill,
+                                  filterQuality: FilterQuality.none,
+                                );
+                              } else {
+                                customChild = _cursorImageBytes != null
+                                    ? Image.memory(
+                                        _cursorImageBytes!,
                                         width: imgW,
                                         height: imgH,
                                         fit: BoxFit.fill,
                                         filterQuality: FilterQuality.none,
+                                        gaplessPlayback: true,
+                                        errorBuilder: (_, _, _) =>
+                                            const SizedBox.shrink(),
                                       )
-                                    : cursorChild,
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-
-              // Stats overlay (left side). Stays visible when the stream UI hides
-              // so stats remain readable in-game. Painted BELOW the gamepad and
-              // chrome so it never covers the controller or the UI.
-              if (widget.settings.streamShowFps)
-                Positioned(
-                  top: 96,
-                  left: 16,
-                  child: _StatsOverlay(
-                    transport: widget.transport,
-                    maxPerformance: widget.settings.maxPerformanceMode,
-                    style: widget.settings.streamStatsStyle,
-                  ),
-                ),
-
-              // Virtual gamepad overlay (independent of chrome visibility). Uses
-              // deferToChild hit-testing so only the actual controller widgets
-              // swallow taps (the pad never toggles the chrome), while the gaps
-              // between them pass through to the video surface. Painted BELOW
-              // the chrome/stats/sidebar so the stream UI always stays on top
-              // and hit-tests first.
-              if (widget.settings.streamGamepad)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  // Anchored to the bottom with the user's position lift, so
-                  // the pad can float above the bottom edge without resizing.
-                  // The chrome paints and hit-tests on top.
-                  bottom: widget.settings.streamGamepadPosition * 240,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.deferToChild,
-                    onTap: () {},
-                    child: Opacity(
-                      opacity: widget.settings.streamGamepadOpacity,
-                      child: SafeArea(
-                        top: false,
-                        child: Padding(
-                          padding: const EdgeInsets.only(
-                            left: 8,
-                            right: 8,
-                            bottom: 8,
-                          ),
-                          child: VirtualGamepad(
-                            theme: widget.settings.streamGamepadTheme,
-                            stickScale:
-                                widget.settings.streamGamepadStickScale,
-                            faceScale: widget.settings.streamGamepadFaceScale,
-                            dpadScale: widget.settings.streamGamepadDpadScale,
-                            southpaw: widget.settings.streamGamepadSouthpaw,
-                            nintendoLayout:
-                                widget.settings.streamGamepadNintendoLayout,
-                            deadZone: widget.settings.streamGamepadDeadzone,
-                            hapticFeedback:
-                                widget.settings.streamGamepadHaptics,
-                            visualEffects:
-                                widget.settings.streamGamepadEffects,
-                            animationsEnabled:
-                                widget.settings.streamGamepadAnimations,
-                            scale: widget.settings.streamGamepadScale,
-                            spacing: widget.settings.streamGamepadSpacing,
-                            showShoulders:
-                                widget.settings.streamGamepadShowShoulders,
-                            showSticks: widget.settings.streamGamepadShowSticks,
-                            showDpad: widget.settings.streamGamepadShowDpad,
-                            showFaceButtons:
-                                widget.settings.streamGamepadShowFaceButtons,
-                            showMenu: widget.settings.streamGamepadShowMenu,
-                            onLeftStickDrag: _onLeftStickDrag,
-                            onLeftStickDragEnd: () {
-                              _gamepadFlushTimer?.cancel();
-                              _gamepadFlushTimer = null;
-                              _leftStickX = 0;
-                              _leftStickY = 0;
-                              _sendGamepadState();
+                                    : const SizedBox.shrink();
+                              }
+                              final cursorChild =
+                                  widget.settings.debugCursorOverlayBox
+                                  ? Container(
+                                      width: imgW,
+                                      height: imgH,
+                                      color: const Color(0x60FF1493),
+                                      alignment: Alignment.center,
+                                      child: customChild,
+                                    )
+                                  : customChild;
+                              return Stack(
+                                children: [
+                                  Positioned(
+                                    left: left,
+                                    top: top,
+                                    width: imgW,
+                                    height: imgH,
+                                    child: _cursorPredefinedImage != null
+                                        ? RawImage(
+                                            image: _cursorPredefinedImage!,
+                                            width: imgW,
+                                            height: imgH,
+                                            fit: BoxFit.fill,
+                                            filterQuality: FilterQuality.none,
+                                          )
+                                        : cursorChild,
+                                  ),
+                                ],
+                              );
                             },
-                            onRightStickDrag: _onRightStickDrag,
-                            onRightStickDragEnd: () {
-                              _gamepadFlushTimer?.cancel();
-                              _gamepadFlushTimer = null;
-                              _rightStickX = 0;
-                              _rightStickY = 0;
-                              _sendGamepadState();
-                            },
-                            onDpadPressed: _onDpadPressed,
-                            onDpadReleased: _onDpadReleased,
-                            onFaceButtonPressed: _onFaceButtonPressed,
-                            onFaceButtonReleased: _onFaceButtonReleased,
-                            onStartPressed: () =>
-                                _setGamepadBit(gamepadStart, true),
-                            onStartReleased: () =>
-                                _setGamepadBit(gamepadStart, false),
-                            onSelectPressed: () =>
-                                _setGamepadBit(gamepadBack, true),
-                            onSelectReleased: () =>
-                                _setGamepadBit(gamepadBack, false),
-                            onHomePressed: () =>
-                                _setGamepadBit(gamepadGuide, true),
-                            onHomeReleased: () =>
-                                _setGamepadBit(gamepadGuide, false),
-                            onLeftBumperPressed: () =>
-                                _setGamepadBit(gamepadLb, true),
-                            onLeftBumperReleased: () =>
-                                _setGamepadBit(gamepadLb, false),
-                            onRightBumperPressed: () =>
-                                _setGamepadBit(gamepadRb, true),
-                            onRightBumperReleased: () =>
-                                _setGamepadBit(gamepadRb, false),
-                            onLeftTriggerPressed: () => _setTrigger(0, 1.0),
-                            onLeftTriggerReleased: () => _setTrigger(0, 0),
-                            onRightTriggerPressed: () => _setTrigger(1, 1.0),
-                            onRightTriggerReleased: () => _setTrigger(1, 0),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ),
 
-              // Top chrome: timer + title/status + exit.
-              if (_chromeVisible)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: _TopChrome(
-                    game: widget.game,
-                    session: widget.session,
-                    startedAt: _sessionStartedAt,
-                    webrtcStatus: widget.webrtcStatus,
-                    onStop: widget.onStop,
-                    isFullscreen: _osFullscreen,
-                    onFullscreen: _toggleFullscreen,
-                  ),
-                ),
-
-              // Hint pill: mouse-lock + double-Esc gestures.
-              if (_chromeVisible)
-                Positioned(
-                  top: 88,
-                  left: 0,
-                  right: 0,
-                  child: IgnorePointer(child: Center(child: _HintPill())),
-                ),
-
-              // Bottom chrome: control bar.
-              if (_chromeVisible)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: _BottomChrome(
-                    settings: widget.settings,
-                    keyboardOpen: _keyboardOpen,
-                    settingsOpen: _streamSettingsOpen,
-                    onKeyboard: _toggleKeyboard,
-                    onOpenSettings: () {
-                      setState(() {
-                        _streamSettingsOpen = !_streamSettingsOpen;
-                        if (_streamSettingsOpen) {
-                          _mouseLocked = true;
-                          _chromeVisible = false;
-                        }
-                      });
-                      if (_streamSettingsOpen) _applyMobileSystemUi(true);
-                    },
-                    onHideUi: _enterGameMode,
-                    onHideChromeKeepKeyboard: _hideChromeKeepKeyboard,
-                  ),
-                ),
-
-              // Live stream-settings sidebar: gamepad scale/opacity, mouse sensitivity and
-              // touch mode, applied immediately while streaming. Tapping the
-              // rest of the screen (outside the panel) closes it.
-              if (_streamSettingsOpen) ...[
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => setState(() => _streamSettingsOpen = false),
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: StreamSettingsSidebar(
-                    settings: widget.settings,
-                    keyboardOpen: _keyboardOpen,
-                    onToggleKeyboard: _toggleKeyboard,
-                    onClose: () => setState(() => _streamSettingsOpen = false),
-                  ),
-                ),
-              ],
-
-              // Soft keyboard (touch devices): a focusable text field lives just
-              // off-screen so the Android keyboard shows, and whatever the user
-              // types there is forwarded to the game. No input bar is drawn.
-              //
-              // The Positioned carries a stable key: it lives in a Stack whose
-              // earlier children (the in-game cursor overlay, stats/gamepad)
-              // are inserted/removed while the session runs. Without a key,
-              // index-based reconciliation would recreate this field's element
-              // the moment a sibling is inserted in front of it (which the game
-              // does by showing a text caret when the user types a character),
-              // detaching the FocusNode and hiding the keyboard mid-edit.
-              if (_keyboardOpen)
-                Positioned(
-                  key: const ValueKey('soft-keyboard-field'),
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  height: 1,
-                  child: Opacity(
-                    opacity: 0,
-                    child: TextField(
-                      controller: _keyboardController,
-                      focusNode: _keyboardFocus,
-                      onChanged: _onKeyboardChanged,
-                      onSubmitted: _onKeyboardSubmitted,
-                      textInputAction: TextInputAction.go,
-                      keyboardType: TextInputType.text,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        contentPadding: EdgeInsets.zero,
-                        border: InputBorder.none,
+                  // Stats overlay (left side). Stays visible when the stream UI hides
+                  // so stats remain readable in-game. Painted BELOW the gamepad and
+                  // chrome so it never covers the controller or the UI.
+                  if (widget.settings.streamShowFps)
+                    Positioned(
+                      top: 96,
+                      left: 16,
+                      child: _StatsOverlay(
+                        transport: widget.transport,
+                        maxPerformance: widget.settings.maxPerformanceMode,
+                        style: widget.settings.streamStatsStyle,
                       ),
                     ),
-                  ),
-                ),
-            ],
-          ),
-        ),
+
+                  // Virtual gamepad overlay (independent of chrome visibility). Uses
+                  // deferToChild hit-testing so only the actual controller widgets
+                  // swallow taps (the pad never toggles the chrome), while the gaps
+                  // between them pass through to the video surface. Painted BELOW
+                  // the chrome/stats/sidebar so the stream UI always stays on top
+                  // and hit-tests first.
+                  if (widget.settings.streamGamepad)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      // Anchored to the bottom with the user's position lift, so
+                      // the pad can float above the bottom edge without resizing.
+                      // The chrome paints and hit-tests on top.
+                      bottom: widget.settings.streamGamepadPosition * 240,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.deferToChild,
+                        onTap: () {},
+                        child: Opacity(
+                          opacity: widget.settings.streamGamepadOpacity,
+                          child: SafeArea(
+                            top: false,
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                left: 8,
+                                right: 8,
+                                bottom: 8,
+                              ),
+                              child: VirtualGamepad(
+                                theme: widget.settings.streamGamepadTheme,
+                                stickScale:
+                                    widget.settings.streamGamepadStickScale,
+                                faceScale:
+                                    widget.settings.streamGamepadFaceScale,
+                                dpadScale:
+                                    widget.settings.streamGamepadDpadScale,
+                                southpaw: widget.settings.streamGamepadSouthpaw,
+                                nintendoLayout:
+                                    widget.settings.streamGamepadNintendoLayout,
+                                deadZone: widget.settings.streamGamepadDeadzone,
+                                hapticFeedback:
+                                    widget.settings.streamGamepadHaptics,
+                                visualEffects:
+                                    widget.settings.streamGamepadEffects,
+                                animationsEnabled:
+                                    widget.settings.streamGamepadAnimations,
+                                scale: widget.settings.streamGamepadScale,
+                                spacing: widget.settings.streamGamepadSpacing,
+                                showShoulders:
+                                    widget.settings.streamGamepadShowShoulders,
+                                showSticks:
+                                    widget.settings.streamGamepadShowSticks,
+                                showDpad: widget.settings.streamGamepadShowDpad,
+                                showFaceButtons: widget
+                                    .settings
+                                    .streamGamepadShowFaceButtons,
+                                showMenu: widget.settings.streamGamepadShowMenu,
+                                onLeftStickDrag: _onLeftStickDrag,
+                                onLeftStickDragEnd: () {
+                                  _gamepadFlushTimer?.cancel();
+                                  _gamepadFlushTimer = null;
+                                  _leftStickX = 0;
+                                  _leftStickY = 0;
+                                  _sendGamepadState();
+                                },
+                                onRightStickDrag: _onRightStickDrag,
+                                onRightStickDragEnd: () {
+                                  _gamepadFlushTimer?.cancel();
+                                  _gamepadFlushTimer = null;
+                                  _rightStickX = 0;
+                                  _rightStickY = 0;
+                                  _sendGamepadState();
+                                },
+                                onDpadPressed: _onDpadPressed,
+                                onDpadReleased: _onDpadReleased,
+                                onFaceButtonPressed: _onFaceButtonPressed,
+                                onFaceButtonReleased: _onFaceButtonReleased,
+                                onStartPressed: () =>
+                                    _setGamepadBit(gamepadStart, true),
+                                onStartReleased: () =>
+                                    _setGamepadBit(gamepadStart, false),
+                                onSelectPressed: () =>
+                                    _setGamepadBit(gamepadBack, true),
+                                onSelectReleased: () =>
+                                    _setGamepadBit(gamepadBack, false),
+                                onHomePressed: () =>
+                                    _setGamepadBit(gamepadGuide, true),
+                                onHomeReleased: () =>
+                                    _setGamepadBit(gamepadGuide, false),
+                                onLeftBumperPressed: () =>
+                                    _setGamepadBit(gamepadLb, true),
+                                onLeftBumperReleased: () =>
+                                    _setGamepadBit(gamepadLb, false),
+                                onRightBumperPressed: () =>
+                                    _setGamepadBit(gamepadRb, true),
+                                onRightBumperReleased: () =>
+                                    _setGamepadBit(gamepadRb, false),
+                                onLeftTriggerPressed: () => _setTrigger(0, 1.0),
+                                onLeftTriggerReleased: () => _setTrigger(0, 0),
+                                onRightTriggerPressed: () =>
+                                    _setTrigger(1, 1.0),
+                                onRightTriggerReleased: () => _setTrigger(1, 0),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // Top chrome: timer + title/status + exit.
+                  if (_chromeVisible)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _TopChrome(
+                        game: widget.game,
+                        session: widget.session,
+                        startedAt: _sessionStartedAt,
+                        webrtcStatus: widget.webrtcStatus,
+                        onStop: widget.onStop,
+                        isFullscreen: _osFullscreen,
+                        onFullscreen: _toggleFullscreen,
+                      ),
+                    ),
+
+                  // Hint pill: mouse-lock + double-Esc gestures.
+                  if (_chromeVisible)
+                    Positioned(
+                      top: 88,
+                      left: 0,
+                      right: 0,
+                      child: IgnorePointer(child: Center(child: _HintPill())),
+                    ),
+
+                  // Bottom chrome: control bar.
+                  if (_chromeVisible)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _BottomChrome(
+                        settings: widget.settings,
+                        keyboardOpen: _keyboardOpen,
+                        settingsOpen: _streamSettingsOpen,
+                        onKeyboard: _toggleKeyboard,
+                        onOpenSettings: () {
+                          setState(() {
+                            _streamSettingsOpen = !_streamSettingsOpen;
+                            if (_streamSettingsOpen) {
+                              _mouseLocked = true;
+                              _chromeVisible = false;
+                            }
+                          });
+                          if (_streamSettingsOpen) _applyMobileSystemUi(true);
+                        },
+                        onHideUi: _enterGameMode,
+                        onHideChromeKeepKeyboard: _hideChromeKeepKeyboard,
+                      ),
+                    ),
+
+                  // Live stream-settings sidebar: gamepad scale/opacity, mouse sensitivity and
+                  // touch mode, applied immediately while streaming. Tapping the
+                  // rest of the screen (outside the panel) closes it.
+                  if (_streamSettingsOpen) ...[
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () =>
+                            setState(() => _streamSettingsOpen = false),
+                      ),
+                    ),
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: StreamSettingsSidebar(
+                        settings: widget.settings,
+                        keyboardOpen: _keyboardOpen,
+                        onToggleKeyboard: _toggleKeyboard,
+                        onClose: () =>
+                            setState(() => _streamSettingsOpen = false),
+                      ),
+                    ),
+                  ],
+
+                  // Soft keyboard (touch devices): a focusable text field lives just
+                  // off-screen so the Android keyboard shows, and whatever the user
+                  // types there is forwarded to the game. No input bar is drawn.
+                  //
+                  // The Positioned carries a stable key: it lives in a Stack whose
+                  // earlier children (the in-game cursor overlay, stats/gamepad)
+                  // are inserted/removed while the session runs. Without a key,
+                  // index-based reconciliation would recreate this field's element
+                  // the moment a sibling is inserted in front of it (which the game
+                  // does by showing a text caret when the user types a character),
+                  // detaching the FocusNode and hiding the keyboard mid-edit.
+                  if (_keyboardOpen)
+                    Positioned(
+                      key: const ValueKey('soft-keyboard-field'),
+                      left: 0,
+                      right: 0,
+                      top: 0,
+                      height: 1,
+                      child: Opacity(
+                        opacity: 0,
+                        child: TextField(
+                          controller: _keyboardController,
+                          focusNode: _keyboardFocus,
+                          onChanged: _onKeyboardChanged,
+                          onSubmitted: _onKeyboardSubmitted,
+                          textInputAction: TextInputAction.go,
+                          keyboardType: TextInputType.text,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -3479,7 +3514,9 @@ class _TopChrome extends StatelessWidget {
               backgroundColor: isFullscreen
                   ? Neon.accent.withValues(alpha: 0.14)
                   : Colors.black.withValues(alpha: 0.28),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             onPressed: onFullscreen,
           ),
@@ -3491,7 +3528,9 @@ class _TopChrome extends StatelessWidget {
             color: Neon.error,
             style: IconButton.styleFrom(
               backgroundColor: Colors.black.withValues(alpha: 0.28),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             onPressed: onStop,
           ),
@@ -3563,7 +3602,10 @@ class _BottomChrome extends StatelessWidget {
             active: settings.streamGamepad,
             onTap: () {
               settings.streamGamepad = !settings.streamGamepad;
-              _toast(context, settings.streamGamepad ? 'Gamepad on' : 'Gamepad off');
+              _toast(
+                context,
+                settings.streamGamepad ? 'Gamepad on' : 'Gamepad off',
+              );
               onHideUi();
             },
           ),
@@ -3574,7 +3616,12 @@ class _BottomChrome extends StatelessWidget {
             active: settings.streamShowFps,
             onTap: () {
               settings.streamShowFps = !settings.streamShowFps;
-              _toast(context, settings.streamShowFps ? 'Stats overlay on' : 'Stats overlay off');
+              _toast(
+                context,
+                settings.streamShowFps
+                    ? 'Stats overlay on'
+                    : 'Stats overlay off',
+              );
               onHideUi();
             },
           ),
@@ -3585,7 +3632,12 @@ class _BottomChrome extends StatelessWidget {
             active: settings.inputTouchEnabled,
             onTap: () {
               settings.inputTouchEnabled = !settings.inputTouchEnabled;
-              _toast(context, settings.inputTouchEnabled ? 'Touch input on' : 'Touch input off');
+              _toast(
+                context,
+                settings.inputTouchEnabled
+                    ? 'Touch input on'
+                    : 'Touch input off',
+              );
               onHideUi();
             },
           ),
@@ -3602,9 +3654,12 @@ class _BottomChrome extends StatelessWidget {
               settings.videoShader = settings.videoShader.copyWith(
                 enabled: !settings.videoShader.enabled,
               );
-              _toast(context, settings.videoShader.enabled
-                  ? 'Video effects on'
-                  : 'Video effects off');
+              _toast(
+                context,
+                settings.videoShader.enabled
+                    ? 'Video effects on'
+                    : 'Video effects off',
+              );
             },
           ),
           const SizedBox(width: 20),
@@ -3665,8 +3720,7 @@ class _ChromeButton extends StatelessWidget {
           label: '$label (${active ? 'on' : 'off'})',
           // Comfortable touch target even though the visual is compact.
           child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(minWidth: 48, minHeight: 48),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
@@ -3919,8 +3973,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                         for (final theme in ControllerThemes.all)
                           _ControllerThemeChip(
                             theme: theme,
-                            selected:
-                                settings.streamGamepadTheme == theme,
+                            selected: settings.streamGamepadTheme == theme,
                             onTap: () => settings.streamGamepadTheme = theme,
                           ),
                       ],
@@ -3954,27 +4007,29 @@ class StreamSettingsSidebar extends StatelessWidget {
                       onChanged: (v) => settings.streamGamepadAnimations = v,
                     ),
                     const SizedBox(height: 12),
-                    _ResetGamepadButton(onReset: () {
-                      settings.streamGamepadScale = 1.0;
-                      settings.streamGamepadSpacing = 1.0;
-                      settings.streamGamepadPosition = 0.0;
-                      settings.streamGamepadOpacity = 1.0;
-                      settings.streamGamepadTheme = ControllerThemes.neon;
-                      settings.streamGamepadStickScale = 1.0;
-                      settings.streamGamepadFaceScale = 1.0;
-                      settings.streamGamepadDpadScale = 1.0;
-                      settings.streamGamepadSouthpaw = false;
-                      settings.streamGamepadNintendoLayout = false;
-                      settings.streamGamepadDeadzone = 0.0;
-                      settings.streamGamepadHaptics = true;
-                      settings.streamGamepadEffects = true;
-                      settings.streamGamepadAnimations = true;
-                      settings.streamGamepadShowShoulders = true;
-                      settings.streamGamepadShowSticks = true;
-                      settings.streamGamepadShowDpad = true;
-                      settings.streamGamepadShowFaceButtons = true;
-                      settings.streamGamepadShowMenu = true;
-                    }),
+                    _ResetGamepadButton(
+                      onReset: () {
+                        settings.streamGamepadScale = 1.0;
+                        settings.streamGamepadSpacing = 1.0;
+                        settings.streamGamepadPosition = 0.0;
+                        settings.streamGamepadOpacity = 1.0;
+                        settings.streamGamepadTheme = ControllerThemes.neon;
+                        settings.streamGamepadStickScale = 1.0;
+                        settings.streamGamepadFaceScale = 1.0;
+                        settings.streamGamepadDpadScale = 1.0;
+                        settings.streamGamepadSouthpaw = false;
+                        settings.streamGamepadNintendoLayout = false;
+                        settings.streamGamepadDeadzone = 0.0;
+                        settings.streamGamepadHaptics = true;
+                        settings.streamGamepadEffects = true;
+                        settings.streamGamepadAnimations = true;
+                        settings.streamGamepadShowShoulders = true;
+                        settings.streamGamepadShowSticks = true;
+                        settings.streamGamepadShowDpad = true;
+                        settings.streamGamepadShowFaceButtons = true;
+                        settings.streamGamepadShowMenu = true;
+                      },
+                    ),
                   ],
                 ),
                 const SizedBox(height: 20),
@@ -3996,7 +4051,8 @@ class StreamSettingsSidebar extends StatelessWidget {
                         _ModeButton(
                           label: 'Compact',
                           subtitle: 'one-line pill',
-                          selected: settings.streamStatsStyle ==
+                          selected:
+                              settings.streamStatsStyle ==
                               StatsOverlayStyle.compact,
                           onTap: () => settings.streamStatsStyle =
                               StatsOverlayStyle.compact,
@@ -4005,7 +4061,8 @@ class StreamSettingsSidebar extends StatelessWidget {
                         _ModeButton(
                           label: 'Detailed',
                           subtitle: 'full panel',
-                          selected: settings.streamStatsStyle ==
+                          selected:
+                              settings.streamStatsStyle ==
                               StatsOverlayStyle.detailed,
                           onTap: () => settings.streamStatsStyle =
                               StatsOverlayStyle.detailed,
@@ -4018,14 +4075,13 @@ class StreamSettingsSidebar extends StatelessWidget {
                 _SidebarSection(
                   title: 'VIDEO EFFECTS',
                   enabled: settings.videoShader.enabled,
-                  onEnabledChanged: (v) => settings.videoShader =
-                      settings.videoShader.copyWith(enabled: v),
+                  onEnabledChanged: (v) => settings.videoShader = settings
+                      .videoShader
+                      .copyWith(enabled: v),
                   disabledHint:
                       'GPU post-processing is off — enable it to tune '
                       'sharpening, color and grain.',
-                  children: [
-                    VideoShaderFilterSliders(settings: settings),
-                  ],
+                  children: [VideoShaderFilterSliders(settings: settings)],
                 ),
                 const SizedBox(height: 20),
                 _SidebarSection(
@@ -4093,10 +4149,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                             children: [
                               Text(
                                 'Tap to dismiss',
-                                style: TextStyle(
-                                  color: Neon.ink,
-                                  fontSize: 13,
-                                ),
+                                style: TextStyle(color: Neon.ink, fontSize: 13),
                               ),
                               SizedBox(height: 2),
                               Text(
@@ -4113,8 +4166,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                         const SizedBox(width: 12),
                         NeonSwitch(
                           value: settings.keyboardTapToDismiss,
-                          onChanged: (v) =>
-                              settings.keyboardTapToDismiss = v,
+                          onChanged: (v) => settings.keyboardTapToDismiss = v,
                         ),
                       ],
                     ),
@@ -4449,7 +4501,8 @@ class _SliderRow extends StatelessWidget {
   final int? divisions;
   final ValueChanged<double> onChanged;
 
-  const _SliderRow({    required this.label,
+  const _SliderRow({
+    required this.label,
     required this.valueLabel,
     required this.value,
     required this.min,
@@ -4520,8 +4573,9 @@ class _StatsOverlay extends StatefulWidget {
 class _StatsOverlayState extends State<_StatsOverlay>
     with SingleTickerProviderStateMixin {
   /// Fallback listenable for compact mode before a transport exists.
-  static final ValueNotifier<StreamStatsSnapshot?> _emptyStats =
-      ValueNotifier(null);
+  static final ValueNotifier<StreamStatsSnapshot?> _emptyStats = ValueNotifier(
+    null,
+  );
 
   late final Ticker _ticker;
   int _uiFrames = 0;
@@ -4539,7 +4593,8 @@ class _StatsOverlayState extends State<_StatsOverlay>
       // Max-performance: wider window (1s) halves setState churn at the cost
       // of a slightly slower UI-fps readout — intentional tradeoff for 60fps.
       final thresholdMs = widget.maxPerformance ? 1000 : 500;
-      if (windowMs.inMilliseconds >= thresholdMs && windowMs.inMilliseconds > 0) {
+      if (windowMs.inMilliseconds >= thresholdMs &&
+          windowMs.inMilliseconds > 0) {
         setState(() {
           _uiFps = _uiFrames * 1000 / windowMs.inMilliseconds;
           _uiFrames = 0;
@@ -4573,7 +4628,8 @@ class _StatsOverlayState extends State<_StatsOverlay>
           if (snap == null) {
             text = 'collecting stats…';
           } else {
-            text = '${snap.receivedFps.toStringAsFixed(0)} FPS · '
+            text =
+                '${snap.receivedFps.toStringAsFixed(0)} FPS · '
                 '${(snap.videoBitrateKbps / 1000).toStringAsFixed(1)} Mb/s · '
                 '${snap.rttMs.toStringAsFixed(0)} ms';
           }
@@ -4582,8 +4638,7 @@ class _StatsOverlayState extends State<_StatsOverlay>
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.66),
               borderRadius: BorderRadius.circular(20),
-              border:
-                  Border.all(color: Colors.white.withValues(alpha: 0.10)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,

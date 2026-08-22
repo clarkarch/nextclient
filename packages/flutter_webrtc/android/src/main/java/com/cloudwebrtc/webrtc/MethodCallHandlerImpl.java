@@ -206,16 +206,21 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     mPeerConnectionObservers.clear();
   }
   private void initialize(boolean bypassVoiceProcessing, int networkIgnoreMask, boolean forceSWCodec, List<String> forceSWCodecList,
-  @Nullable ConstraintsMap androidAudioConfiguration, Severity logSeverity, @Nullable Integer audioSampleRate, @Nullable Integer audioOutputSampleRate) {
+  @Nullable ConstraintsMap androidAudioConfiguration, Severity logSeverity, @Nullable Integer audioSampleRate, @Nullable Integer audioOutputSampleRate, @Nullable String fieldTrials) {
     if (mFactory != null) {
       return;
     }
 
-    PeerConnectionFactory.initialize(
+    PeerConnectionFactory.InitializationOptions.Builder initBuilder =
             InitializationOptions.builder(context)
                     .setEnableInternalTracer(true)
-                    .setInjectableLogger(logSink, logSeverity)
-                    .createInitializationOptions());
+                    .setInjectableLogger(logSink, logSeverity);
+    if (fieldTrials != null && !fieldTrials.isEmpty()) {
+      // e.g. "WebRTC-ZeroPlayoutDelay/Enabled/" — render video frames as soon
+      // as they decode when the server sends a playout-delay extension.
+      initBuilder.setFieldTrials(fieldTrials);
+    }
+    PeerConnectionFactory.initialize(initBuilder.createInitializationOptions());
 
     getUserMediaImpl = new GetUserMediaImpl(this, context);
 
@@ -447,7 +452,13 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
           audioOutputSampleRate = constraintsMap.getInt("audioOutputSampleRate");
         }
 
-        initialize(enableBypassVoiceProcessing, networkIgnoreMask, forceSWCodec, forceSWCodecList, androidAudioConfiguration, logSeverity, audioSampleRate, audioOutputSampleRate);
+        String fieldTrials = null;
+        if (constraintsMap.hasKey("fieldTrials")
+                && constraintsMap.getType("fieldTrials") == ObjectType.String) {
+          fieldTrials = constraintsMap.getString("fieldTrials");
+        }
+
+        initialize(enableBypassVoiceProcessing, networkIgnoreMask, forceSWCodec, forceSWCodecList, androidAudioConfiguration, logSeverity, audioSampleRate, audioOutputSampleRate, fieldTrials);
         result.success(null);
         break;
       }
@@ -1035,6 +1046,12 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
       case "getReceivers": {
         String peerConnectionId = call.argument("peerConnectionId");
         getReceivers(peerConnectionId, result);
+        break;
+      }
+      case "setJitterBufferMinimumDelay": {
+        String peerConnectionId = call.argument("peerConnectionId");
+        Double seconds = call.argument("seconds");
+        setJitterBufferMinimumDelay(peerConnectionId, seconds, result);
         break;
       }
       case "getTransceivers": {
@@ -2423,6 +2440,15 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
       resultError("getReceivers", "peerConnection is null", result);
     } else {
       pco.getReceivers(result);
+    }
+  }
+
+  public void setJitterBufferMinimumDelay(String peerConnectionId, Double seconds, Result result) {
+    PeerConnectionObserver pco = mPeerConnectionObservers.get(peerConnectionId);
+    if (pco == null || pco.getPeerConnection() == null) {
+      resultError("setJitterBufferMinimumDelay", "peerConnection is null", result);
+    } else {
+      pco.setJitterBufferMinimumDelay(seconds, result);
     }
   }
 

@@ -24,46 +24,36 @@ client, built around a custom-built, hardware-accelerated streaming pipeline
 ## Features
 
 - **Catalog** — browse the GFN catalog (GraphQL), featured carousel, search,
-  recently played, and game-details pages with store-variant pickers.
-- **Stream shader filters** — live GPU post-processing on the stream video:
-  CAS sharpening (edge-aware, or a uniform unsharp mask), saturation,
-  contrast, brightness, vibrance, and animated film grain, adjustable during
-  a session (GPU renderer path).
-- **Sign-in** — browser-based OAuth with a local redirect server (PKCE) plus a
-  device-login flow; tokens are persisted and auto-refreshed.
-- **Sessions** — launch with live lifecycle feedback
-  (requesting → queued → allocating → ready), resume an active session after an
-  app restart, or terminate it remotely to free the server slot.
-- **Streaming** — WebRTC with three selectable transports and VAAPI
-  hardware decode + zero-copy render on Linux (below).
-- **Input** — OS pointer lock for FPS-style mouse look, sensitivity /
-  acceleration / sub-pixel precision tuning, client-rendered cursor overlay
-  (including custom bitmap cursors from the WebRTC cursor channel), touch
-  input for touchscreens, a virtual gamepad overlay, and physical gamepad
-  support on Android.
-- **Queue picker** — before launch, a free-tier server picker powered by
-  printed-waste community data shows live queue positions and ETAs per zone
-  (with pings), flags nuked zones, and lets you route the session to the
-  best queue (port of OpenNOW).
-- **Subscription** — shows your GFN tier, remaining hours, and entitled
-  resolutions.
-- **Quality controls** — resolution, FPS, bitrate, codec (H.264/HEVC/AV1),
-  color quality, keyboard layout, game language, L4S, and G-Sync settings sent
-  to the server on launch; plus advanced client-side WebRTC settings
-  (ICE policy, bundle, rtcp-mux, hardware acceleration, STUN, DSCP, IPv6).
-- **Neon UI** — dark theme with selectable animated background styles
-  (Subtle, Glow, Beams, Pulse, Aurora), auto-adaptive portrait bottom-nav vs.
-  landscape sidebar layout, and an optional hidden title bar.
-- **Diagnostics** — in-stream stats overlay (decode/render backend, FPS,
-  network), session timer, and an in-app log viewer fed by a redacted HTTP
-  logger (sensitive query parameters are scrubbed before anything is logged).
+  recently played, game details with store-variant pickers.
+- **Streaming** — WebRTC with three selectable transports; custom VAAPI
+  hardware decode + zero-copy render on Linux (below) — **super experimental,
+  unstable**.
+- **Stream shader filters** — live GPU post-processing (CAS sharpening,
+  saturation / contrast / brightness / vibrance, film grain), adjustable
+  mid-session.
+- **Input** — OS pointer lock with sensitivity tuning, touch input,
+  client-rendered cursor overlay, fully customizable virtual gamepad
+  (12 themes, per-control scaling, haptics), physical gamepads on Android
+  and Linux.
+- **Sign-in** — browser OAuth (PKCE) or device login; tokens auto-refreshed.
+- **Sessions** — live launch lifecycle, resume after app restart, remote
+  terminate.
+- **Queue picker** — free-tier server picker with live queue positions, ETAs,
+  and pings per zone (printed-waste community data).
+- **Subscription** — GFN tier, remaining hours, entitled resolutions.
+- **Quality controls** — resolution, FPS, bitrate, codec, color, L4S,
+  G-Sync sent on launch, plus advanced WebRTC settings.
+- **Neon UI** — 17 pre-rendered background styles, global animations toggle,
+  adaptive portrait / landscape layouts, UI scaling, optional hidden title bar.
+- **Diagnostics** — in-stream stats overlay, session timer, in-app log viewer
+  with redacted HTTP logging.
 
 ## Platform support
 
 | Platform | Status |
 |---|---|
 | Android | ✅ Supported — decode is already handled by flutter_webrtc (platform hardware codecs) |
-| Linux | ✅ Supported — VAAPI hardware decode + zero-copy render |
+| Linux | ⚠️ Supported — custom VAAPI hardware decode + zero-copy render (super experimental, unstable) |
 | Windows | 🚧 Partially supported — builds and streams, but GPU decode isn't solved yet (runs FFmpeg software decode) |
 | macOS | ❓ Untested — I have no Mac (a CI job exists, but nothing has been validated) |
 | Web | ❌ Not built — the app depends on `dart:ffi`, GStreamer, and native plugins |
@@ -108,13 +98,14 @@ in Settings → WebRTC:
 
 | Transport | Path |
 |---|---|
-| `flutterWebrtc` (default) | stock `flutter_webrtc` plugin + `RTCVideoRenderer`; on Linux this layers the custom-built `libwebrtc.so` (VAAPI decode + dmabuf) |
+| `flutterWebrtc` (default) | stock `flutter_webrtc` plugin + `RTCVideoRenderer`; on Linux this layers the custom-built `libwebrtc.so` (VAAPI decode + dmabuf) — **super experimental, unstable** |
 | `webrtcbinFfi` | native GStreamer `webrtcbin` bridge over `dart:ffi` (`native/gst_bridge`) — hardware decode without a custom libwebrtc build |
 | `nvstGstreamer` | classic NVST UDP video via `native/nvst_bridge` + GStreamer hardware decode; WebRTC is kept for SCTP input |
 
 Decode and render backends are independently selectable:
 
-- **Decode** — `vaapi` (GStreamer VAAPI `vah264dec` on Linux) or `ffmpeg`
+- **Decode** — `vaapi` (GStreamer VAAPI `vah264dec` on Linux; custom build —
+  **super experimental, unstable**) or `ffmpeg`
   (forced software). Windows currently runs the FFmpeg software path until
   the D3D11VA decoder lands; Android decodes automatically via the platform
   (no custom build). Applied per-session via `OPENNOW_DECODER`.

@@ -5,6 +5,7 @@ import 'dart:math' show Random;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' show WebRTC;
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:gfn_core/gfn_core.dart';
 import 'package:http/http.dart' as http;
@@ -93,9 +94,8 @@ Future<void> main() async {
   // app boots on mobile/web where the plugins have no implementation — an
   // unguarded await throws MissingPluginException before runApp and the app
   // never renders.
-  final isDesktop =
-      Platform.isLinux || Platform.isMacOS || Platform.isWindows;
-if (isDesktop) {
+  final isDesktop = Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+  if (isDesktop) {
     // Restores the OS cursor after a hot restart during development (pointer
     // lock plugin requirement).
     await pointerLock.ensureInitialized();
@@ -126,6 +126,27 @@ if (isDesktop) {
         systemNavigationBarDividerColor: Colors.transparent,
       ),
     );
+  }
+  // Android streaming: initialize the WebRTC plugin explicitly so field
+  // trials apply before any PeerConnectionFactory exists. ZeroPlayoutDelay
+  // (opt-in, Settings > Performance) renders frames the moment they decode
+  // when the server advertises the playout-delay extension — lowest render
+  // delay, at the cost of some smoothing under bursty jitter.
+  if (Platform.isAndroid) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final zeroPlayoutDelay =
+          prefs.getBool(UserSettings.zeroPlayoutDelayPrefKey) ?? false;
+      await WebRTC.initialize(
+        options: {
+          'fieldTrials': zeroPlayoutDelay
+              ? 'WebRTC-ZeroPlayoutDelay/Enabled/'
+              : '',
+        },
+      );
+    } catch (_) {
+      // Plugin self-initializes with defaults on failure.
+    }
   }
   runApp(const DebugShellApp());
 }
@@ -189,11 +210,7 @@ class AppServices {
       return info;
     } catch (e) {
       debugPrint('[subscription] load failed: $e');
-      logSink.log(
-        LogLevel.warn,
-        'subscription',
-        'Load failed: $e',
-      );
+      logSink.log(LogLevel.warn, 'subscription', 'Load failed: $e');
       return null;
     }
   }
@@ -292,7 +309,8 @@ class AppServices {
   ///
   /// Returns the composite sink plus the file sink/path (null when file
   /// logging is unavailable, e.g. the platform can't provide a directory).
-  static Future<(CompositeLogSink, FileLogSink?, String?)> _buildLogSink() async {
+  static Future<(CompositeLogSink, FileLogSink?, String?)>
+  _buildLogSink() async {
     final ring = RingBufferLogSink(maxEntries: 500);
     final sinks = <LogSink>[ring, TerminalLogSink()];
     FileLogSink? fileSink;
@@ -304,11 +322,7 @@ class AppServices {
       fileSink = FileLogSink(logFile);
       logPath = logFile.path;
       sinks.add(fileSink);
-      ring.log(
-        LogLevel.info,
-        'app',
-        'Log file: $logPath',
-      );
+      ring.log(LogLevel.info, 'app', 'Log file: $logPath');
     } catch (e) {
       ring.log(
         LogLevel.warn,

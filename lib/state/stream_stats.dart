@@ -26,7 +26,8 @@ class StreamStatsSnapshot {
   final double jitterBufferDelayMs; // avg per emitted frame
   final double totalDecodeTimeMs; // cumulative
   final double decodeTimePerFrameMs; // avg since last poll
-  final double processingDelayPerFrameMs; // avg since last poll (decode + queue)
+  final double
+  processingDelayPerFrameMs; // avg since last poll (decode + queue)
   final int? videoWidth;
   final int? videoHeight;
   final String? codecMime;
@@ -52,16 +53,17 @@ class StreamStatsSnapshot {
 
   /// Backlog = frames buffered ahead of the decoder (received - decoded). A
   /// persistently large backlog means the jitter buffer is holding latency.
-  int get backlogFrames =>
-      framesReceived >= 0 && framesDecoded >= 0
-          ? framesReceived - framesDecoded
-          : 0;
+  int get backlogFrames => framesReceived >= 0 && framesDecoded >= 0
+      ? framesReceived - framesDecoded
+      : 0;
 
   // Cumulative counters carried forward so the next poll can compute deltas.
   final int lastVideoBytes;
   final int lastAudioBytes;
   final double lastDecodeTimeMs;
   final double lastProcessingDelayMs;
+  final double lastJbDelaySec;
+  final int lastJbEmitted;
 
   const StreamStatsSnapshot({
     required this.timestamp,
@@ -104,6 +106,8 @@ class StreamStatsSnapshot {
     this.lastAudioBytes = 0,
     this.lastDecodeTimeMs = 0,
     this.lastProcessingDelayMs = 0,
+    this.lastJbDelaySec = 0,
+    this.lastJbEmitted = 0,
   });
 
   /// Parses a raw getStats() report list into a snapshot, using [prev] to
@@ -191,7 +195,8 @@ class StreamStatsSnapshot {
     final framesDecodedDelta = vFramesDecoded - (prev?.framesDecoded ?? 0);
     final framesReceivedDelta = vFramesReceived - (prev?.framesReceived ?? 0);
     final decodeMsDelta = vDecodeMs - (prev?.lastDecodeTimeMs ?? 0);
-    final processingMsDelta = vProcessingMs - (prev?.lastProcessingDelayMs ?? 0);
+    final processingMsDelta =
+        vProcessingMs - (prev?.lastProcessingDelayMs ?? 0);
 
     // Rate ceilings: a GFN session tops out at 240 fps; anything above is a
     // counter-reset artifact (negative deltas clamp to 0; absurd positives
@@ -217,8 +222,19 @@ class StreamStatsSnapshot {
         framesDecodedDelta > 0 && processingMsDelta >= 0
         ? processingMsDelta / framesDecodedDelta
         : 0.0;
-    final jitterBufferDelayMs =
-        vJbEmitted > 0 ? (vJbDelaySec * 1000) / vJbEmitted : 0.0;
+    // Instantaneous per-frame jitter-buffer delay: DELTA(delay) / DELTA
+    // (emitted) across the poll interval. The naive cumulative form (total /
+    // total-emitted) only ever rises — one bursty minute mid-session poisons
+    // the number forever and makes recovery invisible.
+    final prevJbDelaySec = prev?.lastJbDelaySec ?? 0.0;
+    final prevJbEmitted = prev?.lastJbEmitted ?? 0;
+    final jbDelayDeltaSec = vJbDelaySec - prevJbDelaySec;
+    final jbEmittedDelta = vJbEmitted - prevJbEmitted;
+    final jitterBufferDelayMs = jbEmittedDelta > 0 && jbDelayDeltaSec >= 0
+        ? (jbDelayDeltaSec * 1000) / jbEmittedDelta
+        : vJbEmitted > 0
+        ? (vJbDelaySec * 1000) / vJbEmitted
+        : 0.0;
 
     // codecId is a string reference to a 'codec' report id, NOT a numeric
     // stat — read it raw instead of through the num-coercing nv() helper.
@@ -226,8 +242,9 @@ class StreamStatsSnapshot {
     // and decoder name) — read them raw, NOT through the num-coercing nv().
     final rawCodecId = video?['codecId'];
     final codecId = rawCodecId?.toString();
-    final codecMime =
-        codecId == null ? null : codecs[codecId]?['mimeType'] as String?;
+    final codecMime = codecId == null
+        ? null
+        : codecs[codecId]?['mimeType'] as String?;
     final rawDecoder = video?['decoderImplementation'];
 
     // --- Audio ---
@@ -240,13 +257,15 @@ class StreamStatsSnapshot {
         : 0.0;
 
     // --- Candidate pair / RTT ---
-    final rttMs = (nv(activePair, 'currentRoundTripTime') ?? 0).toDouble() * 1000;
+    final rttMs =
+        (nv(activePair, 'currentRoundTripTime') ?? 0).toDouble() * 1000;
     final inBps = (nv(activePair, 'availableIncomingBitrate') ?? 0).toDouble();
     final outBps = (nv(activePair, 'availableOutgoingBitrate') ?? 0).toDouble();
 
     final totalPackets = vPacketsRecv + vPacketsLost;
-    final lossPercent =
-        totalPackets > 0 ? (vPacketsLost / totalPackets) * 100 : 0.0;
+    final lossPercent = totalPackets > 0
+        ? (vPacketsLost / totalPackets) * 100
+        : 0.0;
 
     return StreamStatsSnapshot(
       timestamp: timestamp,
@@ -291,6 +310,8 @@ class StreamStatsSnapshot {
       lastAudioBytes: aBytes,
       lastDecodeTimeMs: vDecodeMs,
       lastProcessingDelayMs: vProcessingMs,
+      lastJbDelaySec: vJbDelaySec,
+      lastJbEmitted: vJbEmitted,
     );
   }
 }
@@ -390,7 +411,8 @@ class StreamStatsSummary {
     return l.timestamp.difference(f).inMilliseconds / 1000;
   }
 
-  double get avgDecodeFps => activeSamples > 0 ? _decodeFpsSum / activeSamples : 0;
+  double get avgDecodeFps =>
+      activeSamples > 0 ? _decodeFpsSum / activeSamples : 0;
   double get avgDecodeTimePerFrameMs =>
       activeSamples > 0 ? _decodeMsSum / activeSamples : 0;
   double get avgReceivedFps =>
@@ -400,7 +422,8 @@ class StreamStatsSummary {
       samples > 0 ? _jitterBufferDelaySum / samples : 0;
   double get avgRttMs => samples > 0 ? _rttSum / samples : 0;
   double get avgBitrateKbps => samples > 0 ? _bitrateSum / samples : 0;
-  double get avgAudioBitrateKbps => samples > 0 ? _audioBitrateSum / samples : 0;
+  double get avgAudioBitrateKbps =>
+      samples > 0 ? _audioBitrateSum / samples : 0;
   double get avgAudioJitterMs => samples > 0 ? _audioJitterSum / samples : 0;
   double get avgInBitrateKbps => samples > 0 ? _inBitrateSum / samples : 0;
   double get avgOutBitrateKbps => samples > 0 ? _outBitrateSum / samples : 0;
@@ -477,7 +500,9 @@ class StreamStatsSummary {
     if (s.decodeFps < decodeFpsMin) decodeFpsMin = s.decodeFps;
     if (s.decodeFps > decodeFpsMax) decodeFpsMax = s.decodeFps;
     _decodeMsSum += s.decodeTimePerFrameMs;
-    if (s.decodeTimePerFrameMs > decodeMsMax) decodeMsMax = s.decodeTimePerFrameMs;
+    if (s.decodeTimePerFrameMs > decodeMsMax) {
+      decodeMsMax = s.decodeTimePerFrameMs;
+    }
   }
 
   /// Records a UI-fps sample from the stats overlay Ticker.
@@ -527,15 +552,18 @@ class StreamStatsSummary {
     String ms(double v) => '${v.toStringAsFixed(1)} ms';
     final b = StringBuffer('$samples stats polls\n');
     b.writeln(
-        'duration     ${dur != null ? '${dur.toStringAsFixed(1)} s' : '—'}');
+      'duration     ${dur != null ? '${dur.toStringAsFixed(1)} s' : '—'}',
+    );
     if (l != null) {
       b.writeln('codec        ${l.codecMime ?? '—'}');
       b.writeln('decoder      ${l.decoderImplementation ?? '—'}');
       b.writeln('resolution   ${l.videoWidth ?? '?'}x${l.videoHeight ?? '?'}');
     }
     if (uiFpsSamples > 0) {
-      b.writeln('ui fps       avg ${fmtFps(avgUiFps)}  '
-          'min ${fmtFps(uiFpsMin)}  max ${fmtFps(uiFpsMax)}');
+      b.writeln(
+        'ui fps       avg ${fmtFps(avgUiFps)}  '
+        'min ${fmtFps(uiFpsMin)}  max ${fmtFps(uiFpsMax)}',
+      );
     }
     b.writeln('connection   ${connectionState ?? '—'}');
     b.writeln('input        ${inputReady ? 'ready' : 'idle'}');
@@ -543,32 +571,42 @@ class StreamStatsSummary {
     b.writeln('partial ch   ${partiallyReliableInputOpen ? 'open' : 'closed'}');
     if (l != null) {
       b.writeln(
-          'renderer     ${l.videoWidth ?? '?'}x${l.videoHeight ?? '?'}'
-          '${rendererHasVideo ? ' · active' : ' · waiting'}');
+        'renderer     ${l.videoWidth ?? '?'}x${l.videoHeight ?? '?'}'
+        '${rendererHasVideo ? ' · active' : ' · waiting'}',
+      );
     } else {
       b.writeln('renderer     —');
     }
-    b.writeln('decode fps   avg ${active ? fmtFps(avgDecodeFps) : '—'}  '
-        'min ${active ? fmtFps(decodeFpsMin) : '—'}  '
-        'max ${active ? fmtFps(decodeFpsMax) : '—'}  '
-        'latest ${fmtFps(l?.decodeFps ?? 0)}');
-    b.writeln('receive fps  avg ${recv ? fmtFps(avgReceivedFps) : '—'}  '
-        'min ${recv ? fmtFps(receivedFpsMin) : '—'}  '
-        'max ${recv ? fmtFps(receivedFpsMax) : '—'}  '
-        'latest ${fmtFps(l?.receivedFps ?? 0)}');
-    b.writeln('decode/frame avg ${active ? ms(avgDecodeTimePerFrameMs) : '—'}  '
-        'max ${active ? ms(decodeMsMax) : '—'}  '
-        'latest ${l != null ? ms(l.decodeTimePerFrameMs) : '—'}');
+    b.writeln(
+      'decode fps   avg ${active ? fmtFps(avgDecodeFps) : '—'}  '
+      'min ${active ? fmtFps(decodeFpsMin) : '—'}  '
+      'max ${active ? fmtFps(decodeFpsMax) : '—'}  '
+      'latest ${fmtFps(l?.decodeFps ?? 0)}',
+    );
+    b.writeln(
+      'receive fps  avg ${recv ? fmtFps(avgReceivedFps) : '—'}  '
+      'min ${recv ? fmtFps(receivedFpsMin) : '—'}  '
+      'max ${recv ? fmtFps(receivedFpsMax) : '—'}  '
+      'latest ${fmtFps(l?.receivedFps ?? 0)}',
+    );
+    b.writeln(
+      'decode/frame avg ${active ? ms(avgDecodeTimePerFrameMs) : '—'}  '
+      'max ${active ? ms(decodeMsMax) : '—'}  '
+      'latest ${l != null ? ms(l.decodeTimePerFrameMs) : '—'}',
+    );
     b.writeln('decode total ${l != null ? ms(l.totalDecodeTimeMs) : '—'}');
     if (processingSamples > 0) {
-      b.writeln('proc delay  avg ${ms(avgProcessingDelayMs)}  '
-          'max ${ms(processingDelayMsMax)}');
+      b.writeln(
+        'proc delay  avg ${ms(avgProcessingDelayMs)}  '
+        'max ${ms(processingDelayMsMax)}',
+      );
     }
     b.writeln('video bitrate avg ${fmtKbps(avgBitrateKbps)}');
     b.writeln('jitter       avg ${ms(avgJitterMs)}  max ${ms(jitterMsMax)}');
     b.writeln(
-        'jb delay     avg ${ms(avgJitterBufferDelayMs)}  '
-        'max ${ms(jitterBufferDelayMax)}');
+      'jb delay     avg ${ms(avgJitterBufferDelayMs)}  '
+      'max ${ms(jitterBufferDelayMax)}',
+    );
     b.writeln('rtt          avg ${ms(avgRttMs)}  max ${ms(rttMsMax)}');
     b.writeln('loss         max ${packetLossMax.toStringAsFixed(2)}%');
     b.writeln('backlog      max $backlogMax frames');
@@ -576,34 +614,50 @@ class StreamStatsSummary {
     // Only claim queue inflation when frames are ACTUALLY backed up — an
     // instantaneous decode<receive on a healthy session (polling jitter,
     // backlog ~0) is normal and must not print a scary note.
-    if (l != null && l.backlogFrames > 0 && l.receivedFps > 0 &&
+    if (l != null &&
+        l.backlogFrames > 0 &&
+        l.receivedFps > 0 &&
         l.decodeFps < l.receivedFps) {
-      b.writeln('queue note  decode ${fmtFps(l.decodeFps)} < receive '
-          '${fmtFps(l.receivedFps)} fps with $backlogMax-frame backlog — '
-          'decode/frame & proc delay include pipeline queue wait, not just '
-          'GPU time');
+      b.writeln(
+        'queue note  decode ${fmtFps(l.decodeFps)} < receive '
+        '${fmtFps(l.receivedFps)} fps with $backlogMax-frame backlog — '
+        'decode/frame & proc delay include pipeline queue wait, not just '
+        'GPU time',
+      );
     }
     if (l != null) {
       final pct = l.framesReceived > 0
           ? ' (${(l.framesDecoded / l.framesReceived * 100).toStringAsFixed(1)}% decoded)'
           : '';
-      b.writeln('frames       ${l.framesDecoded} decoded / ${l.framesReceived} '
-          'received / ${l.framesDropped} dropped (${l.keyFramesDecoded} key)'
-          '$pct');
-      b.writeln('packets      lost ${l.packetsLost}/${l.packetsReceived} '
-          '(latest)  nack max $nackMax');
+      b.writeln(
+        'frames       ${l.framesDecoded} decoded / ${l.framesReceived} '
+        'received / ${l.framesDropped} dropped (${l.keyFramesDecoded} key)'
+        '$pct',
+      );
+      b.writeln(
+        'packets      lost ${l.packetsLost}/${l.packetsReceived} '
+        '(latest)  nack max $nackMax',
+      );
       b.writeln('pli/fir     max $pliMax / $firMax');
-      b.writeln('freeze      max $freezeMax events'
-          '${l.totalFreezesDurationMs > 0 ? ' · ${ms(l.totalFreezesDurationMs)} total' : ''}');
+      b.writeln(
+        'freeze      max $freezeMax events'
+        '${l.totalFreezesDurationMs > 0 ? ' · ${ms(l.totalFreezesDurationMs)} total' : ''}',
+      );
     }
     if (samples > 0) {
-      b.writeln('audio        bitrate avg ${fmtKbps(avgAudioBitrateKbps)}  '
-          'jitter avg ${ms(avgAudioJitterMs)}  max ${ms(audioJitterMsMax)}  '
-          'lost max $audioPacketsLostMax');
-      b.writeln('in avail     avg ${fmtKbps(avgInBitrateKbps)}  '
-          'max ${fmtKbps(inBitrateMax)}');
-      b.writeln('out avail    avg ${fmtKbps(avgOutBitrateKbps)}  '
-          'max ${fmtKbps(outBitrateMax)}');
+      b.writeln(
+        'audio        bitrate avg ${fmtKbps(avgAudioBitrateKbps)}  '
+        'jitter avg ${ms(avgAudioJitterMs)}  max ${ms(audioJitterMsMax)}  '
+        'lost max $audioPacketsLostMax',
+      );
+      b.writeln(
+        'in avail     avg ${fmtKbps(avgInBitrateKbps)}  '
+        'max ${fmtKbps(inBitrateMax)}',
+      );
+      b.writeln(
+        'out avail    avg ${fmtKbps(avgOutBitrateKbps)}  '
+        'max ${fmtKbps(outBitrateMax)}',
+      );
     }
     return b.toString();
   }

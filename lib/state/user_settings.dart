@@ -75,6 +75,8 @@ class UserSettings extends ChangeNotifier {
   static const _keyUiScale = 'settings.ui.scale';
   static const _keyUiAnimations = 'settings.ui.animations';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
+  static const _keyLatencyGuard = 'settings.perf.latencyGuard';
+  static const _keyZeroPlayoutDelay = zeroPlayoutDelayPrefKey;
   static const _keyHideTitleBar = 'settings.ui.hideTitleBar';
   static const _keyMaxPerformanceMode = 'settings.perf.maxPerformance';
   // --- Experimental stream optimizations --------------------------------
@@ -157,11 +159,13 @@ class UserSettings extends ChangeNotifier {
   double _uiScale = 1.0;
   bool _uiAnimations = true;
   bool _logsEnabled = false;
+  bool _latencyGuardEnabled = false;
+  bool _zeroPlayoutDelayEnabled = false;
   bool _hideTitleBar = false;
   bool _maxPerformanceMode = false;
   // --- Experimental stream optimizations (all default to the safe profile) --
   bool _optLowLatencyMode = false;
-  StreamRecoveryProfile _optRecoveryProfile = StreamRecoveryProfile.smooth;
+  StreamRecoveryProfile _optRecoveryProfile = StreamRecoveryProfile.latency;
   int _optMinBitrateKbps = 4000;
   bool _optEnableNack = true;
   bool _optEnableFec = true;
@@ -288,6 +292,18 @@ class UserSettings extends ChangeNotifier {
   bool get uiAnimations => _uiAnimations;
 
   bool get logsEnabled => _logsEnabled;
+
+  /// Watches the live stream for monotonic latency buildup (decoder backlog,
+  /// jitter-buffer growth) and requests a keyframe resync when it detects the
+  /// client falling behind over time.
+  bool get latencyGuardEnabled => _latencyGuardEnabled;
+
+  /// Renders decoded frames the moment they arrive when the server advertises
+  /// the playout-delay RTP extension (WebRTC-ZeroPlayoutDelay field trial).
+  /// Lowest render delay; may stutter under bursty jitter. Requires a restart
+  /// to apply (the field trial binds at PeerConnectionFactory init).
+  static const zeroPlayoutDelayPrefKey = 'settings.perf.zeroPlayoutDelay';
+  bool get zeroPlayoutDelayEnabled => _zeroPlayoutDelayEnabled;
   bool get hideTitleBar => _hideTitleBar;
 
   /// When true the stream stack aggressively maximizes render performance:
@@ -772,7 +788,7 @@ class UserSettings extends ChangeNotifier {
   }
 
   set uiScale(double v) {
-    final clamped = v.clamp(0.75, 1.5);
+    final clamped = v.clamp(0.60, 1.5);
     if (_uiScale == clamped) return;
     _uiScale = clamped;
     _prefs.setDouble(_keyUiScale, clamped);
@@ -791,6 +807,20 @@ class UserSettings extends ChangeNotifier {
     if (_logsEnabled == v) return;
     _logsEnabled = v;
     _save(_keyLogsEnabled, v);
+    notifyListeners();
+  }
+
+  set latencyGuardEnabled(bool v) {
+    if (_latencyGuardEnabled == v) return;
+    _latencyGuardEnabled = v;
+    _save(_keyLatencyGuard, v);
+    notifyListeners();
+  }
+
+  set zeroPlayoutDelayEnabled(bool v) {
+    if (_zeroPlayoutDelayEnabled == v) return;
+    _zeroPlayoutDelayEnabled = v;
+    _save(_keyZeroPlayoutDelay, v);
     notifyListeners();
   }
 
@@ -1081,6 +1111,10 @@ class UserSettings extends ChangeNotifier {
     _uiScale = _prefs.getDouble(_keyUiScale) ?? _uiScale;
     _uiAnimations = _prefs.getBool(_keyUiAnimations) ?? _uiAnimations;
     _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
+    _latencyGuardEnabled =
+        _prefs.getBool(_keyLatencyGuard) ?? _latencyGuardEnabled;
+    _zeroPlayoutDelayEnabled =
+        _prefs.getBool(_keyZeroPlayoutDelay) ?? _zeroPlayoutDelayEnabled;
     _hideTitleBar = _prefs.getBool(_keyHideTitleBar) ?? _hideTitleBar;
     _maxPerformanceMode =
         _prefs.getBool(_keyMaxPerformanceMode) ?? _maxPerformanceMode;
@@ -1211,10 +1245,12 @@ class UserSettings extends ChangeNotifier {
     _uiScale = 1.0;
     _uiAnimations = true;
     _logsEnabled = false;
+    _latencyGuardEnabled = false;
+    _zeroPlayoutDelayEnabled = false;
     _hideTitleBar = false;
     _maxPerformanceMode = false;
     _optLowLatencyMode = false;
-    _optRecoveryProfile = StreamRecoveryProfile.smooth;
+    _optRecoveryProfile = StreamRecoveryProfile.latency;
     _optMinBitrateKbps = 4000;
     _optEnableNack = true;
     _optEnableFec = true;
@@ -1288,6 +1324,8 @@ class UserSettings extends ChangeNotifier {
     _keyUiScale,
     _keyUiAnimations,
     _keyLogsEnabled,
+    _keyLatencyGuard,
+    _keyZeroPlayoutDelay,
     _keyHideTitleBar,
     _keyMaxPerformanceMode,
     _keyOptLowLatency,

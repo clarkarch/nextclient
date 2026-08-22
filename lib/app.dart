@@ -78,10 +78,12 @@ class _DebugShellAppState extends State<DebugShellApp>
       debugShowCheckedModeBanner: false,
       theme: buildNeonTheme(),
       // Wraps the Navigator (everything the app pushes, stream page included)
-      // with the persisted UI scale. Text scaling is composed with the OS font
-      // scale so an accessibility setting isn't clobbered. The scale applies
-      // live via the ListenableBuilder below this builder (only once services
-      // are loaded — before that the app renders unscaled).
+      // with the persisted UI scale. This zooms the WHOLE UI (layout chrome
+      // and text together), not just text: the app lays out in a design
+      // viewport of size/scale and a FittedBox rasterizes it back to the real
+      // window size — hit testing goes through the same transform, so taps
+      // stay accurate. Safe-area / keyboard insets are divided out so the
+      // scaled result still lines up with the physical screen edges.
       builder: (context, child) {
         final services = _services;
         if (services == null) return child!;
@@ -91,13 +93,25 @@ class _DebugShellAppState extends State<DebugShellApp>
             final scale = services.settings.uiScale;
             if ((scale - 1.0).abs() < 0.005) return child!;
             final mq = MediaQuery.of(context);
-            // Preserve the OS font scale (accessibility setting) and multiply
-            // it by the app scale. The built-in scalers are linear, so the
-            // scaled size at a 1.0px reference gives the exact factor.
-            final factor = mq.textScaler.scale(1.0) * scale;
-            return MediaQuery(
-              data: mq.copyWith(textScaler: TextScaler.linear(factor)),
-              child: child!,
+            final inv = 1.0 / scale;
+            EdgeInsets shrink(EdgeInsets e) =>
+                e == EdgeInsets.zero ? e : e * inv;
+            return FittedBox(
+              fit: BoxFit.fill,
+              child: SizedBox(
+                width: mq.size.width * inv,
+                height: mq.size.height * inv,
+                child: MediaQuery(
+                  data: mq.copyWith(
+                    size: mq.size * inv,
+                    padding: shrink(mq.padding),
+                    viewPadding: shrink(mq.viewPadding),
+                    viewInsets: shrink(mq.viewInsets),
+                    systemGestureInsets: shrink(mq.systemGestureInsets),
+                  ),
+                  child: child!,
+                ),
+              ),
             );
           },
         );

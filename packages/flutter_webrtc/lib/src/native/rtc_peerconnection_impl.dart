@@ -551,6 +551,23 @@ class RTCPeerConnectionNative extends RTCPeerConnection {
     }
   }
 
+  /// Android: pins the audio jitter buffer's minimum delay (NetEQ floor) so
+  /// playout latency cannot creep upward from floor-based buffering during
+  /// long sessions. No-op on platforms without the native API.
+  Future<void> setJitterBufferMinimumDelay(double seconds) async {
+    try {
+      await WebRTC.invokeMethod(
+          'setJitterBufferMinimumDelay', <String, dynamic>{
+        'peerConnectionId': _peerConnectionId,
+        'seconds': seconds,
+      });
+    } on PlatformException {
+      // Native side does not support it — ignore.
+    } on MissingPluginException {
+      // Non-Android platform — ignore.
+    }
+  }
+
   @override
   Future<List<RTCRtpTransceiver>> getTransceivers() async {
     try {

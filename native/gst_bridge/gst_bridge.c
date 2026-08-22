@@ -727,6 +727,10 @@ GstBridge* bridge_create(bridge_log_cb log_cb, bridge_ice_cb ice_cb,
                GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE, NULL);
   g_object_set(b->webrtcbin, "stun-server",
                "stun://stun2.l.google.com:19302", NULL);
+  // OpenNOW-aligned anti-buildup: cap the internal jitterbuffer at 2 ms so
+  // received latency cannot ratchet upward over a long session (clock drift,
+  // jitter-buffer growth). Frames are released to the decode chain ~immediately.
+  g_object_set(b->webrtcbin, "latency", 2, NULL);
 
   g_signal_connect(b->webrtcbin, "on-ice-candidate",
                    G_CALLBACK(on_ice_candidate), b);

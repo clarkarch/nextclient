@@ -13,6 +13,7 @@ import 'package:gfn_core/gfn_core.dart';
 
 import 'gfn_cursor_overlay.dart';
 import 'gfn_input_protocol.dart';
+import 'latency_guard.dart';
 import 'gfn_keyboard_mapping.dart';
 import 'process_env.dart' show applyDecoderBackend, applyRendererBackend;
 import 'stream_stats.dart';
@@ -27,19 +28,18 @@ import 'video_shader_settings.dart';
 /// never fails the stream (advisory).
 Future<void> pushVideoShaderSettings(VideoShaderSettings settings) async {
   try {
-    await const MethodChannel('FlutterWebRTC.Method').invokeMethod(
-      'setVideoShaderSettings',
-      {
-        'enabled': settings.enabled,
-        'sharpen': settings.sharpen,
-        'sharpenAdaptive': settings.sharpenAdaptive,
-        'saturation': settings.saturation,
-        'contrast': settings.contrast,
-        'brightness': settings.brightness,
-        'vibrance': settings.vibrance,
-        'filmGrain': settings.filmGrain,
-      },
-    ).catchError((Object _) => false);
+    await const MethodChannel('FlutterWebRTC.Method')
+        .invokeMethod('setVideoShaderSettings', {
+          'enabled': settings.enabled,
+          'sharpen': settings.sharpen,
+          'sharpenAdaptive': settings.sharpenAdaptive,
+          'saturation': settings.saturation,
+          'contrast': settings.contrast,
+          'brightness': settings.brightness,
+          'vibrance': settings.vibrance,
+          'filmGrain': settings.filmGrain,
+        })
+        .catchError((Object _) => false);
   } on Exception {
     // The shader channel is advisory; the stream must never fail over it.
   }
@@ -108,6 +108,7 @@ class WebRtcStreamSession implements StreamTransport {
       placeholderBuilder: (_) => placeholder,
     );
   }
+
   Timer? _statsTimer;
   bool _statsPollInFlight = false;
   Duration get _statsPollInterval => settings.statsPollInterval;
@@ -130,8 +131,9 @@ class WebRtcStreamSession implements StreamTransport {
   /// when [UserSettings.inputCursorOverlay] is on). The stream surface
   /// listens and renders the game's actual cursor.
   @override
-  final ValueNotifier<GfnCursorOverlayUpdate?> cursorOverlay =
-      ValueNotifier(null);
+  final ValueNotifier<GfnCursorOverlayUpdate?> cursorOverlay = ValueNotifier(
+    null,
+  );
 
   /// SCTP bytes queued on the reliable input channel, read by the stream
   /// surface's adaptive mouse sampler to back off under backpressure.
@@ -237,16 +239,21 @@ class WebRtcStreamSession implements StreamTransport {
     // the extra FBO + post-pass on mobile GPUs.
     final effectiveShader = settings.effectiveVideoShader;
     if (effectiveShader.hasVisibleEffect) {
-      _log('Video shader filter active: '
-          'sharpen=${effectiveShader.sharpen}% '
-          'saturation=${effectiveShader.saturation}% '
-          'contrast=${effectiveShader.contrast}% '
-          'brightness=${effectiveShader.brightness}% '
-          'vibrance=${effectiveShader.vibrance}% '
-          'grain=${effectiveShader.filmGrain}%');
-    } else if (settings.maxPerformanceMode && settings.videoShader.hasVisibleEffect) {
-      _log('Video shader suppressed by max-performance mode (would have been '
-          'sharpen=${settings.videoShader.sharpen}% sat=${settings.videoShader.saturation}% )');
+      _log(
+        'Video shader filter active: '
+        'sharpen=${effectiveShader.sharpen}% '
+        'saturation=${effectiveShader.saturation}% '
+        'contrast=${effectiveShader.contrast}% '
+        'brightness=${effectiveShader.brightness}% '
+        'vibrance=${effectiveShader.vibrance}% '
+        'grain=${effectiveShader.filmGrain}%',
+      );
+    } else if (settings.maxPerformanceMode &&
+        settings.videoShader.hasVisibleEffect) {
+      _log(
+        'Video shader suppressed by max-performance mode (would have been '
+        'sharpen=${settings.videoShader.sharpen}% sat=${settings.videoShader.saturation}% )',
+      );
     }
     await pushVideoShaderSettings(effectiveShader);
 
@@ -300,14 +307,36 @@ class WebRtcStreamSession implements StreamTransport {
         // session established so a post-handshake signaling close is treated
         // as expected, not as a failure.
         _established = true;
-        _log('Remote video track arrived WITHOUT a stream'
-            ' (${event.track.id}) — native renderer attaches it directly');
+        _log(
+          'Remote video track arrived WITHOUT a stream'
+          ' (${event.track.id}) — native renderer attaches it directly',
+        );
       }
     };
 
     pc.onConnectionState = (state) {
       _lastConnectionState = state.name;
       _log('ICE connection state: ${state.name}');
+      // Android anti-buildup: once media flows, pin the audio jitter buffer's
+      // minimum delay to zero so NetEQ floor buffering cannot creep upward
+      // over a long session (the latency guard handles the rest).
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected &&
+          !_audioMinDelayApplied &&
+          Platform.isAndroid) {
+        _audioMinDelayApplied = true;
+        if (_pc is RTCPeerConnectionNative) {
+          unawaited(
+            (_pc as RTCPeerConnectionNative)
+                .setJitterBufferMinimumDelay(0)
+                .then(
+                  (_) => _log(
+                    'Latency guard: audio jitter buffer '
+                    'minimum delay pinned to 0',
+                  ),
+                ),
+          );
+        }
+      }
     };
 
     _startStatsPolling();
@@ -351,15 +380,20 @@ class WebRtcStreamSession implements StreamTransport {
         // WebRTC peer connection, so only treat a pre-handshake disconnect as
         // a real failure.
         final reason = (event.reason ?? '').trim().toLowerCase();
-        final expected = _established ||
+        final expected =
+            _established ||
             reason == 'socket closed' ||
             reason == 'bye' ||
             reason == 'peerremoved' ||
             reason == 'peer removed';
         if (expected) {
-          _log('Signaling socket closed after connection established (expected — streaming continues)');
+          _log(
+            'Signaling socket closed after connection established (expected — streaming continues)',
+          );
         } else {
-          _log('Signaling disconnected (${event.reason}) before connection established');
+          _log(
+            'Signaling disconnected (${event.reason}) before connection established',
+          );
         }
       case MainToRendererSignalingEventType.error:
         _log('Signaling error: ${event.message}');
@@ -492,11 +526,13 @@ class WebRtcStreamSession implements StreamTransport {
 
   Future<void> _addRemoteCandidate(IceCandidatePayload candidate) async {
     try {
-      await _pc?.addCandidate(RTCIceCandidate(
-        candidate.candidate,
-        candidate.sdpMid,
-        candidate.sdpMLineIndex,
-      ));
+      await _pc?.addCandidate(
+        RTCIceCandidate(
+          candidate.candidate,
+          candidate.sdpMid,
+          candidate.sdpMLineIndex,
+        ),
+      );
     } catch (e) {
       _log('addCandidate failed: $e');
     }
@@ -572,8 +608,7 @@ class WebRtcStreamSession implements StreamTransport {
         );
         cursor.onDataChannelState = (state) {
           _log('Cursor channel state: ${state.name}');
-          _cursorChannelOpen =
-              state == RTCDataChannelState.RTCDataChannelOpen;
+          _cursorChannelOpen = state == RTCDataChannelState.RTCDataChannelOpen;
         };
         cursor.onMessage = (event) {
           final bytes = _messageBytes(event);
@@ -587,8 +622,10 @@ class WebRtcStreamSession implements StreamTransport {
         };
         _cursorChannel = cursor;
       } else {
-        _log('Cursor overlay disabled (inputCursorOverlay=false); '
-            'skipping cursor_channel');
+        _log(
+          'Cursor overlay disabled (inputCursorOverlay=false); '
+          'skipping cursor_channel',
+        );
       }
     } catch (e) {
       // Data channels are advisory for media; don't fail the handshake over
@@ -618,7 +655,9 @@ class WebRtcStreamSession implements StreamTransport {
   /// Parses one `cursor_channel` message and publishes it to [cursorOverlay]
   /// for the stream surface (port of OpenNOW's cursorChannel handler).
   void _handleCursorMessage(Uint8List bytes) {
-    if (_disposed) return; // a late message must not touch the disposed notifier
+    if (_disposed) {
+      return; // a late message must not touch the disposed notifier
+    }
     _cursorMessagesReceived++;
     if (bytes.isEmpty) {
       _cursorMessagesIgnored++;
@@ -690,12 +729,15 @@ class WebRtcStreamSession implements StreamTransport {
       // display path is live even if the Dart renderVideo flag is stale/false
       // (observed on the GL path). Log the discrepancy once so a session that
       // shows "· waiting" in the report can be interpreted correctly.
-      if (!rendererValue.renderVideo && rendererValue.width > 0 &&
+      if (!rendererValue.renderVideo &&
+          rendererValue.width > 0 &&
           !_rendererFlagLogged) {
         _rendererFlagLogged = true;
-        _log('Renderer: frames reaching renderer '
-            '(${rendererValue.width.toInt()}x${rendererValue.height.toInt()}) '
-            'but renderVideo=false — placeholder may be showing');
+        _log(
+          'Renderer: frames reaching renderer '
+          '(${rendererValue.width.toInt()}x${rendererValue.height.toInt()}) '
+          'but renderVideo=false — placeholder may be showing',
+        );
       }
       stats.value = StreamStatsSnapshot.fromStats(
         reports,
@@ -705,18 +747,73 @@ class WebRtcStreamSession implements StreamTransport {
         inputReady: _inputReady,
         reliableInputOpen: _reliableInputOpen,
         partiallyReliableInputOpen: _partiallyReliableInputOpen,
-        rendererHasVideo:
-            rendererValue.renderVideo || rendererValue.width > 0,
+        rendererHasVideo: rendererValue.renderVideo || rendererValue.width > 0,
       );
       if (Platform.isWindows &&
           settings.rendererBackend == RendererBackend.gl &&
           !_rendererFallbackTried) {
         await _watchGpuRenderer(rendererValue);
       }
+      _applyLatencyGuard();
     } catch (e) {
       log.log(LogLevel.debug, 'webrtc', 'getStats failed: $e');
     } finally {
       _statsPollInFlight = false;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Latency guard
+  // ---------------------------------------------------------------------
+
+  final LatencyGuard _latencyGuard = LatencyGuard();
+  int _guardAttempts = 0;
+  bool _guardEpisodeWasActive = false;
+
+  /// Watches the parsed snapshot for monotonic latency buildup (decoder
+  /// backlog / jitter-buffer growth — clock drift, JB ratchet, stall residue)
+  /// and fires a signaling keyframe request so the decoder can drop its stale
+  /// reference chain and resync to live.
+  void _applyLatencyGuard() {
+    final snap = stats.value;
+    if (snap == null) return;
+    _latencyGuard.enabled = settings.latencyGuardEnabled;
+    final verdict = _latencyGuard.update(snap);
+    if (!verdict.episodeActive && _guardEpisodeWasActive) {
+      _guardEpisodeWasActive = false;
+      _guardAttempts = 0;
+      _log('Latency guard: caught back up');
+    }
+    if (verdict.state == LatencyGuardState.triggered) {
+      _guardEpisodeWasActive = true;
+      if (_guardAttempts >= 3) {
+        if (_guardAttempts == 3) {
+          _log(
+            'Latency guard: still behind (${verdict.reason}) — '
+            'correction limit reached for this episode',
+          );
+        }
+        return;
+      }
+      _guardAttempts++;
+      _log(
+        'Latency guard: ${verdict.reason} — requesting keyframe resync '
+        '(attempt $_guardAttempts)',
+      );
+      final signaling = _signaling;
+      if (signaling != null) {
+        unawaited(
+          signaling
+              .requestKeyframe(
+                KeyframeRequest(
+                  reason: verdict.reason,
+                  backlogFrames: verdict.backlogFrames,
+                  attempt: _guardAttempts,
+                ),
+              )
+              .catchError((_) {}),
+        );
+      }
     }
   }
 
@@ -730,8 +827,9 @@ class WebRtcStreamSession implements StreamTransport {
 
     Map<dynamic, dynamic>? status;
     try {
-      status = await _rendererChannel
-          .invokeMethod<Map<dynamic, dynamic>>('getRendererStatus');
+      status = await _rendererChannel.invokeMethod<Map<dynamic, dynamic>>(
+        'getRendererStatus',
+      );
     } catch (_) {
       return; // Channel absent (non-Windows plugin build) — nothing to watch.
     }
@@ -745,8 +843,10 @@ class WebRtcStreamSession implements StreamTransport {
       // reason once so the session log explains why the GPU path is off.
       if (!_rendererFallbackTried && error.isNotEmpty) {
         _rendererFallbackTried = true;
-        _log('GPU renderer disabled by self-test ($error) — '
-            'using the CPU renderer');
+        _log(
+          'GPU renderer disabled by self-test ($error) — '
+          'using the CPU renderer',
+        );
       }
       return;
     }
@@ -757,21 +857,26 @@ class WebRtcStreamSession implements StreamTransport {
     if (++_rendererZeroCompositePolls < _rendererFallbackPolls) return;
 
     _rendererFallbackTried = true;
-    _log('D3D11 renderer received frames but composited 0 — switching to the '
-        'CPU renderer (black-screen fallback'
-        '${error.isNotEmpty ? ': $error' : ''})');
+    _log(
+      'D3D11 renderer received frames but composited 0 — switching to the '
+      'CPU renderer (black-screen fallback'
+      '${error.isNotEmpty ? ': $error' : ''})',
+    );
     bool ok = false;
     try {
       ok = await videoRenderer.switchToCpuRenderer();
     } catch (e) {
       log.log(LogLevel.debug, 'webrtc', 'Renderer CPU fallback threw: $e');
     }
-    _log(ok
-        ? 'Renderer switched to CPU path — video should appear'
-        : 'Renderer CPU fallback failed — keeping the D3D11 path');
+    _log(
+      ok
+          ? 'Renderer switched to CPU path — video should appear'
+          : 'Renderer CPU fallback failed — keeping the D3D11 path',
+    );
   }
 
   String? _lastConnectionState;
+  bool _audioMinDelayApplied = false;
 
   /// One-shot guard for the renderVideo-vs-frames discrepancy log above.
   bool _rendererFlagLogged = false;
@@ -786,8 +891,9 @@ class WebRtcStreamSession implements StreamTransport {
   // the renderer but ZERO frames were ever composited within ~3 s, swap the
   // plugin texture to the CPU pixel-buffer renderer so the stream stays
   // visible.
-  static const MethodChannel _rendererChannel =
-      MethodChannel('FlutterWebRTC.Method');
+  static const MethodChannel _rendererChannel = MethodChannel(
+    'FlutterWebRTC.Method',
+  );
   bool _rendererFallbackTried = false;
   bool _rendererFirstFrameSeen = false;
   int _rendererZeroCompositePolls = 0;
@@ -814,8 +920,11 @@ class WebRtcStreamSession implements StreamTransport {
       if (bytes[0] == 0x0e ||
           (bytes.length >= 2 &&
               ByteData.sublistView(bytes).getUint16(0, Endian.little) == 526)) {
-        log.log(LogLevel.debug, 'webrtc',
-            'Late input handshake after input was already ready (fallback)');
+        log.log(
+          LogLevel.debug,
+          'webrtc',
+          'Late input handshake after input was already ready (fallback)',
+        );
       }
       return;
     }
@@ -858,9 +967,11 @@ class WebRtcStreamSession implements StreamTransport {
       if (_inputReady || _disposed) return;
       _inputEncoder.clock.start();
       _inputReady = true;
-      _log('No input handshake within '
-          '${_inputReadyFallbackDelay.inSeconds}s — assuming protocol v2'
-          ' (resumed session fallback)');
+      _log(
+        'No input handshake within '
+        '${_inputReadyFallbackDelay.inSeconds}s — assuming protocol v2'
+        ' (resumed session fallback)',
+      );
       _startInputHeartbeat();
       if (_gamepadTouched) {
         _sendLatchedGamepadState();
@@ -1105,7 +1216,11 @@ class WebRtcStreamSession implements StreamTransport {
     final custom = settings.webrtcStunServer.trim();
     if (custom.isNotEmpty) {
       servers.add({
-        'urls': custom.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
+        'urls': custom
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList(),
       });
     }
     if (servers.isEmpty) {
@@ -1142,10 +1257,10 @@ class WebRtcStreamSession implements StreamTransport {
   // ---------------------------------------------------------------------
 
   String _codecWireName(VideoCodec codec) => switch (codec) {
-        VideoCodec.h264 => 'H264',
-        VideoCodec.h265 => 'H265',
-        VideoCodec.av1 => 'AV1',
-      };
+    VideoCodec.h264 => 'H264',
+    VideoCodec.h265 => 'H265',
+    VideoCodec.av1 => 'AV1',
+  };
 
   String _normalizeCodec(String name) {
     final upper = name.toUpperCase();
@@ -1187,8 +1302,8 @@ class WebRtcStreamSession implements StreamTransport {
     }
 
     return _RiInputCapabilities(
-      partialReliableThresholdMs: threshold() ??
-          _defaultPartialReliableThresholdMs,
+      partialReliableThresholdMs:
+          threshold() ?? _defaultPartialReliableThresholdMs,
       hidDeviceMask: attr(
         'ri.hidDeviceMask',
         _partiallyReliableHidDeviceMaskAll,
@@ -1213,7 +1328,8 @@ class WebRtcStreamSession implements StreamTransport {
     }
     final firstLabel = hostOrIp.split('.').first;
     final parts = firstLabel.split('-');
-    if (parts.length == 4 && parts.every((p) => RegExp(r'^\d{1,3}$').hasMatch(p))) {
+    if (parts.length == 4 &&
+        parts.every((p) => RegExp(r'^\d{1,3}$').hasMatch(p))) {
       return parts.join('.');
     }
     return null;
@@ -1223,15 +1339,10 @@ class WebRtcStreamSession implements StreamTransport {
   String _fixServerIp(String sdp, String serverIp) {
     final ip = _extractPublicIp(serverIp);
     if (ip == null) return sdp;
-    final re = RegExp(
-      r'(a=candidate:\S+\s+\d+\s+\w+\s+\d+\s+)0\.0\.0\.0(\s+)',
-    );
+    final re = RegExp(r'(a=candidate:\S+\s+\d+\s+\w+\s+\d+\s+)0\.0\.0\.0(\s+)');
     final count = re.allMatches(sdp).length;
     if (count == 0) return sdp;
-    return sdp.replaceAllMapped(
-      re,
-      (m) => '${m.group(1)}$ip${m.group(2)}',
-    );
+    return sdp.replaceAllMapped(re, (m) => '${m.group(1)}$ip${m.group(2)}');
   }
 
   /// Port of OpenNOW's preferCodec(): hard-filter the offer SDP down to the
@@ -1277,9 +1388,10 @@ class WebRtcStreamSession implements StreamTransport {
       final pt = parts.isNotEmpty ? parts[0] : '';
       final params = parts.length > 1 ? parts[1] : '';
       if (pt.isEmpty || params.isEmpty) continue;
-      final apt = RegExp(r'(?:^|;)\s*apt=(\d+)', caseSensitive: false)
-          .firstMatch(params)
-          ?.group(1);
+      final apt = RegExp(
+        r'(?:^|;)\s*apt=(\d+)',
+        caseSensitive: false,
+      ).firstMatch(params)?.group(1);
       if (apt != null) rtxAptByPayloadType[pt] = apt;
     }
 
@@ -1308,7 +1420,9 @@ class WebRtcStreamSession implements StreamTransport {
           ...preferredPayloads.where(available.contains),
           ...available.where((pt) => !preferred.contains(pt)),
         ];
-        filtered.add(ordered.isNotEmpty ? [...header, ...ordered].join(' ') : line);
+        filtered.add(
+          ordered.isNotEmpty ? [...header, ...ordered].join(' ') : line,
+        );
         continue;
       }
       if (line.startsWith('m=') && inVideo) inVideo = false;
@@ -1316,7 +1430,9 @@ class WebRtcStreamSession implements StreamTransport {
           (line.startsWith('a=rtpmap:') ||
               line.startsWith('a=fmtp:') ||
               line.startsWith('a=rtcp-fb:'))) {
-        final pt = line.split(':').elementAtOrNull(1)?.split(RegExp(r'\s+')).first ?? '';
+        final pt =
+            line.split(':').elementAtOrNull(1)?.split(RegExp(r'\s+')).first ??
+            '';
         if (pt.isNotEmpty && !allowed.contains(pt)) continue;
       }
       filtered.add(line);
@@ -1397,29 +1513,31 @@ class WebRtcStreamSession implements StreamTransport {
     // from max/4) — there's no adaptive BWE to ramp up against.
     final startupBitrate = constantQuality
         ? maxBitrate
-        : max(
-            _officialMinBitrateKbps,
-            (maxBitrate / 4).round(),
-          );
+        : max(_officialMinBitrateKbps, (maxBitrate / 4).round());
     final isHighFps = fps >= 90;
     final is90Fps = fps == 90;
     final is120Fps = fps == 120;
     final is240Fps = fps >= 240;
     final isAv1 = codec == 'AV1';
     final pixelCount = width * height;
-    final useHighThroughputPacing = pixelCount >= _highResolutionPixelCount ||
+    final useHighThroughputPacing =
+        pixelCount >= _highResolutionPixelCount ||
         maxBitrate >= _highBitratePacingThresholdKbps;
     final supportsHighBitDepth = codec == 'H265' || codec == 'AV1';
-    final bitDepth =
-        supportsHighBitDepth && colorQuality.startsWith('10bit') ? 10 : 8;
+    final bitDepth = supportsHighBitDepth && colorQuality.startsWith('10bit')
+        ? 10
+        : 8;
     final minTargetFrameTimeUs = max(
       1000,
       // Low-latency mode tightens the server's target frame time (95% -> 60%)
       // so the encoder/sender holds less buffered video ahead of the display.
       (1000000 * (lowLatencyMode ? 60 : 95) ~/ (max(1, fps) * 100)),
     );
-    final (nackQueueLength, nackQueueMaxPackets, nackMaxPacketCount) =
-        switch (recoveryProfile) {
+    final (
+      nackQueueLength,
+      nackQueueMaxPackets,
+      nackMaxPacketCount,
+    ) = switch (recoveryProfile) {
       StreamRecoveryProfile.smooth => (1024, 512, 25),
       StreamRecoveryProfile.balanced => (512, 256, 16),
       StreamRecoveryProfile.latency => (256, 128, 8),
@@ -1444,8 +1562,7 @@ class WebRtcStreamSession implements StreamTransport {
       StreamPriority.balanced => 60,
       StreamPriority.fps => 40,
     };
-    final dfcEnable =
-        isHighFps || priority != StreamPriority.quality;
+    final dfcEnable = isHighFps || priority != StreamPriority.quality;
 
     final lines = <String>[
       'v=0',
@@ -1489,10 +1606,7 @@ class WebRtcStreamSession implements StreamTransport {
         'a=vqos.dfc.adjustResAndFps:${allowResolutionScaling ? 1 : 0}',
       ]);
     } else {
-      lines.addAll([
-        'a=vqos.dfc.enable:0',
-        'a=vqos.dfc.adjustResAndFps:0',
-      ]);
+      lines.addAll(['a=vqos.dfc.enable:0', 'a=vqos.dfc.adjustResAndFps:0']);
     }
 
     lines.addAll([
@@ -1544,7 +1658,11 @@ class WebRtcStreamSession implements StreamTransport {
         'a=video.encoderPreset:6',
         'a=vqos.resControl.cpmRtc.badNwSkipFramesCount:600',
         'a=vqos.resControl.cpmRtc.decodeTimeThresholdMs:${is90Fps ? 11 : 9}',
-        'a=video.fbcDynamicFpsGrabTimeoutMs:${is90Fps ? 9 : is120Fps ? 6 : 18}',
+        'a=video.fbcDynamicFpsGrabTimeoutMs:${is90Fps
+            ? 9
+            : is120Fps
+            ? 6
+            : 18}',
         'a=vqos.resControl.cpmRtc.serverResolutionUpdateCoolDownCount:${is120Fps ? 6000 : 12000}',
       ]);
     }
