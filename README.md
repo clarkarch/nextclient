@@ -1,7 +1,7 @@
 # NEXTCLIENT
 
 <p align="center">
-  <img src="nextclient.svg" alt="NEXTCLIENT logo" width="200" />
+  <img src="nextclient.png" alt="NEXTCLIENT home screen" />
 </p>
 
 **A modern, open-source GeForce NOW client for Android and Linux — a Flutter port of [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW).**
