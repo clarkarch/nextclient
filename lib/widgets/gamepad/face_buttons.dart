@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import 'haptics.dart';
 import '../../theme/controller_theme.dart';
 
 /// Button label enum.
@@ -150,7 +150,7 @@ class _FaceButtonsState extends State<FaceButtons>
     final button = _getButtonFromPosition(event.localPosition);
     if (button != null) {
       if (widget.hapticsEnabled && button != _pressedButton) {
-        HapticFeedback.mediumImpact();
+        gamepadHaptic();
       }
       setState(() {
         _pressedButton = button;

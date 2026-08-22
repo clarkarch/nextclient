@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import 'haptics.dart';
 import '../../theme/controller_theme.dart';
 
 /// Direction enum for D-pad inputs.
@@ -107,7 +107,7 @@ class _DPadWidgetState extends State<DPadWidget>
     final direction = _getDirectionFromPosition(event.localPosition);
     if (direction != DPadDirection.none) {
       if (widget.hapticsEnabled && direction != _pressedDirection) {
-        HapticFeedback.mediumImpact();
+        gamepadHaptic();
       }
       if (direction != _pressedDirection) {
         setState(() {

@@ -62,6 +62,10 @@ class MainActivity : FlutterActivity() {
                         runOnUiThread { applyWifiLowLatency(enabled) }
                         result.success(null)
                     }
+                    "haptic" -> {
+                        runOnUiThread { gamepadHaptic() }
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -114,6 +118,31 @@ class MainActivity : FlutterActivity() {
                     w.attributes = lp
                 } catch (_: Exception) {}
             }
+        }
+    }
+
+    /// Strong one-shot buzz for gamepad button feedback. Uses the Vibrator
+    /// service directly — View.performHapticFeedback (Flutter's
+    /// HapticFeedback.*) is a silent no-op when the system touch-feedback
+    /// setting is off, which users read as "haptics broken".
+    private fun gamepadHaptic() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(android.os.VibratorManager::class.java)
+                val vibrator = vibratorManager?.defaultVibrator
+                vibrator?.vibrate(
+                    android.os.VibrationEffect.createPredefined(
+                        android.os.VibrationEffect.EFFECT_CLICK,
+                    ),
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(android.content.Context.VIBRATOR_SERVICE)
+                    as? android.os.Vibrator ?: return
+                if (!vibrator.hasVibrator()) return
+                vibrator.vibrate(30)
+            }
+        } catch (_: Throwable) {
         }
     }
 

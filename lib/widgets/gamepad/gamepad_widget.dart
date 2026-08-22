@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../theme/controller_theme.dart';
 import 'analog_stick.dart';
+import 'haptics.dart';
 import 'dpad_widget.dart';
 import 'face_buttons.dart';
 
@@ -273,24 +273,19 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
         children: [
           if (widget.showShoulders) _buildShoulderButtons(),
           // Middle section flexes: shoulders and menu always stay visible,
-          // and the controls scale down if the remaining slot is tiny.
+          // while the clusters keep their original edge-pinned geometry.
           Flexible(
-            child: Center(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildLeftSide(),
-                    if (widget.showDpad ||
-                        widget.showSticks ||
-                        widget.showFaceButtons)
-                      SizedBox(width: _centerSpacing),
-                    _buildRightSide(),
-                  ],
-                ),
-              ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildLeftSide(),
+                if (widget.showDpad ||
+                    widget.showSticks ||
+                    widget.showFaceButtons)
+                  SizedBox(width: _centerSpacing),
+                _buildRightSide(),
+              ],
             ),
           ),
           if (widget.showMenu)
@@ -407,11 +402,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
 
   Widget _buildLeftSide() {
     if (!widget.showDpad && !widget.showSticks) return const SizedBox.shrink();
-    // Fixed-size cluster: measurable under FittedBox (Expanded is illegal in
-    // an unbounded row), and keeps the d-pad/stick pinned to the pad's left
-    // edge so the cluster layout matches the full-width original.
-    return SizedBox(
-      width: _sideContainerSize,
+    return Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -468,8 +459,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     if (!widget.showFaceButtons && !widget.showSticks) {
       return const SizedBox.shrink();
     }
-    return SizedBox(
-      width: _sideContainerSize,
+    return Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -560,7 +550,7 @@ class _MenuButtonState extends State<_MenuButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
+        if (widget.hapticsEnabled) gamepadHaptic();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {
@@ -654,7 +644,7 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
+        if (widget.hapticsEnabled) gamepadHaptic();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {
@@ -738,7 +728,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
+        if (widget.hapticsEnabled) gamepadHaptic();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {

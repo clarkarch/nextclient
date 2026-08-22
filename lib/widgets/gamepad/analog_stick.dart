@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
+import 'haptics.dart';
 import '../../theme/controller_theme.dart';
 
 /// Callback type for analog stick drag events.
@@ -105,7 +105,7 @@ class _AnalogStickState extends State<AnalogStick>
     // Latch this pointer to this stick.
     if (_activePointerId != null) return;
     _activePointerId = event.pointer;
-    if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
+    if (widget.hapticsEnabled) gamepadHaptic();
     _grabCtrl.forward();
     _handleTouch(event.localPosition);
   }
