@@ -199,8 +199,29 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     final shortestSide = screenSize.width < screenSize.height
         ? screenSize.width
         : screenSize.height;
-    final baseScale = shortestSide / 400;
-    return baseScale.clamp(0.5, 1.5);
+    var baseScale = shortestSide / 400;
+
+    // Height fit: on landscape phones (e.g. 720x1560 -> ~360 logical px tall)
+    // the base scale still overflows vertically and clips the topmost row
+    // (LB/RB). Estimate the pad's natural column height at that scale —
+    // shoulder row + gap + side containers + menu row — and shrink uniformly
+    // so every control keeps its position, just smaller.
+    // EdgeInsetsGeometry.vertical exposes the total top+bottom extent.
+    final availHeight = screenSize.height - widget.padding.vertical;
+    final naturalHeight =
+        (44 +
+            8 +
+            36 + // trigger row, gap, bumper row
+            12 + // gap below shoulders
+            240 + // side containers (dpad/stick/face)
+            16 +
+            40 +
+            16) * // menu row gaps + buttons
+        baseScale;
+    if (naturalHeight > availHeight && naturalHeight > 0) {
+      baseScale *= availHeight / naturalHeight;
+    }
+    return baseScale.clamp(0.35, 1.5);
   }
 
   /// The theme's baked-in component-size multiplier.
@@ -245,75 +266,70 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     // control stays tappable over its whole visual area.
     return Padding(
       padding: widget.padding,
-      // Scale the whole pad down when it doesn't fit (e.g. landscape on
-      // short phones) so edge controls like LB/RB can never be clipped.
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (widget.showShoulders) ...[
-              _buildShoulderButtons(),
-              SizedBox(height: 12 * _spacingScale),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.showShoulders) ...[
+            _buildShoulderButtons(),
+            SizedBox(height: 12 * _spacingScale),
+          ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildLeftSide(),
+              if (widget.showDpad ||
+                  widget.showSticks ||
+                  widget.showFaceButtons)
+                SizedBox(width: _centerSpacing),
+              _buildRightSide(),
             ],
+          ),
+          if (widget.showMenu) ...[
+            SizedBox(height: 16 * _spacingScale),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildLeftSide(),
-                if (widget.showDpad ||
-                    widget.showSticks ||
-                    widget.showFaceButtons)
-                  SizedBox(width: _centerSpacing),
-                _buildRightSide(),
+                _scaled(
+                  _MenuButton(
+                    label: 'SELECT',
+                    size: _menuButtonSize,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                    animationsEnabled: widget.animationsEnabled,
+                    onPressed: widget.onSelectPressed,
+                    onReleased: widget.onSelectReleased,
+                  ),
+                ),
+                SizedBox(width: 16 * _spacingScale),
+                _scaled(
+                  _MenuButton(
+                    label: 'START',
+                    size: _menuButtonSize,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                    animationsEnabled: widget.animationsEnabled,
+                    onPressed: widget.onStartPressed,
+                    onReleased: widget.onStartReleased,
+                  ),
+                ),
+                SizedBox(width: 16 * _spacingScale),
+                _scaled(
+                  _MenuButton(
+                    icon: Icons.home_rounded,
+                    size: _menuButtonSize * 0.9,
+                    theme: _theme,
+                    hapticsEnabled: widget.hapticFeedback,
+                    animationsEnabled: widget.animationsEnabled,
+                    onPressed: widget.onHomePressed,
+                    onReleased: widget.onHomeReleased,
+                    isHome: true,
+                  ),
+                ),
               ],
             ),
-            if (widget.showMenu) ...[
-              SizedBox(height: 16 * _spacingScale),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _scaled(
-                    _MenuButton(
-                      label: 'SELECT',
-                      size: _menuButtonSize,
-                      theme: _theme,
-                      hapticsEnabled: widget.hapticFeedback,
-                      animationsEnabled: widget.animationsEnabled,
-                      onPressed: widget.onSelectPressed,
-                      onReleased: widget.onSelectReleased,
-                    ),
-                  ),
-                  SizedBox(width: 16 * _spacingScale),
-                  _scaled(
-                    _MenuButton(
-                      label: 'START',
-                      size: _menuButtonSize,
-                      theme: _theme,
-                      hapticsEnabled: widget.hapticFeedback,
-                      animationsEnabled: widget.animationsEnabled,
-                      onPressed: widget.onStartPressed,
-                      onReleased: widget.onStartReleased,
-                    ),
-                  ),
-                  SizedBox(width: 16 * _spacingScale),
-                  _scaled(
-                    _MenuButton(
-                      icon: Icons.home_rounded,
-                      size: _menuButtonSize * 0.9,
-                      theme: _theme,
-                      hapticsEnabled: widget.hapticFeedback,
-                      animationsEnabled: widget.animationsEnabled,
-                      onPressed: widget.onHomePressed,
-                      onReleased: widget.onHomeReleased,
-                      isHome: true,
-                    ),
-                  ),
-                ],
-              ),
-            ],
           ],
-        ),
+        ],
       ),
     );
   }
