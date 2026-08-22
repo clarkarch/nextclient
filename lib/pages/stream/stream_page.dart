@@ -3183,10 +3183,13 @@ class _ReadySurfaceState extends State<_ReadySurface>
                     Positioned(
                       left: 0,
                       right: 0,
-                      // Anchored to the bottom with the user's position lift, so
-                      // the pad can float above the bottom edge without resizing.
-                      // The chrome paints and hit-tests on top.
-                      bottom: widget.settings.streamGamepadPosition * 240,
+                      // Anchored to BOTH edges: shoulders pin to the top,
+                      // menu row to the bottom, so nothing can ever clip
+                      // vertically on short landscape screens. The user's
+                      // position lift still floats the whole pad up; the
+                      // chrome paints and hit-tests on top.
+                      top: widget.settings.streamGamepadPosition * 240,
+                      bottom: 0,
                       child: GestureDetector(
                         behavior: HitTestBehavior.deferToChild,
                         onTap: () {},

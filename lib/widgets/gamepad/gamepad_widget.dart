@@ -267,12 +267,11 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     return Padding(
       padding: widget.padding,
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        // Fills the bounded height (Positioned top+bottom): shoulders pin to
+        // the top, menu row to the bottom, controls centered between.
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          if (widget.showShoulders) ...[
-            _buildShoulderButtons(),
-            SizedBox(height: 12 * _spacingScale),
-          ],
+          if (widget.showShoulders) _buildShoulderButtons(),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             crossAxisAlignment: CrossAxisAlignment.start,
