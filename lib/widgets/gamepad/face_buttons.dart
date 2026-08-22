@@ -113,11 +113,8 @@ class _FaceButtonsState extends State<FaceButtons>
           FaceButtonLabel.x: Offset(-1, 0),
         };
 
-
-  Offset get _center => Offset(
-        widget.buttonSize * 2.5,
-        widget.buttonSize * 2.5,
-      );
+  Offset get _center =>
+      Offset(widget.buttonSize * 2.5, widget.buttonSize * 2.5);
 
   // Center distance = buttonSize * spacingFactor (1.125 ≈ 6px gap at 48px).
   double get _spacingFactor => 1.125;
@@ -153,7 +150,7 @@ class _FaceButtonsState extends State<FaceButtons>
     final button = _getButtonFromPosition(event.localPosition);
     if (button != null) {
       if (widget.hapticsEnabled && button != _pressedButton) {
-        HapticFeedback.lightImpact();
+        HapticFeedback.mediumImpact();
       }
       setState(() {
         _pressedButton = button;
@@ -217,11 +214,11 @@ class _FaceButtonsState extends State<FaceButtons>
 }
 
 FaceGlyph _glyphOf(FaceButtonLabel label) => switch (label) {
-      FaceButtonLabel.a => FaceGlyph.a,
-      FaceButtonLabel.b => FaceGlyph.b,
-      FaceButtonLabel.x => FaceGlyph.x,
-      FaceButtonLabel.y => FaceGlyph.y,
-    };
+  FaceButtonLabel.a => FaceGlyph.a,
+  FaceButtonLabel.b => FaceGlyph.b,
+  FaceButtonLabel.x => FaceGlyph.x,
+  FaceButtonLabel.y => FaceGlyph.y,
+};
 
 /// CustomPainter for rendering face buttons in the active [ControllerTheme].
 class _FaceButtonsPainter extends CustomPainter {
@@ -253,15 +250,18 @@ class _FaceButtonsPainter extends CustomPainter {
     for (final entry in buttonPositions.entries) {
       final button = entry.key;
       final position = entry.value;
-      final buttonCenter = center + Offset(
+      final buttonCenter =
+          center +
+          Offset(
             position.dx * buttonSize * spacingFactor,
             position.dy * buttonSize * spacingFactor,
           );
 
       final isPressed = pressedButton == button;
       final accentColor = theme.faceColor(_glyphOf(button));
-      final press =
-          button == visualButton ? pressProgress.clamp(0.0, 1.0) : 0.0;
+      final press = button == visualButton
+          ? pressProgress.clamp(0.0, 1.0)
+          : 0.0;
 
       _drawButton(
         canvas,
@@ -334,8 +334,9 @@ class _FaceButtonsPainter extends CustomPainter {
     Color accentColor,
     bool isPressed,
   ) {
-    final color =
-        isPressed ? Colors.white : accentColor.withValues(alpha: 0.95);
+    final color = isPressed
+        ? Colors.white
+        : accentColor.withValues(alpha: 0.95);
     final r = buttonSize * 0.27; // glyph half-extent
     final paint = Paint()
       ..style = PaintingStyle.stroke

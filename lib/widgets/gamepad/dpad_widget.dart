@@ -107,7 +107,7 @@ class _DPadWidgetState extends State<DPadWidget>
     final direction = _getDirectionFromPosition(event.localPosition);
     if (direction != DPadDirection.none) {
       if (widget.hapticsEnabled && direction != _pressedDirection) {
-        HapticFeedback.lightImpact();
+        HapticFeedback.mediumImpact();
       }
       if (direction != _pressedDirection) {
         setState(() {
@@ -210,8 +210,9 @@ class _DPadPainter extends CustomPainter {
     for (final (direction, offset) in directions) {
       final buttonCenter = center + offset;
       final isPressed = pressedDirection == direction;
-      final press =
-          direction == visualDirection ? pressProgress.clamp(0.0, 1.0) : 0.0;
+      final press = direction == visualDirection
+          ? pressProgress.clamp(0.0, 1.0)
+          : 0.0;
 
       _drawButton(
         canvas,
@@ -250,14 +251,7 @@ class _DPadPainter extends CustomPainter {
       press: press,
     );
 
-    _drawArrowIndicator(
-      canvas,
-      center,
-      direction,
-      isPressed,
-      size,
-      press,
-    );
+    _drawArrowIndicator(canvas, center, direction, isPressed, size, press);
   }
 
   void _drawArrowIndicator(

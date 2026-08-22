@@ -407,7 +407,11 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
 
   Widget _buildLeftSide() {
     if (!widget.showDpad && !widget.showSticks) return const SizedBox.shrink();
-    return Expanded(
+    // Fixed-size cluster: measurable under FittedBox (Expanded is illegal in
+    // an unbounded row), and keeps the d-pad/stick pinned to the pad's left
+    // edge so the cluster layout matches the full-width original.
+    return SizedBox(
+      width: _sideContainerSize,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -464,7 +468,8 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     if (!widget.showFaceButtons && !widget.showSticks) {
       return const SizedBox.shrink();
     }
-    return Expanded(
+    return SizedBox(
+      width: _sideContainerSize,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -555,7 +560,7 @@ class _MenuButtonState extends State<_MenuButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) HapticFeedback.lightImpact();
+        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {
@@ -649,7 +654,7 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) HapticFeedback.lightImpact();
+        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {
@@ -733,7 +738,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) HapticFeedback.lightImpact();
+        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {

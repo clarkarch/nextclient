@@ -105,7 +105,7 @@ class _AnalogStickState extends State<AnalogStick>
     // Latch this pointer to this stick.
     if (_activePointerId != null) return;
     _activePointerId = event.pointer;
-    if (widget.hapticsEnabled) HapticFeedback.lightImpact();
+    if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
     _grabCtrl.forward();
     _handleTouch(event.localPosition);
   }
@@ -329,10 +329,26 @@ class _AnalogStickPainter extends CustomPainter {
       ..color = theme.inkColor.withValues(alpha: 0.22)
       ..style = PaintingStyle.fill;
 
-    canvas.drawCircle(center + Offset(0, -indicatorDistance), indicatorRadius, paint);
-    canvas.drawCircle(center + Offset(0, indicatorDistance), indicatorRadius, paint);
-    canvas.drawCircle(center + Offset(-indicatorDistance, 0), indicatorRadius, paint);
-    canvas.drawCircle(center + Offset(indicatorDistance, 0), indicatorRadius, paint);
+    canvas.drawCircle(
+      center + Offset(0, -indicatorDistance),
+      indicatorRadius,
+      paint,
+    );
+    canvas.drawCircle(
+      center + Offset(0, indicatorDistance),
+      indicatorRadius,
+      paint,
+    );
+    canvas.drawCircle(
+      center + Offset(-indicatorDistance, 0),
+      indicatorRadius,
+      paint,
+    );
+    canvas.drawCircle(
+      center + Offset(indicatorDistance, 0),
+      indicatorRadius,
+      paint,
+    );
   }
 
   @override
