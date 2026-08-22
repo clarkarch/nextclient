@@ -58,3 +58,5 @@ app.*.map.json
 # Extracted mdk/fvp plugin source (hosted pub dep) — scratch copy, not part of
 # the repo.
 /fvp/
+
+.agents/

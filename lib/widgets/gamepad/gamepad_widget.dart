@@ -245,70 +245,75 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     // control stays tappable over its whole visual area.
     return Padding(
       padding: widget.padding,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (widget.showShoulders) ...[
-            _buildShoulderButtons(),
-            SizedBox(height: 12 * _spacingScale),
-          ],
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildLeftSide(),
-              if (widget.showDpad ||
-                  widget.showSticks ||
-                  widget.showFaceButtons)
-                SizedBox(width: _centerSpacing),
-              _buildRightSide(),
+      // Scale the whole pad down when it doesn't fit (e.g. landscape on
+      // short phones) so edge controls like LB/RB can never be clipped.
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.showShoulders) ...[
+              _buildShoulderButtons(),
+              SizedBox(height: 12 * _spacingScale),
             ],
-          ),
-          if (widget.showMenu) ...[
-            SizedBox(height: 16 * _spacingScale),
             Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _scaled(
-                  _MenuButton(
-                    label: 'SELECT',
-                    size: _menuButtonSize,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                animationsEnabled: widget.animationsEnabled,
-                    onPressed: widget.onSelectPressed,
-                    onReleased: widget.onSelectReleased,
-                  ),
-                ),
-                SizedBox(width: 16 * _spacingScale),
-                _scaled(
-                  _MenuButton(
-                    label: 'START',
-                    size: _menuButtonSize,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                animationsEnabled: widget.animationsEnabled,
-                    onPressed: widget.onStartPressed,
-                    onReleased: widget.onStartReleased,
-                  ),
-                ),
-                SizedBox(width: 16 * _spacingScale),
-                _scaled(
-                  _MenuButton(
-                    icon: Icons.home_rounded,
-                    size: _menuButtonSize * 0.9,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                animationsEnabled: widget.animationsEnabled,
-                    onPressed: widget.onHomePressed,
-                    onReleased: widget.onHomeReleased,
-                    isHome: true,
-                  ),
-                ),
+                _buildLeftSide(),
+                if (widget.showDpad ||
+                    widget.showSticks ||
+                    widget.showFaceButtons)
+                  SizedBox(width: _centerSpacing),
+                _buildRightSide(),
               ],
             ),
+            if (widget.showMenu) ...[
+              SizedBox(height: 16 * _spacingScale),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _scaled(
+                    _MenuButton(
+                      label: 'SELECT',
+                      size: _menuButtonSize,
+                      theme: _theme,
+                      hapticsEnabled: widget.hapticFeedback,
+                      animationsEnabled: widget.animationsEnabled,
+                      onPressed: widget.onSelectPressed,
+                      onReleased: widget.onSelectReleased,
+                    ),
+                  ),
+                  SizedBox(width: 16 * _spacingScale),
+                  _scaled(
+                    _MenuButton(
+                      label: 'START',
+                      size: _menuButtonSize,
+                      theme: _theme,
+                      hapticsEnabled: widget.hapticFeedback,
+                      animationsEnabled: widget.animationsEnabled,
+                      onPressed: widget.onStartPressed,
+                      onReleased: widget.onStartReleased,
+                    ),
+                  ),
+                  SizedBox(width: 16 * _spacingScale),
+                  _scaled(
+                    _MenuButton(
+                      icon: Icons.home_rounded,
+                      size: _menuButtonSize * 0.9,
+                      theme: _theme,
+                      hapticsEnabled: widget.hapticFeedback,
+                      animationsEnabled: widget.animationsEnabled,
+                      onPressed: widget.onHomePressed,
+                      onReleased: widget.onHomeReleased,
+                      isHome: true,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -395,7 +400,7 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                     size: _dpadSize,
                     theme: _theme,
                     hapticsEnabled: widget.hapticFeedback,
-                animationsEnabled: widget.animationsEnabled,
+                    animationsEnabled: widget.animationsEnabled,
                     onDirectionPressed: widget.onDpadPressed,
                     onDirectionReleased: widget.onDpadReleased,
                   ),
@@ -566,8 +571,8 @@ class _MenuButtonState extends State<_MenuButton> {
                     color: _isPressed
                         ? Colors.white
                         : widget.isHome
-                            ? theme.primary
-                            : theme.chromeInk(pressed: false),
+                        ? theme.primary
+                        : theme.chromeInk(pressed: false),
                   )
                 : Text(
                     widget.label ?? '',
