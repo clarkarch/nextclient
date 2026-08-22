@@ -402,9 +402,13 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
 
   Widget _buildLeftSide() {
     if (!widget.showDpad && !widget.showSticks) return const SizedBox.shrink();
-    return Expanded(
+    // Fixed-size cluster: measurable under FittedBox (Expanded is illegal in
+    // an unbounded row), and keeps the d-pad/stick pinned to the pad's left
+    // edge so the cluster layout matches the full-width original.
+    return SizedBox(
+      width: _sideContainerSize,
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (widget.showDpad)
@@ -427,32 +431,27 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
           if (widget.showDpad && widget.showSticks)
             SizedBox(height: 16 * _spacingScale),
           if (widget.showSticks)
-            // Nudge the sticks upward a touch: they sit at the bottom of
-            // each cluster and could dip slightly past the visible area.
-            Transform.translate(
-              offset: Offset(0, -10 * _adaptiveScale),
-              child: _scaled(
-                AnalogStick(
-                  size: _analogStickSize,
-                  knobSize: _analogStickKnobSize,
-                  theme: _theme,
-                  deadZone: widget.deadZone,
-                  hapticsEnabled: widget.hapticFeedback,
-                  animationsEnabled: widget.animationsEnabled,
-                  // Left-position stick carries the primary accent; southpaw
-                  // swaps accents along with the functions so the mode is
-                  // visible at a glance.
-                  accentColor: widget.southpaw
-                      ? _theme.secondary
-                      : _theme.primary,
-                  // Southpaw swaps which stick lives on each side.
-                  onDrag: widget.southpaw
-                      ? widget.onRightStickDrag
-                      : widget.onLeftStickDrag,
-                  onDragEnd: widget.southpaw
-                      ? widget.onRightStickDragEnd
-                      : widget.onLeftStickDragEnd,
-                ),
+            _scaled(
+              AnalogStick(
+                size: _analogStickSize,
+                knobSize: _analogStickKnobSize,
+                theme: _theme,
+                deadZone: widget.deadZone,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                // Left-position stick carries the primary accent; southpaw
+                // swaps accents along with the functions so the mode is
+                // visible at a glance.
+                accentColor: widget.southpaw
+                    ? _theme.secondary
+                    : _theme.primary,
+                // Southpaw swaps which stick lives on each side.
+                onDrag: widget.southpaw
+                    ? widget.onRightStickDrag
+                    : widget.onLeftStickDrag,
+                onDragEnd: widget.southpaw
+                    ? widget.onRightStickDragEnd
+                    : widget.onLeftStickDragEnd,
               ),
             ),
         ],
@@ -464,9 +463,10 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     if (!widget.showFaceButtons && !widget.showSticks) {
       return const SizedBox.shrink();
     }
-    return Expanded(
+    return SizedBox(
+      width: _sideContainerSize,
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (widget.showFaceButtons)
@@ -490,28 +490,23 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
           if (widget.showFaceButtons && widget.showSticks)
             SizedBox(height: 16 * _spacingScale),
           if (widget.showSticks)
-            // Nudge the sticks upward a touch: they sit at the bottom of
-            // each cluster and could dip slightly past the visible area.
-            Transform.translate(
-              offset: Offset(0, -10 * _adaptiveScale),
-              child: _scaled(
-                AnalogStick(
-                  size: _analogStickSize,
-                  knobSize: _analogStickKnobSize,
-                  theme: _theme,
-                  deadZone: widget.deadZone,
-                  hapticsEnabled: widget.hapticFeedback,
-                  animationsEnabled: widget.animationsEnabled,
-                  accentColor: widget.southpaw
-                      ? _theme.primary
-                      : _theme.secondary,
-                  onDrag: widget.southpaw
-                      ? widget.onLeftStickDrag
-                      : widget.onRightStickDrag,
-                  onDragEnd: widget.southpaw
-                      ? widget.onLeftStickDragEnd
-                      : widget.onRightStickDragEnd,
-                ),
+            _scaled(
+              AnalogStick(
+                size: _analogStickSize,
+                knobSize: _analogStickKnobSize,
+                theme: _theme,
+                deadZone: widget.deadZone,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                accentColor: widget.southpaw
+                    ? _theme.primary
+                    : _theme.secondary,
+                onDrag: widget.southpaw
+                    ? widget.onLeftStickDrag
+                    : widget.onRightStickDrag,
+                onDragEnd: widget.southpaw
+                    ? widget.onLeftStickDragEnd
+                    : widget.onRightStickDragEnd,
               ),
             ),
         ],
