@@ -272,20 +272,28 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           if (widget.showShoulders) _buildShoulderButtons(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildLeftSide(),
-              if (widget.showDpad ||
-                  widget.showSticks ||
-                  widget.showFaceButtons)
-                SizedBox(width: _centerSpacing),
-              _buildRightSide(),
-            ],
+          // Middle section flexes: shoulders and menu always stay visible,
+          // and the controls scale down if the remaining slot is tiny.
+          Flexible(
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildLeftSide(),
+                    if (widget.showDpad ||
+                        widget.showSticks ||
+                        widget.showFaceButtons)
+                      SizedBox(width: _centerSpacing),
+                    _buildRightSide(),
+                  ],
+                ),
+              ),
+            ),
           ),
-          if (widget.showMenu) ...[
-            SizedBox(height: 16 * _spacingScale),
+          if (widget.showMenu)
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -327,7 +335,6 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 ),
               ],
             ),
-          ],
         ],
       ),
     );

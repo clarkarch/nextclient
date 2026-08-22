@@ -90,7 +90,7 @@ class _DebugShellAppState extends State<DebugShellApp>
         return ListenableBuilder(
           listenable: services.settings,
           builder: (context, _) {
-            final scale = services.settings.uiScale;
+            final scale = services.settings.effectiveUiScale();
             if ((scale - 1.0).abs() < 0.005) return child!;
             final mq = MediaQuery.of(context);
             final inv = 1.0 / scale;
@@ -375,7 +375,10 @@ class _ShellState extends State<Shell> {
       ),
       TickerMode(
         enabled: _index == 2,
-        child: SettingsPage(services: widget.services, onSignOut: widget.onSignOut),
+        child: SettingsPage(
+          services: widget.services,
+          onSignOut: widget.onSignOut,
+        ),
       ),
     ];
 

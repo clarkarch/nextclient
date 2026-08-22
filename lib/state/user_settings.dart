@@ -73,6 +73,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyVideoShader = 'settings.videoShader';
   static const _keyBackgroundStyle = 'settings.ui.backgroundStyle';
   static const _keyUiScale = 'settings.ui.scale';
+  static const _keyUiScaleTouched = 'settings.ui.scaleTouched';
   static const _keyUiAnimations = 'settings.ui.animations';
   static const _keyLogsEnabled = 'settings.perf.logsEnabled';
   static const _keyLatencyGuard = 'settings.perf.latencyGuard';
@@ -157,6 +158,7 @@ class UserSettings extends ChangeNotifier {
   VideoShaderSettings _videoShader = VideoShaderSettings.defaults;
   BackgroundStyle _backgroundStyle = BackgroundStyle.circuit;
   double _uiScale = 1.0;
+  bool _uiScaleTouched = false;
   bool _uiAnimations = true;
   bool _logsEnabled = false;
   bool _latencyGuardEnabled = false;
@@ -304,6 +306,15 @@ class UserSettings extends ChangeNotifier {
   /// to apply (the field trial binds at PeerConnectionFactory init).
   static const zeroPlayoutDelayPrefKey = 'settings.perf.zeroPlayoutDelay';
   bool get zeroPlayoutDelayEnabled => _zeroPlayoutDelayEnabled;
+
+  /// Effective UI scale: 80% by default on Android (small screens), 100%
+  /// elsewhere — until the user explicitly moves the slider, after which
+  /// their value wins everywhere.
+  double effectiveUiScale() {
+    if (_uiScaleTouched) return _uiScale;
+    return defaultTargetPlatform == TargetPlatform.android ? 0.8 : 1.0;
+  }
+
   bool get hideTitleBar => _hideTitleBar;
 
   /// When true the stream stack aggressively maximizes render performance:
@@ -788,10 +799,12 @@ class UserSettings extends ChangeNotifier {
   }
 
   set uiScale(double v) {
-    final clamped = v.clamp(0.60, 1.5);
-    if (_uiScale == clamped) return;
+    final clamped = v.clamp(0.75, 1.5);
+    if (_uiScale == clamped && _uiScaleTouched) return;
     _uiScale = clamped;
+    _uiScaleTouched = true;
     _prefs.setDouble(_keyUiScale, clamped);
+    _prefs.setBool(_keyUiScaleTouched, true);
     notifyListeners();
   }
 
@@ -1109,6 +1122,7 @@ class UserSettings extends ChangeNotifier {
         )] ??
         _backgroundStyle;
     _uiScale = _prefs.getDouble(_keyUiScale) ?? _uiScale;
+    _uiScaleTouched = _prefs.getBool(_keyUiScaleTouched) ?? _uiScaleTouched;
     _uiAnimations = _prefs.getBool(_keyUiAnimations) ?? _uiAnimations;
     _logsEnabled = _prefs.getBool(_keyLogsEnabled) ?? _logsEnabled;
     _latencyGuardEnabled =
@@ -1243,6 +1257,7 @@ class UserSettings extends ChangeNotifier {
     _videoShader = VideoShaderSettings.defaults;
     _backgroundStyle = BackgroundStyle.circuit;
     _uiScale = 1.0;
+    _uiScaleTouched = false;
     _uiAnimations = true;
     _logsEnabled = false;
     _latencyGuardEnabled = false;
@@ -1322,6 +1337,7 @@ class UserSettings extends ChangeNotifier {
     _keyVideoShader,
     _keyBackgroundStyle,
     _keyUiScale,
+    _keyUiScaleTouched,
     _keyUiAnimations,
     _keyLogsEnabled,
     _keyLatencyGuard,
