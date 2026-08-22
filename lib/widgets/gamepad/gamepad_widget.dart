@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../theme/controller_theme.dart';
 import 'analog_stick.dart';
-import 'haptics.dart';
 import 'dpad_widget.dart';
 import 'face_buttons.dart';
 
@@ -98,6 +98,9 @@ class VirtualGamepad extends StatefulWidget {
   final bool showShoulders;
 
   /// Whether the analog sticks are shown.
+  /// Base inset (scaled) from screen edges for every anchor.
+  final double edgePadding;
+
   final bool showSticks;
 
   /// Whether the D-pad is shown.
@@ -160,6 +163,7 @@ class VirtualGamepad extends StatefulWidget {
     this.onRightTriggerPressed,
     this.onRightTriggerReleased,
     this.padding = const EdgeInsets.all(16.0),
+    this.edgePadding = 12.0,
     this.scale = 1.0,
     this.spacing = 1.0,
     this.showShoulders = true,
@@ -245,7 +249,6 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
   /// Inter-component gaps (offsets) scale with the screen AND the spacing
   /// slider, independently of the control sizes.
   double get _spacingScale => _adaptiveScale * widget.spacing;
-  double get _centerSpacing => 80 * _spacingScale;
 
   /// Scales a single control around its own center. The base layout keeps the
   /// control's position; only its visual size changes.
@@ -259,79 +262,174 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
 
   @override
   Widget build(BuildContext context) {
-    // The component-size slider scales EACH control around its own center via
-    // [_scaled] — the base layout (and every control's position) stays exactly
-    // where it is, so resizing only changes the size of the controls, never
-    // their position. Transform also transforms hit tests, so a scaled-up
-    // control stays tappable over its whole visual area.
-    return Padding(
-      padding: widget.padding,
-      child: Column(
-        // Fills the bounded height (Positioned top+bottom): shoulders pin to
-        // the top, menu row to the bottom, controls centered between.
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          if (widget.showShoulders) _buildShoulderButtons(),
-          // Middle section flexes: shoulders and menu always stay visible,
-          // while the clusters keep their original edge-pinned geometry.
-          Flexible(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildLeftSide(),
-                if (widget.showDpad ||
-                    widget.showSticks ||
-                    widget.showFaceButtons)
-                  SizedBox(width: _centerSpacing),
-                _buildRightSide(),
-              ],
+    final s = _adaptiveScale;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Anchored Stack: shoulders pinned across the top, d-pad on the left
+        // side, XYAB on the right, sticks anchored to the bottom corners
+        // (lifted above the menu row), menu centered at the very bottom.
+        // Every anchor uses [edgePadding] so the pad hugs the edges/corners
+        // and the gameplay center stays clear.
+        final double edge = widget.edgePadding * s;
+        final double shoulderH = widget.showShoulders
+            ? (_triggerButtonHeight +
+                  8 * _spacingScale +
+                  _shoulderButtonHeight +
+                  10 * s)
+            : 0.0;
+        final double menuH = widget.showMenu
+            ? (_menuButtonSize * widget.scale + 12 * s)
+            : 0.0;
+        final double stickLift = menuH + 14 * s;
+
+        final Widget dpad = SizedBox(
+          width: _sideContainerSize,
+          height: _sideContainerSize,
+          child: Center(
+            child: _scaled(
+              DPadWidget(
+                size: _dpadSize,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onDirectionPressed: widget.onDpadPressed,
+                onDirectionReleased: widget.onDpadReleased,
+              ),
             ),
           ),
-          if (widget.showMenu)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _scaled(
-                  _MenuButton(
-                    label: 'SELECT',
-                    size: _menuButtonSize,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                    animationsEnabled: widget.animationsEnabled,
-                    onPressed: widget.onSelectPressed,
-                    onReleased: widget.onSelectReleased,
-                  ),
-                ),
-                SizedBox(width: 16 * _spacingScale),
-                _scaled(
-                  _MenuButton(
-                    label: 'START',
-                    size: _menuButtonSize,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                    animationsEnabled: widget.animationsEnabled,
-                    onPressed: widget.onStartPressed,
-                    onReleased: widget.onStartReleased,
-                  ),
-                ),
-                SizedBox(width: 16 * _spacingScale),
-                _scaled(
-                  _MenuButton(
-                    icon: Icons.home_rounded,
-                    size: _menuButtonSize * 0.9,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                    animationsEnabled: widget.animationsEnabled,
-                    onPressed: widget.onHomePressed,
-                    onReleased: widget.onHomeReleased,
-                    isHome: true,
-                  ),
-                ),
-              ],
+        );
+
+        final Widget faceCluster = SizedBox(
+          width: _sideContainerSize,
+          height: _sideContainerSize,
+          child: Center(
+            child: _scaled(
+              FaceButtons(
+                buttonSize: _faceButtonSize,
+                theme: _theme,
+                nintendoLayout: widget.nintendoLayout,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onButtonPressed: widget.onFaceButtonPressed,
+                onButtonReleased: widget.onFaceButtonReleased,
+              ),
             ),
-        ],
-      ),
+          ),
+        );
+
+        final Widget leftStick = _scaled(
+          AnalogStick(
+            size: _analogStickSize,
+            knobSize: _analogStickKnobSize,
+            theme: _theme,
+            deadZone: widget.deadZone,
+            hapticsEnabled: widget.hapticFeedback,
+            animationsEnabled: widget.animationsEnabled,
+            accentColor: widget.southpaw ? _theme.secondary : _theme.primary,
+            onDrag: widget.southpaw
+                ? widget.onRightStickDrag
+                : widget.onLeftStickDrag,
+            onDragEnd: widget.southpaw
+                ? widget.onRightStickDragEnd
+                : widget.onLeftStickDragEnd,
+          ),
+        );
+
+        final Widget rightStick = _scaled(
+          AnalogStick(
+            size: _analogStickSize,
+            knobSize: _analogStickKnobSize,
+            theme: _theme,
+            deadZone: widget.deadZone,
+            hapticsEnabled: widget.hapticFeedback,
+            animationsEnabled: widget.animationsEnabled,
+            accentColor: widget.southpaw ? _theme.primary : _theme.secondary,
+            onDrag: widget.southpaw
+                ? widget.onLeftStickDrag
+                : widget.onRightStickDrag,
+            onDragEnd: widget.southpaw
+                ? widget.onLeftStickDragEnd
+                : widget.onRightStickDragEnd,
+          ),
+        );
+
+        final Widget menuRow = Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _scaled(
+              _MenuButton(
+                label: 'SELECT',
+                size: _menuButtonSize,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onPressed: widget.onSelectPressed,
+                onReleased: widget.onSelectReleased,
+              ),
+            ),
+            SizedBox(width: 16 * _spacingScale),
+            _scaled(
+              _MenuButton(
+                label: 'START',
+                size: _menuButtonSize,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onPressed: widget.onStartPressed,
+                onReleased: widget.onStartReleased,
+              ),
+            ),
+            SizedBox(width: 16 * _spacingScale),
+            _scaled(
+              _MenuButton(
+                icon: Icons.home_rounded,
+                size: _menuButtonSize * 0.9,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onPressed: widget.onHomePressed,
+                onReleased: widget.onHomeReleased,
+                isHome: true,
+              ),
+            ),
+          ],
+        );
+
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            if (widget.showShoulders)
+              Positioned(
+                top: 0,
+                left: edge,
+                right: edge,
+                child: _buildShoulderButtons(),
+              ),
+            if (widget.showDpad)
+              Positioned(left: edge, top: shoulderH + 8 * s, child: dpad),
+            if (widget.showFaceButtons)
+              Positioned(
+                right: edge,
+                top: shoulderH + 8 * s,
+                child: faceCluster,
+              ),
+            if (widget.showSticks) ...[
+              Positioned(
+                left: edge + 30 * s,
+                bottom: stickLift,
+                child: leftStick,
+              ),
+              Positioned(
+                right: edge + 30 * s,
+                bottom: stickLift,
+                child: rightStick,
+              ),
+            ],
+            if (widget.showMenu)
+              Positioned(bottom: 0, left: 0, right: 0, child: menuRow),
+          ],
+        );
+      },
     );
   }
 
@@ -399,120 +497,6 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
       ],
     );
   }
-
-  Widget _buildLeftSide() {
-    if (!widget.showDpad && !widget.showSticks) return const SizedBox.shrink();
-    // Fixed-size cluster: measurable under FittedBox (Expanded is illegal in
-    // an unbounded row), and keeps the d-pad/stick pinned to the pad's left
-    // edge so the cluster layout matches the full-width original.
-    return SizedBox(
-      width: _sideContainerSize,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (widget.showDpad)
-            SizedBox(
-              width: _sideContainerSize,
-              height: _sideContainerSize,
-              child: Center(
-                child: _scaled(
-                  DPadWidget(
-                    size: _dpadSize,
-                    theme: _theme,
-                    hapticsEnabled: widget.hapticFeedback,
-                    animationsEnabled: widget.animationsEnabled,
-                    onDirectionPressed: widget.onDpadPressed,
-                    onDirectionReleased: widget.onDpadReleased,
-                  ),
-                ),
-              ),
-            ),
-          if (widget.showDpad && widget.showSticks)
-            SizedBox(height: 16 * _spacingScale),
-          if (widget.showSticks)
-            _scaled(
-              AnalogStick(
-                size: _analogStickSize,
-                knobSize: _analogStickKnobSize,
-                theme: _theme,
-                deadZone: widget.deadZone,
-                hapticsEnabled: widget.hapticFeedback,
-                animationsEnabled: widget.animationsEnabled,
-                // Left-position stick carries the primary accent; southpaw
-                // swaps accents along with the functions so the mode is
-                // visible at a glance.
-                accentColor: widget.southpaw
-                    ? _theme.secondary
-                    : _theme.primary,
-                // Southpaw swaps which stick lives on each side.
-                onDrag: widget.southpaw
-                    ? widget.onRightStickDrag
-                    : widget.onLeftStickDrag,
-                onDragEnd: widget.southpaw
-                    ? widget.onRightStickDragEnd
-                    : widget.onLeftStickDragEnd,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRightSide() {
-    if (!widget.showFaceButtons && !widget.showSticks) {
-      return const SizedBox.shrink();
-    }
-    return SizedBox(
-      width: _sideContainerSize,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (widget.showFaceButtons)
-            SizedBox(
-              width: _sideContainerSize,
-              height: _sideContainerSize,
-              child: Center(
-                child: _scaled(
-                  FaceButtons(
-                    buttonSize: _faceButtonSize,
-                    theme: _theme,
-                    nintendoLayout: widget.nintendoLayout,
-                    hapticsEnabled: widget.hapticFeedback,
-                    animationsEnabled: widget.animationsEnabled,
-                    onButtonPressed: widget.onFaceButtonPressed,
-                    onButtonReleased: widget.onFaceButtonReleased,
-                  ),
-                ),
-              ),
-            ),
-          if (widget.showFaceButtons && widget.showSticks)
-            SizedBox(height: 16 * _spacingScale),
-          if (widget.showSticks)
-            _scaled(
-              AnalogStick(
-                size: _analogStickSize,
-                knobSize: _analogStickKnobSize,
-                theme: _theme,
-                deadZone: widget.deadZone,
-                hapticsEnabled: widget.hapticFeedback,
-                animationsEnabled: widget.animationsEnabled,
-                accentColor: widget.southpaw
-                    ? _theme.primary
-                    : _theme.secondary,
-                onDrag: widget.southpaw
-                    ? widget.onLeftStickDrag
-                    : widget.onRightStickDrag,
-                onDragEnd: widget.southpaw
-                    ? widget.onLeftStickDragEnd
-                    : widget.onRightStickDragEnd,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }
 
 /// Small menu button widget styled by the active [ControllerTheme].
@@ -555,7 +539,7 @@ class _MenuButtonState extends State<_MenuButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) gamepadHaptic();
+        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {
@@ -649,7 +633,7 @@ class _ShoulderButtonState extends State<_ShoulderButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) gamepadHaptic();
+        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {
@@ -733,7 +717,7 @@ class _TriggerButtonState extends State<_TriggerButton> {
       onPointerDown: (_) {
         if (_isPressed) return;
         setState(() => _isPressed = true);
-        if (widget.hapticsEnabled) gamepadHaptic();
+        if (widget.hapticsEnabled) HapticFeedback.mediumImpact();
         widget.onPressed?.call();
       },
       onPointerUp: (_) {

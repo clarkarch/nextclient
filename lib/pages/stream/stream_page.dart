@@ -3186,10 +3186,9 @@ class _ReadySurfaceState extends State<_ReadySurface>
                       // Anchored to BOTH edges: shoulders pin to the top,
                       // menu row to the bottom, so nothing can ever clip
                       // vertically on short landscape screens. The user's
-                      // position lift still floats the whole pad up; the
-                      // chrome paints and hit-tests on top.
-                      top: widget.settings.streamGamepadPosition * 240,
-                      bottom: 0,
+                      // vertical-lift setting squeezes from the bottom.
+                      top: 0,
+                      bottom: widget.settings.streamGamepadPosition * 240,
                       child: GestureDetector(
                         behavior: HitTestBehavior.deferToChild,
                         onTap: () {},
@@ -3198,10 +3197,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
                           child: SafeArea(
                             top: false,
                             child: Padding(
-                              padding: const EdgeInsets.only(
-                                left: 8,
-                                right: 8,
-                                bottom: 8,
+                              padding: EdgeInsets.all(
+                                widget.settings.streamGamepadEdgePad,
                               ),
                               child: VirtualGamepad(
                                 theme: widget.settings.streamGamepadTheme,
@@ -3903,7 +3900,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                     ),
                     const SizedBox(height: 14),
                     _SliderRow(
-                      label: 'Vertical position',
+                      label: 'Vertical lift',
                       valueLabel:
                           '${(settings.streamGamepadPosition * 100).round()}%',
                       value: settings.streamGamepadPosition,
@@ -3911,6 +3908,15 @@ class StreamSettingsSidebar extends StatelessWidget {
                       max: 1.0,
                       divisions: 20,
                       onChanged: (v) => settings.streamGamepadPosition = v,
+                    ),
+                    _SliderRow(
+                      label: 'Edge padding',
+                      valueLabel: '${settings.streamGamepadEdgePad.round()}',
+                      value: settings.streamGamepadEdgePad,
+                      min: 0.0,
+                      max: 32.0,
+                      divisions: 16,
+                      onChanged: (v) => settings.streamGamepadEdgePad = v,
                     ),
                     const SizedBox(height: 14),
                     _SliderRow(
@@ -4015,6 +4021,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                         settings.streamGamepadScale = 1.0;
                         settings.streamGamepadSpacing = 1.0;
                         settings.streamGamepadPosition = 0.0;
+                        settings.streamGamepadEdgePad = 12.0;
                         settings.streamGamepadOpacity = 1.0;
                         settings.streamGamepadTheme = ControllerThemes.neon;
                         settings.streamGamepadStickScale = 1.0;

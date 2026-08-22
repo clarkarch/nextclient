@@ -32,6 +32,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadScale = 'settings.stream.gamepadScale';
   static const _keyStreamGamepadSpacing = 'settings.stream.gamepadSpacing';
   static const _keyStreamGamepadPosition = 'settings.stream.gamepadPosition';
+  static const _keyStreamGamepadEdgePad = 'settings.stream.gamepadEdgePad';
   static const _keyStreamGamepadOpacity = 'settings.stream.gamepadOpacity';
   static const _keyStreamGamepadShowShoulders =
       'settings.stream.gamepadShowShoulders';
@@ -124,6 +125,7 @@ class UserSettings extends ChangeNotifier {
   double _streamGamepadScale = 1.0;
   double _streamGamepadSpacing = 1.0;
   double _streamGamepadPosition = 0.0;
+  double _streamGamepadEdgePad = 12.0;
   double _streamGamepadOpacity = 1.0;
   bool _streamGamepadShowShoulders = true;
   bool _streamGamepadShowSticks = true;
@@ -214,6 +216,9 @@ class UserSettings extends ChangeNotifier {
   /// lifts the whole pad up from the bottom of the screen without resizing it.
   /// Independent of [streamGamepadScale], which sizes the components.
   double get streamGamepadPosition => _streamGamepadPosition;
+
+  /// Base inset (logical px) between the pad's anchors and the screen edges.
+  double get streamGamepadEdgePad => _streamGamepadEdgePad;
 
   /// Whether the shoulder/trigger row (LT/RT/LB/RB) is shown on the gamepad.
   bool get streamGamepadShowShoulders => _streamGamepadShowShoulders;
@@ -534,6 +539,14 @@ class UserSettings extends ChangeNotifier {
     if (_streamGamepadPosition == clamped) return;
     _streamGamepadPosition = clamped;
     _prefs.setDouble(_keyStreamGamepadPosition, clamped);
+    notifyListeners();
+  }
+
+  set streamGamepadEdgePad(double v) {
+    final clamped = v.clamp(0.0, 40.0);
+    if (_streamGamepadEdgePad == clamped) return;
+    _streamGamepadEdgePad = clamped;
+    _prefs.setDouble(_keyStreamGamepadEdgePad, clamped);
     notifyListeners();
   }
 
@@ -1026,6 +1039,8 @@ class UserSettings extends ChangeNotifier {
         _prefs.getDouble(_keyStreamGamepadSpacing) ?? _streamGamepadSpacing;
     _streamGamepadPosition =
         _prefs.getDouble(_keyStreamGamepadPosition) ?? _streamGamepadPosition;
+    _streamGamepadEdgePad =
+        _prefs.getDouble(_keyStreamGamepadEdgePad) ?? _streamGamepadEdgePad;
     _streamGamepadOpacity =
         _prefs.getDouble(_keyStreamGamepadOpacity) ?? _streamGamepadOpacity;
     _streamGamepadShowShoulders =
@@ -1223,6 +1238,7 @@ class UserSettings extends ChangeNotifier {
     _streamGamepadScale = 1.0;
     _streamGamepadSpacing = 1.0;
     _streamGamepadPosition = 0.0;
+    _streamGamepadEdgePad = 12.0;
     _streamGamepadOpacity = 1.0;
     _streamGamepadShowShoulders = true;
     _streamGamepadShowSticks = true;
@@ -1303,6 +1319,7 @@ class UserSettings extends ChangeNotifier {
     _keyStreamGamepadScale,
     _keyStreamGamepadSpacing,
     _keyStreamGamepadPosition,
+    _keyStreamGamepadEdgePad,
     _keyStreamGamepadOpacity,
     _keyStreamGamepadShowShoulders,
     _keyStreamGamepadShowSticks,
