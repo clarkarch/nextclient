@@ -2586,10 +2586,10 @@ class _ReadySurfaceState extends State<_ReadySurface>
     // UI; L3/R3 clicks toggle the virtual gamepad overlay.
     const stickClickBits = 0x0040 | 0x0080; // LS | RS
     final guideDown = (buttons & _gamepadGuideBit) != 0;
-    // Stick clicks are only intercepted in togglePad mode; direct mode sends
+    // Stick clicks are only intercepted in button mode; direct mode sends
     // them to the game like any other button.
     final stickClickIntercepted =
-        widget.settings.streamStickClickMode == StickClickMode.togglePad;
+        widget.settings.streamStickClickMode == StickClickMode.button;
     final stickClickDown =
         stickClickIntercepted && (buttons & stickClickBits) != 0;
     var outButtons = buttons & ~_gamepadGuideBit;
@@ -3311,6 +3311,17 @@ class _ReadySurfaceState extends State<_ReadySurface>
                                         _setGamepadBit(gamepadRb, true),
                                     onRightBumperReleased: () =>
                                         _setGamepadBit(gamepadRb, false),
+                                    showStickClickButtons:
+                                        widget.settings.streamStickClickMode ==
+                                        StickClickMode.button,
+                                    onL3Pressed: () =>
+                                        _setGamepadBit(gamepadLs, true),
+                                    onL3Released: () =>
+                                        _setGamepadBit(gamepadLs, false),
+                                    onR3Pressed: () =>
+                                        _setGamepadBit(gamepadRs, true),
+                                    onR3Released: () =>
+                                        _setGamepadBit(gamepadRs, false),
                                     onLeftTriggerPressed: () =>
                                         _setTrigger(0, 1.0),
                                     onLeftTriggerReleased: () =>
@@ -3956,16 +3967,32 @@ class StreamSettingsSidebar extends StatelessWidget {
                       divisions: 40,
                       onChanged: (v) => settings.streamGamepadPosition = v,
                     ),
-                    _SidebarSubheader('STICK CLICK'),
-                    _ToggleRow(
-                      label: 'L3/R3 toggles gamepad UI (off = direct)',
-                      value:
-                          settings.streamStickClickMode ==
-                          StickClickMode.togglePad,
-                      onChanged: (v) => settings.streamStickClickMode = v
-                          ? StickClickMode.togglePad
-                          : StickClickMode.direct,
+                    const SizedBox(height: 14),
+                    const _SidebarSubheader('STICK CLICK (L3/R3)'),
+                    Row(
+                      children: [
+                        _ModeButton(
+                          label: 'Direct',
+                          subtitle: 'to the stick',
+                          selected:
+                              settings.streamStickClickMode ==
+                              StickClickMode.direct,
+                          onTap: () => settings.streamStickClickMode =
+                              StickClickMode.direct,
+                        ),
+                        const SizedBox(width: 8),
+                        _ModeButton(
+                          label: 'Show pad',
+                          subtitle: 'L3/R3 buttons',
+                          selected:
+                              settings.streamStickClickMode ==
+                              StickClickMode.button,
+                          onTap: () => settings.streamStickClickMode =
+                              StickClickMode.button,
+                        ),
+                      ],
                     ),
+                    const SizedBox(height: 14),
                     _SliderRow(
                       label: 'Edge padding',
                       valueLabel: '${settings.streamGamepadEdgePad.round()}',
@@ -4029,6 +4056,15 @@ class StreamSettingsSidebar extends StatelessWidget {
                       label: 'Menu (Select/Start/Home)',
                       value: settings.streamGamepadShowMenu,
                       onChanged: (v) => settings.streamGamepadShowMenu = v,
+                    ),
+                    _ToggleRow(
+                      label: 'Stick click reveals pad (L3/R3)',
+                      value:
+                          settings.streamStickClickMode ==
+                          StickClickMode.button,
+                      onChanged: (v) => settings.streamStickClickMode = v
+                          ? StickClickMode.button
+                          : StickClickMode.direct,
                     ),
                     const SizedBox(height: 16),
                     const _SidebarSubheader('LOOK'),

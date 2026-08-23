@@ -47,6 +47,10 @@ class VirtualGamepad extends StatefulWidget {
 
   /// Callback for select button.
   final VoidCallback? onSelectPressed;
+  final VoidCallback? onL3Pressed;
+  final VoidCallback? onL3Released;
+  final VoidCallback? onR3Pressed;
+  final VoidCallback? onR3Released;
 
   /// Callback for home button.
   final VoidCallback? onHomePressed;
@@ -106,6 +110,10 @@ class VirtualGamepad extends StatefulWidget {
   /// 0..1 - shifts the d-pad / XYAB clusters downward within their band.
   final double verticalPosition;
 
+  /// Renders dedicated on-screen L3/R3 buttons in the menu row (used when
+  /// physical stick clicks are set to reveal the pad instead of forwarding).
+  final bool showStickClickButtons;
+
   final bool showSticks;
 
   /// Whether the D-pad is shown.
@@ -159,6 +167,10 @@ class VirtualGamepad extends StatefulWidget {
     this.onStartReleased,
     this.onSelectReleased,
     this.onHomeReleased,
+    this.onL3Pressed,
+    this.onL3Released,
+    this.onR3Pressed,
+    this.onR3Released,
     this.onLeftBumperPressed,
     this.onLeftBumperReleased,
     this.onRightBumperPressed,
@@ -170,6 +182,7 @@ class VirtualGamepad extends StatefulWidget {
     this.padding = const EdgeInsets.all(16.0),
     this.edgePadding = 12.0,
     this.verticalPosition = 0.0,
+    this.showStickClickButtons = false,
     this.scale = 1.0,
     this.spacing = 1.0,
     this.showShoulders = true,
@@ -306,15 +319,6 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
           _sideContainerSize,
           availMid * 0.8,
         );
-        final double topMost = shoulderH + 6 * s;
-        // Bottom anchor tucks the cluster well toward the bottom controls
-        // (only its top 40% must stay above the menu zone) so the slider has
-        // a large, obvious travel range.
-        final double bottomMost = (bandH - menuH - clusterSizeEff * 0.4 - 8 * s)
-            .clamp(topMost, double.infinity);
-        final double t = (widget.verticalPosition + 1) / 2; // 0..1
-        final double clusterTop = topMost + (bottomMost - topMost) * t;
-
         final Widget dpad = SizedBox(
           width: clusterSizeEff,
           height: clusterSizeEff,
@@ -425,8 +429,45 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 isHome: true,
               ),
             ),
+            if (widget.showStickClickButtons) ...[
+              SizedBox(width: 16 * _spacingScale),
+              _scaled(
+                _MenuButton(
+                  label: 'L3',
+                  size: _menuButtonSize * 0.9,
+                  theme: _theme,
+                  hapticsEnabled: widget.hapticFeedback,
+                  animationsEnabled: widget.animationsEnabled,
+                  onPressed: widget.onL3Pressed,
+                  onReleased: widget.onL3Released,
+                ),
+              ),
+              SizedBox(width: 16 * _spacingScale),
+              _scaled(
+                _MenuButton(
+                  label: 'R3',
+                  size: _menuButtonSize * 0.9,
+                  theme: _theme,
+                  hapticsEnabled: widget.hapticFeedback,
+                  animationsEnabled: widget.animationsEnabled,
+                  onPressed: widget.onR3Pressed,
+                  onReleased: widget.onR3Released,
+                ),
+              ),
+            ],
           ],
         );
+
+        // Vertical position shifts the middle band up/down within whatever
+        // slack exists between shoulders and the bottom controls.
+        final double bandSlack = math.max(
+          0.0,
+          bandH - shoulderH - menuH - stickLift - clusterSizeEff - 8 * s,
+        );
+        final double bandTop =
+            shoulderH + 6 * s + widget.verticalPosition * bandSlack;
+        final double bandBottom =
+            menuH + math.max(0.0, -widget.verticalPosition) * bandSlack;
 
         return Stack(
           clipBehavior: Clip.none,
@@ -438,22 +479,79 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 right: edge,
                 child: _buildShoulderButtons(),
               ),
-            if (widget.showDpad)
-              Positioned(left: edge, top: clusterTop, child: dpad),
-            if (widget.showFaceButtons)
-              Positioned(right: edge, top: clusterTop, child: faceCluster),
-            if (widget.showSticks) ...[
-              Positioned(
-                left: edge + 30 * s,
-                bottom: stickLift,
-                child: leftStick,
+            // Middle band: two anchored side columns. Each column pins its
+            // cluster to the TOP of the band and its stick to the BOTTOM —
+            // overlap is structurally impossible, on any resolution.
+            Positioned(
+              top: bandTop,
+              bottom: bandBottom,
+              left: edge,
+              right: edge,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (widget.showDpad || widget.showSticks)
+                    Expanded(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.bottomLeft,
+                        child: SizedBox(
+                          width: clusterSizeEff,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (widget.showDpad)
+                                SizedBox(
+                                  width: clusterSizeEff,
+                                  height: clusterSizeEff * 0.75,
+                                  child: Center(child: dpad),
+                                ),
+                              if (widget.showSticks)
+                                SizedBox(
+                                  height: clusterSizeEff * 0.75,
+                                  child: Center(child: leftStick),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  if ((widget.showDpad || widget.showSticks) &&
+                      (widget.showFaceButtons || widget.showSticks))
+                    SizedBox(width: 24 * s),
+                  if (widget.showFaceButtons || widget.showSticks)
+                    Expanded(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.bottomRight,
+                        child: SizedBox(
+                          width: clusterSizeEff,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (widget.showFaceButtons)
+                                SizedBox(
+                                  width: clusterSizeEff,
+                                  height: clusterSizeEff * 0.75,
+                                  child: Center(child: faceCluster),
+                                ),
+                              if (widget.showSticks)
+                                SizedBox(
+                                  height: clusterSizeEff * 0.75,
+                                  child: Center(child: rightStick),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              Positioned(
-                right: edge + 30 * s,
-                bottom: stickLift,
-                child: rightStick,
-              ),
-            ],
+            ),
             if (widget.showMenu)
               Positioned(bottom: 0, left: 0, right: 0, child: menuRow),
           ],

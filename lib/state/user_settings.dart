@@ -128,7 +128,7 @@ class UserSettings extends ChangeNotifier {
   double _streamGamepadSpacing = 1.0;
   double _streamGamepadPosition = 0.0;
   double _streamGamepadEdgePad = 12.0;
-  StickClickMode _streamStickClickMode = StickClickMode.direct;
+  StickClickMode _streamStickClickMode = StickClickMode.button;
   bool _streamPadVisible = true;
   double _streamGamepadOpacity = 1.0;
   bool _streamGamepadShowShoulders = true;
@@ -1497,6 +1497,7 @@ enum StickClickMode {
   /// Forwarded to the game as a real stick click.
   direct,
 
-  /// Intercepted client-side: toggles the virtual gamepad overlay.
-  togglePad,
+  /// Intercepted client-side: reveals the virtual gamepad, which carries
+  /// dedicated L3/R3 buttons for sending real stick clicks by touch.
+  button,
 }
