@@ -2596,11 +2596,6 @@ class _ReadySurfaceState extends State<_ReadySurface>
     if (stickClickIntercepted) outButtons &= ~stickClickBits;
     // Timestamp-guarded toggle: every fresh press alternates show/hide,
     // immune to repeated state packets or a stale debounce window.
-    debugPrint(
-      '[stickclick] down=$stickClickDown was=$_stickClickWasDown '
-      'mode=${widget.settings.streamStickClickMode.name} '
-      'visible=$_padOverlayVisible',
-    );
     if (stickClickDown && !_stickClickWasDown) {
       final now = DateTime.now();
       final last = _lastStickClickToggleAt;
@@ -2608,8 +2603,6 @@ class _ReadySurfaceState extends State<_ReadySurface>
           now.difference(last) >= const Duration(milliseconds: 450)) {
         _lastStickClickToggleAt = now;
         widget.settings.streamPadVisible = !widget.settings.streamPadVisible;
-      } else {
-        debugPrint('[stickclick] suppressed by window');
       }
     }
     _stickClickWasDown = stickClickDown;
