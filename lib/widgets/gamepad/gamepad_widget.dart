@@ -105,6 +105,9 @@ class VirtualGamepad extends StatefulWidget {
   /// Base inset (scaled) from screen edges for every anchor.
   final double edgePadding;
 
+  /// 0..1 - shifts the d-pad / XYAB clusters downward within their band.
+  final double verticalPosition;
+
   final bool showSticks;
 
   /// Whether the D-pad is shown.
@@ -172,6 +175,7 @@ class VirtualGamepad extends StatefulWidget {
     this.onRightTriggerReleased,
     this.padding = const EdgeInsets.all(16.0),
     this.edgePadding = 12.0,
+    this.verticalPosition = 0.0,
     this.scale = 1.0,
     this.spacing = 1.0,
     this.showShoulders = true,
@@ -273,6 +277,11 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
     final s = _adaptiveScale;
     return LayoutBuilder(
       builder: (context, constraints) {
+        final double bandH =
+            (constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : MediaQuery.of(context).size.height) -
+            widget.edgePadding * s;
         // Anchored Stack: shoulders pinned across the top, d-pad on the left
         // side, XYAB on the right, sticks anchored to the bottom corners
         // (lifted above the menu row), menu centered at the very bottom.
@@ -289,6 +298,15 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
             ? (_menuButtonSize * widget.scale + 12 * s)
             : 0.0;
         final double stickLift = menuH + 14 * s;
+        // Vertical position slider moves the d-pad / XYAB clusters within
+        // the band between shoulders and the bottom controls.
+        final double clusterTravel =
+            (bandH - shoulderH - menuH - _sideContainerSize).clamp(
+              0.0,
+              double.infinity,
+            );
+        final double clusterTop =
+            shoulderH + 6 * s + widget.verticalPosition * clusterTravel;
 
         final Widget dpad = SizedBox(
           width: _sideContainerSize,
@@ -438,13 +456,9 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 child: _buildShoulderButtons(),
               ),
             if (widget.showDpad)
-              Positioned(left: edge, top: shoulderH + 8 * s, child: dpad),
+              Positioned(left: edge, top: clusterTop, child: dpad),
             if (widget.showFaceButtons)
-              Positioned(
-                right: edge,
-                top: shoulderH + 8 * s,
-                child: faceCluster,
-              ),
+              Positioned(right: edge, top: clusterTop, child: faceCluster),
             if (widget.showSticks) ...[
               Positioned(
                 left: edge + 30 * s,

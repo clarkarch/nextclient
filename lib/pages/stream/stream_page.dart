@@ -3200,11 +3200,11 @@ class _ReadySurfaceState extends State<_ReadySurface>
                       left: 0,
                       right: 0,
                       // Anchored to BOTH edges: shoulders pin to the top,
-                      // menu row to the bottom, so nothing can ever clip
-                      // vertically on short landscape screens. The user's
-                      // vertical-lift setting squeezes from the bottom.
+                      // menu row to the bottom. The vertical-position
+                      // slider moves the d-pad / XYAB clusters within the
+                      // band instead of squeezing the pad.
                       top: 0,
-                      bottom: widget.settings.streamGamepadPosition * 240,
+                      bottom: 0,
                       child: GestureDetector(
                         behavior: HitTestBehavior.deferToChild,
                         onTap: () {},
@@ -3217,6 +3217,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
                                 widget.settings.streamGamepadEdgePad,
                               ),
                               child: VirtualGamepad(
+                                verticalPosition:
+                                    widget.settings.streamGamepadPosition,
                                 theme: widget.settings.streamGamepadTheme,
                                 stickScale:
                                     widget.settings.streamGamepadStickScale,
@@ -3922,7 +3924,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                     ),
                     const SizedBox(height: 14),
                     _SliderRow(
-                      label: 'Vertical lift',
+                      label: 'Vertical position',
                       valueLabel:
                           '${(settings.streamGamepadPosition * 100).round()}%',
                       value: settings.streamGamepadPosition,
