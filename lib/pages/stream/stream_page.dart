@@ -4104,6 +4104,8 @@ class StreamSettingsSidebar extends StatelessWidget {
                         settings.streamGamepadShowFaceButtons = true;
                         settings.streamGamepadShowMenu = true;
                         settings.streamPadVisible = true;
+                        settings.streamStickClickMode =
+                            StickClickMode.direct;
                       },
                     ),
                   ],

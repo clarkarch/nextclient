@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -302,15 +304,25 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
         // the band between shoulders and the bottom controls.
         // verticalPosition: 0 = centered in the band, -1 = up at the
         // shoulders, +1 = down at the bottom controls.
+        // On short screens the band may be tighter than the cluster; the
+        // cluster shrinks to fit so vertical travel always exists.
+        final double availMid = (bandH - shoulderH - menuH).clamp(
+          0.0,
+          double.infinity,
+        );
+        final double clusterSizeEff = math.min(
+          _sideContainerSize,
+          availMid * 0.8,
+        );
         final double topMost = shoulderH + 6 * s;
-        final double bottomMost = (bandH - menuH - _sideContainerSize - 6 * s)
+        final double bottomMost = (bandH - menuH - clusterSizeEff - 6 * s)
             .clamp(topMost, double.infinity);
         final double t = (widget.verticalPosition + 1) / 2; // 0..1
         final double clusterTop = topMost + (bottomMost - topMost) * t;
 
         final Widget dpad = SizedBox(
-          width: _sideContainerSize,
-          height: _sideContainerSize,
+          width: clusterSizeEff,
+          height: clusterSizeEff,
           child: Center(
             child: _scaled(
               DPadWidget(
@@ -326,8 +338,8 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
         );
 
         final Widget faceCluster = SizedBox(
-          width: _sideContainerSize,
-          height: _sideContainerSize,
+          width: clusterSizeEff,
+          height: clusterSizeEff,
           child: Center(
             child: _scaled(
               FaceButtons(
