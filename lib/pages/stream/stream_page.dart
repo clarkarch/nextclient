@@ -3203,8 +3203,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
                   // between them pass through to the video surface. Painted BELOW
                   // the chrome/stats/sidebar so the stream UI always stays on top
                   // and hit-tests first.
-                  if (widget.settings.streamGamepad &&
-                      widget.settings.streamPadVisible)
+                  if (widget.settings.streamGamepad)
                     Positioned(
                       left: 0,
                       right: 0,
@@ -3214,103 +3213,126 @@ class _ReadySurfaceState extends State<_ReadySurface>
                       // band instead of squeezing the pad.
                       top: 0,
                       bottom: 0,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.deferToChild,
-                        onTap: () {},
-                        child: Opacity(
-                          opacity: widget.settings.streamGamepadOpacity,
-                          child: SafeArea(
-                            top: false,
-                            child: Padding(
-                              padding: EdgeInsets.all(
-                                widget.settings.streamGamepadEdgePad,
-                              ),
-                              child: VirtualGamepad(
-                                verticalPosition:
-                                    widget.settings.streamGamepadPosition,
-                                theme: widget.settings.streamGamepadTheme,
-                                stickScale:
-                                    widget.settings.streamGamepadStickScale,
-                                faceScale:
-                                    widget.settings.streamGamepadFaceScale,
-                                dpadScale:
-                                    widget.settings.streamGamepadDpadScale,
-                                southpaw: widget.settings.streamGamepadSouthpaw,
-                                nintendoLayout:
-                                    widget.settings.streamGamepadNintendoLayout,
-                                deadZone: widget.settings.streamGamepadDeadzone,
-                                hapticFeedback:
-                                    widget.settings.streamGamepadHaptics,
-                                visualEffects:
-                                    widget.settings.streamGamepadEffects,
-                                animationsEnabled:
-                                    widget.settings.streamGamepadAnimations,
-                                scale: widget.settings.streamGamepadScale,
-                                spacing: widget.settings.streamGamepadSpacing,
-                                showShoulders:
-                                    widget.settings.streamGamepadShowShoulders,
-                                showSticks:
-                                    widget.settings.streamGamepadShowSticks,
-                                showDpad: widget.settings.streamGamepadShowDpad,
-                                showFaceButtons: widget
-                                    .settings
-                                    .streamGamepadShowFaceButtons,
-                                onL3Pressed: () => _setGamepadBit(0x0040, true),
-                                onL3Released: () =>
-                                    _setGamepadBit(0x0040, false),
-                                onR3Pressed: () => _setGamepadBit(0x0080, true),
-                                onR3Released: () =>
-                                    _setGamepadBit(0x0080, false),
-                                showMenu: widget.settings.streamGamepadShowMenu,
-                                onLeftStickDrag: _onLeftStickDrag,
-                                onLeftStickDragEnd: () {
-                                  _gamepadFlushTimer?.cancel();
-                                  _gamepadFlushTimer = null;
-                                  _leftStickX = 0;
-                                  _leftStickY = 0;
-                                  _sendGamepadState();
-                                },
-                                onRightStickDrag: _onRightStickDrag,
-                                onRightStickDragEnd: () {
-                                  _gamepadFlushTimer?.cancel();
-                                  _gamepadFlushTimer = null;
-                                  _rightStickX = 0;
-                                  _rightStickY = 0;
-                                  _sendGamepadState();
-                                },
-                                onDpadPressed: _onDpadPressed,
-                                onDpadReleased: _onDpadReleased,
-                                onFaceButtonPressed: _onFaceButtonPressed,
-                                onFaceButtonReleased: _onFaceButtonReleased,
-                                onStartPressed: () =>
-                                    _setGamepadBit(gamepadStart, true),
-                                onStartReleased: () =>
-                                    _setGamepadBit(gamepadStart, false),
-                                onSelectPressed: () =>
-                                    _setGamepadBit(gamepadBack, true),
-                                onSelectReleased: () =>
-                                    _setGamepadBit(gamepadBack, false),
-                                onHomePressed: () =>
-                                    _setGamepadBit(gamepadGuide, true),
-                                onHomeReleased: () =>
-                                    _setGamepadBit(gamepadGuide, false),
-                                onLeftBumperPressed: () =>
-                                    _setGamepadBit(gamepadLb, true),
-                                onLeftBumperReleased: () =>
-                                    _setGamepadBit(gamepadLb, false),
-                                onRightBumperPressed: () =>
-                                    _setGamepadBit(gamepadRb, true),
-                                onRightBumperReleased: () =>
-                                    _setGamepadBit(gamepadRb, false),
-                                onLeftTriggerPressed: () => _setTrigger(0, 1.0),
-                                onLeftTriggerReleased: () => _setTrigger(0, 0),
-                                onRightTriggerPressed: () =>
-                                    _setTrigger(1, 1.0),
-                                onRightTriggerReleased: () => _setTrigger(1, 0),
+                      // Own listener: pad visibility flips from the physical
+                      // L3/R3 handler must rebuild this subtree immediately,
+                      // even if nothing else in the surface is listening.
+                      child: ListenableBuilder(
+                        listenable: widget.settings,
+                        builder: (context, _) {
+                          if (!widget.settings.streamPadVisible) {
+                            return const SizedBox.shrink();
+                          }
+                          return GestureDetector(
+                            behavior: HitTestBehavior.deferToChild,
+                            onTap: () {},
+                            child: Opacity(
+                              opacity: widget.settings.streamGamepadOpacity,
+                              child: SafeArea(
+                                top: false,
+                                child: Padding(
+                                  padding: EdgeInsets.all(
+                                    widget.settings.streamGamepadEdgePad,
+                                  ),
+                                  child: VirtualGamepad(
+                                    verticalPosition:
+                                        widget.settings.streamGamepadPosition,
+                                    theme: widget.settings.streamGamepadTheme,
+                                    stickScale:
+                                        widget.settings.streamGamepadStickScale,
+                                    faceScale:
+                                        widget.settings.streamGamepadFaceScale,
+                                    dpadScale:
+                                        widget.settings.streamGamepadDpadScale,
+                                    southpaw:
+                                        widget.settings.streamGamepadSouthpaw,
+                                    nintendoLayout: widget
+                                        .settings
+                                        .streamGamepadNintendoLayout,
+                                    deadZone:
+                                        widget.settings.streamGamepadDeadzone,
+                                    hapticFeedback:
+                                        widget.settings.streamGamepadHaptics,
+                                    visualEffects:
+                                        widget.settings.streamGamepadEffects,
+                                    animationsEnabled:
+                                        widget.settings.streamGamepadAnimations,
+                                    scale: widget.settings.streamGamepadScale,
+                                    spacing:
+                                        widget.settings.streamGamepadSpacing,
+                                    showShoulders: widget
+                                        .settings
+                                        .streamGamepadShowShoulders,
+                                    showSticks:
+                                        widget.settings.streamGamepadShowSticks,
+                                    showDpad:
+                                        widget.settings.streamGamepadShowDpad,
+                                    showFaceButtons: widget
+                                        .settings
+                                        .streamGamepadShowFaceButtons,
+                                    onL3Pressed: () =>
+                                        _setGamepadBit(0x0040, true),
+                                    onL3Released: () =>
+                                        _setGamepadBit(0x0040, false),
+                                    onR3Pressed: () =>
+                                        _setGamepadBit(0x0080, true),
+                                    onR3Released: () =>
+                                        _setGamepadBit(0x0080, false),
+                                    showMenu:
+                                        widget.settings.streamGamepadShowMenu,
+                                    onLeftStickDrag: _onLeftStickDrag,
+                                    onLeftStickDragEnd: () {
+                                      _gamepadFlushTimer?.cancel();
+                                      _gamepadFlushTimer = null;
+                                      _leftStickX = 0;
+                                      _leftStickY = 0;
+                                      _sendGamepadState();
+                                    },
+                                    onRightStickDrag: _onRightStickDrag,
+                                    onRightStickDragEnd: () {
+                                      _gamepadFlushTimer?.cancel();
+                                      _gamepadFlushTimer = null;
+                                      _rightStickX = 0;
+                                      _rightStickY = 0;
+                                      _sendGamepadState();
+                                    },
+                                    onDpadPressed: _onDpadPressed,
+                                    onDpadReleased: _onDpadReleased,
+                                    onFaceButtonPressed: _onFaceButtonPressed,
+                                    onFaceButtonReleased: _onFaceButtonReleased,
+                                    onStartPressed: () =>
+                                        _setGamepadBit(gamepadStart, true),
+                                    onStartReleased: () =>
+                                        _setGamepadBit(gamepadStart, false),
+                                    onSelectPressed: () =>
+                                        _setGamepadBit(gamepadBack, true),
+                                    onSelectReleased: () =>
+                                        _setGamepadBit(gamepadBack, false),
+                                    onHomePressed: () =>
+                                        _setGamepadBit(gamepadGuide, true),
+                                    onHomeReleased: () =>
+                                        _setGamepadBit(gamepadGuide, false),
+                                    onLeftBumperPressed: () =>
+                                        _setGamepadBit(gamepadLb, true),
+                                    onLeftBumperReleased: () =>
+                                        _setGamepadBit(gamepadLb, false),
+                                    onRightBumperPressed: () =>
+                                        _setGamepadBit(gamepadRb, true),
+                                    onRightBumperReleased: () =>
+                                        _setGamepadBit(gamepadRb, false),
+                                    onLeftTriggerPressed: () =>
+                                        _setTrigger(0, 1.0),
+                                    onLeftTriggerReleased: () =>
+                                        _setTrigger(0, 0),
+                                    onRightTriggerPressed: () =>
+                                        _setTrigger(1, 1.0),
+                                    onRightTriggerReleased: () =>
+                                        _setTrigger(1, 0),
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
-                        ),
+                          );
+                        },
                       ),
                     ),
 
