@@ -1259,10 +1259,16 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// Physical Android gamepad (USB/Bluetooth) bridge — automatic, no UI.
   PhysicalGamepad? _physicalGamepad;
 
+  /// Virtual gamepad overlay visibility — toggled by physical L3/R3 clicks.
+  bool _padOverlayVisible = true;
+
+  Timer? _stickClickDebounce;
+
   /// Physical home/GUIDE button: never forwarded to the game. Holding it
   /// (~600 ms) while the chrome is hidden reveals the stream UI.
   static const int _gamepadGuideBit = 0x0400;
   bool _guideWasDown = false;
+  bool _stickClickWasDown = false;
   Timer? _guideHoldTimer;
 
   /// Physical desktop (Linux) gamepad subscription — automatic, no UI.
@@ -2578,10 +2584,20 @@ class _ReadySurfaceState extends State<_ReadySurface>
   ) {
     if (!mounted) return;
 
-    // Home/GUIDE is a client-side key, not a game input: strip it from the
-    // forwarded state and use hold-to-reveal for the stream UI instead.
+    // Home/GUIDE and the stick clicks (L3/R3) are client-side keys, not game
+    // inputs: stripped from the forwarded state. HOME hold reveals the stream
+    // UI; L3/R3 clicks toggle the virtual gamepad overlay.
+    const stickClickBits = 0x0040 | 0x0080; // LS | RS
     final guideDown = (buttons & _gamepadGuideBit) != 0;
-    final outButtons = buttons & ~_gamepadGuideBit;
+    final stickClickDown = (buttons & stickClickBits) != 0;
+    final outButtons = buttons & ~_gamepadGuideBit & ~stickClickBits;
+    if (stickClickDown &&
+        !_stickClickWasDown &&
+        (_stickClickDebounce == null || !_stickClickDebounce!.isActive)) {
+      setState(() => _padOverlayVisible = !_padOverlayVisible);
+      _stickClickDebounce = Timer(const Duration(milliseconds: 400), () {});
+    }
+    _stickClickWasDown = stickClickDown;
     if (guideDown && !_guideWasDown) {
       _guideHoldTimer?.cancel();
       if (!_chromeVisible) {
@@ -3179,7 +3195,7 @@ class _ReadySurfaceState extends State<_ReadySurface>
                   // between them pass through to the video surface. Painted BELOW
                   // the chrome/stats/sidebar so the stream UI always stays on top
                   // and hit-tests first.
-                  if (widget.settings.streamGamepad)
+                  if (widget.settings.streamGamepad && _padOverlayVisible)
                     Positioned(
                       left: 0,
                       right: 0,
@@ -3228,6 +3244,12 @@ class _ReadySurfaceState extends State<_ReadySurface>
                                 showFaceButtons: widget
                                     .settings
                                     .streamGamepadShowFaceButtons,
+                                onL3Pressed: () => _setGamepadBit(0x0040, true),
+                                onL3Released: () =>
+                                    _setGamepadBit(0x0040, false),
+                                onR3Pressed: () => _setGamepadBit(0x0080, true),
+                                onR3Released: () =>
+                                    _setGamepadBit(0x0080, false),
                                 showMenu: widget.settings.streamGamepadShowMenu,
                                 onLeftStickDrag: _onLeftStickDrag,
                                 onLeftStickDragEnd: () {

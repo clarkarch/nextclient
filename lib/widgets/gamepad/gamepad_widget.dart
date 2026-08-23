@@ -45,6 +45,10 @@ class VirtualGamepad extends StatefulWidget {
 
   /// Callback for select button.
   final VoidCallback? onSelectPressed;
+  final VoidCallback? onL3Pressed;
+  final VoidCallback? onL3Released;
+  final VoidCallback? onR3Pressed;
+  final VoidCallback? onR3Released;
 
   /// Callback for home button.
   final VoidCallback? onHomePressed;
@@ -154,6 +158,10 @@ class VirtualGamepad extends StatefulWidget {
     this.onStartReleased,
     this.onSelectReleased,
     this.onHomeReleased,
+    this.onL3Pressed,
+    this.onL3Released,
+    this.onR3Pressed,
+    this.onR3Released,
     this.onLeftBumperPressed,
     this.onLeftBumperReleased,
     this.onRightBumperPressed,
@@ -390,6 +398,30 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
                 onPressed: widget.onHomePressed,
                 onReleased: widget.onHomeReleased,
                 isHome: true,
+              ),
+            ),
+            SizedBox(width: 16 * _spacingScale),
+            _scaled(
+              _MenuButton(
+                label: 'L3',
+                size: _menuButtonSize * 0.9,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onPressed: widget.onL3Pressed,
+                onReleased: widget.onL3Released,
+              ),
+            ),
+            SizedBox(width: 16 * _spacingScale),
+            _scaled(
+              _MenuButton(
+                label: 'R3',
+                size: _menuButtonSize * 0.9,
+                theme: _theme,
+                hapticsEnabled: widget.hapticFeedback,
+                animationsEnabled: widget.animationsEnabled,
+                onPressed: widget.onR3Pressed,
+                onReleased: widget.onR3Released,
               ),
             ),
           ],
