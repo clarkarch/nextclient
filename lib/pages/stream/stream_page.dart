@@ -1262,13 +1262,12 @@ class _ReadySurfaceState extends State<_ReadySurface>
   /// Virtual gamepad overlay visibility — toggled by physical L3/R3 clicks.
   bool _padOverlayVisible = true;
 
-  Timer? _stickClickDebounce;
-
   /// Physical home/GUIDE button: never forwarded to the game. Holding it
   /// (~600 ms) while the chrome is hidden reveals the stream UI.
   static const int _gamepadGuideBit = 0x0400;
   bool _guideWasDown = false;
   bool _stickClickWasDown = false;
+  DateTime? _lastStickClickToggleAt;
   Timer? _guideHoldTimer;
 
   /// Physical desktop (Linux) gamepad subscription — automatic, no UI.
@@ -2597,11 +2596,16 @@ class _ReadySurfaceState extends State<_ReadySurface>
         stickClickIntercepted && (buttons & stickClickBits) != 0;
     var outButtons = buttons & ~_gamepadGuideBit;
     if (stickClickIntercepted) outButtons &= ~stickClickBits;
-    if (stickClickDown &&
-        !_stickClickWasDown &&
-        (_stickClickDebounce == null || !_stickClickDebounce!.isActive)) {
-      setState(() => _padOverlayVisible = !_padOverlayVisible);
-      _stickClickDebounce = Timer(const Duration(milliseconds: 400), () {});
+    // Timestamp-guarded toggle: every fresh press alternates show/hide,
+    // immune to repeated state packets or a stale debounce window.
+    if (stickClickDown && !_stickClickWasDown) {
+      final now = DateTime.now();
+      final last = _lastStickClickToggleAt;
+      if (last == null ||
+          now.difference(last) >= const Duration(milliseconds: 450)) {
+        _lastStickClickToggleAt = now;
+        setState(() => _padOverlayVisible = !_padOverlayVisible);
+      }
     }
     _stickClickWasDown = stickClickDown;
     if (guideDown && !_guideWasDown) {
