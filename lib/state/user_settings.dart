@@ -33,6 +33,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadSpacing = 'settings.stream.gamepadSpacing';
   static const _keyStreamGamepadPosition = 'settings.stream.gamepadPosition';
   static const _keyStreamGamepadEdgePad = 'settings.stream.gamepadEdgePad';
+  static const _keyStreamStickClickMode = 'settings.stream.stickClickMode';
   static const _keyStreamGamepadOpacity = 'settings.stream.gamepadOpacity';
   static const _keyStreamGamepadShowShoulders =
       'settings.stream.gamepadShowShoulders';
@@ -126,6 +127,7 @@ class UserSettings extends ChangeNotifier {
   double _streamGamepadSpacing = 1.0;
   double _streamGamepadPosition = 0.0;
   double _streamGamepadEdgePad = 12.0;
+  StickClickMode _streamStickClickMode = StickClickMode.direct;
   double _streamGamepadOpacity = 1.0;
   bool _streamGamepadShowShoulders = true;
   bool _streamGamepadShowSticks = true;
@@ -219,6 +221,11 @@ class UserSettings extends ChangeNotifier {
 
   /// Base inset (logical px) between the pad's anchors and the screen edges.
   double get streamGamepadEdgePad => _streamGamepadEdgePad;
+
+  /// What a physical L3/R3 (stick click) does during a stream:
+  /// [StickClickMode.direct] forwards it to the game as a real stick click,
+  /// [StickClickMode.togglePad] toggles the virtual gamepad overlay instead.
+  StickClickMode get streamStickClickMode => _streamStickClickMode;
 
   /// Whether the shoulder/trigger row (LT/RT/LB/RB) is shown on the gamepad.
   bool get streamGamepadShowShoulders => _streamGamepadShowShoulders;
@@ -535,7 +542,7 @@ class UserSettings extends ChangeNotifier {
   }
 
   set streamGamepadPosition(double v) {
-    final clamped = v.clamp(0.0, 1.0);
+    final clamped = v.clamp(-1.0, 1.0);
     if (_streamGamepadPosition == clamped) return;
     _streamGamepadPosition = clamped;
     _prefs.setDouble(_keyStreamGamepadPosition, clamped);
@@ -547,6 +554,13 @@ class UserSettings extends ChangeNotifier {
     if (_streamGamepadEdgePad == clamped) return;
     _streamGamepadEdgePad = clamped;
     _prefs.setDouble(_keyStreamGamepadEdgePad, clamped);
+    notifyListeners();
+  }
+
+  set streamStickClickMode(StickClickMode v) {
+    if (_streamStickClickMode == v) return;
+    _streamStickClickMode = v;
+    _prefs.setString(_keyStreamStickClickMode, v.name);
     notifyListeners();
   }
 
@@ -1041,6 +1055,11 @@ class UserSettings extends ChangeNotifier {
         _prefs.getDouble(_keyStreamGamepadPosition) ?? _streamGamepadPosition;
     _streamGamepadEdgePad =
         _prefs.getDouble(_keyStreamGamepadEdgePad) ?? _streamGamepadEdgePad;
+    final stickMode = _prefs.getString(_keyStreamStickClickMode);
+    if (stickMode != null) {
+      _streamStickClickMode =
+          StickClickMode.values.asNameMap()[stickMode] ?? _streamStickClickMode;
+    }
     _streamGamepadOpacity =
         _prefs.getDouble(_keyStreamGamepadOpacity) ?? _streamGamepadOpacity;
     _streamGamepadShowShoulders =
@@ -1320,6 +1339,7 @@ class UserSettings extends ChangeNotifier {
     _keyStreamGamepadSpacing,
     _keyStreamGamepadPosition,
     _keyStreamGamepadEdgePad,
+    _keyStreamStickClickMode,
     _keyStreamGamepadOpacity,
     _keyStreamGamepadShowShoulders,
     _keyStreamGamepadShowSticks,
@@ -1455,4 +1475,13 @@ enum TouchInputMode {
   /// Trackpad-style: drags move the cursor by relative deltas from the last
   /// position (like a laptop touchpad).
   relative,
+}
+
+/// Behavior of physical L3/R3 (analog-stick click) during a stream.
+enum StickClickMode {
+  /// Forwarded to the game as a real stick click.
+  direct,
+
+  /// Intercepted client-side: toggles the virtual gamepad overlay.
+  togglePad,
 }

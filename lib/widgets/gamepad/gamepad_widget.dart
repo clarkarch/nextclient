@@ -300,13 +300,18 @@ class _VirtualGamepadState extends State<VirtualGamepad> {
         final double stickLift = menuH + 14 * s;
         // Vertical position slider moves the d-pad / XYAB clusters within
         // the band between shoulders and the bottom controls.
+        // verticalPosition: 0 = centered in the band, -1 = up at the
+        // shoulders, +1 = down at the bottom controls.
         final double clusterTravel =
-            (bandH - shoulderH - menuH - _sideContainerSize).clamp(
+            ((bandH - shoulderH - menuH - _sideContainerSize) / 2).clamp(
               0.0,
               double.infinity,
             );
+        final double clusterCenter = shoulderH + 6 * s + clusterTravel;
         final double clusterTop =
-            shoulderH + 6 * s + widget.verticalPosition * clusterTravel;
+            clusterCenter -
+            _sideContainerSize / 2 +
+            widget.verticalPosition * clusterTravel;
 
         final Widget dpad = SizedBox(
           width: _sideContainerSize,

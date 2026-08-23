@@ -2589,8 +2589,14 @@ class _ReadySurfaceState extends State<_ReadySurface>
     // UI; L3/R3 clicks toggle the virtual gamepad overlay.
     const stickClickBits = 0x0040 | 0x0080; // LS | RS
     final guideDown = (buttons & _gamepadGuideBit) != 0;
-    final stickClickDown = (buttons & stickClickBits) != 0;
-    final outButtons = buttons & ~_gamepadGuideBit & ~stickClickBits;
+    // Stick clicks are only intercepted in togglePad mode; direct mode sends
+    // them to the game like any other button.
+    final stickClickIntercepted =
+        widget.settings.streamStickClickMode == StickClickMode.togglePad;
+    final stickClickDown =
+        stickClickIntercepted && (buttons & stickClickBits) != 0;
+    var outButtons = buttons & ~_gamepadGuideBit;
+    if (stickClickIntercepted) outButtons &= ~stickClickBits;
     if (stickClickDown &&
         !_stickClickWasDown &&
         (_stickClickDebounce == null || !_stickClickDebounce!.isActive)) {
@@ -3928,10 +3934,20 @@ class StreamSettingsSidebar extends StatelessWidget {
                       valueLabel:
                           '${(settings.streamGamepadPosition * 100).round()}%',
                       value: settings.streamGamepadPosition,
-                      min: 0.0,
+                      min: -1.0,
                       max: 1.0,
-                      divisions: 20,
+                      divisions: 40,
                       onChanged: (v) => settings.streamGamepadPosition = v,
+                    ),
+                    _SidebarSubheader('STICK CLICK'),
+                    _ToggleRow(
+                      label: 'L3/R3 toggles gamepad UI (off = direct)',
+                      value:
+                          settings.streamStickClickMode ==
+                          StickClickMode.togglePad,
+                      onChanged: (v) => settings.streamStickClickMode = v
+                          ? StickClickMode.togglePad
+                          : StickClickMode.direct,
                     ),
                     _SliderRow(
                       label: 'Edge padding',
