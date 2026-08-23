@@ -3269,14 +3269,6 @@ class _ReadySurfaceState extends State<_ReadySurface>
                                     showFaceButtons: widget
                                         .settings
                                         .streamGamepadShowFaceButtons,
-                                    onL3Pressed: () =>
-                                        _setGamepadBit(0x0040, true),
-                                    onL3Released: () =>
-                                        _setGamepadBit(0x0040, false),
-                                    onR3Pressed: () =>
-                                        _setGamepadBit(0x0080, true),
-                                    onR3Released: () =>
-                                        _setGamepadBit(0x0080, false),
                                     showMenu:
                                         widget.settings.streamGamepadShowMenu,
                                     onLeftStickDrag: _onLeftStickDrag,
@@ -4104,8 +4096,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                         settings.streamGamepadShowFaceButtons = true;
                         settings.streamGamepadShowMenu = true;
                         settings.streamPadVisible = true;
-                        settings.streamStickClickMode =
-                            StickClickMode.direct;
+                        settings.streamStickClickMode = StickClickMode.direct;
                       },
                     ),
                   ],
