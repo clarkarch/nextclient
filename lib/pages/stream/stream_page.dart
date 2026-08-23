@@ -1260,8 +1260,6 @@ class _ReadySurfaceState extends State<_ReadySurface>
   PhysicalGamepad? _physicalGamepad;
 
   /// Virtual gamepad overlay visibility — toggled by physical L3/R3 clicks.
-  bool _padOverlayVisible = true;
-
   /// Physical home/GUIDE button: never forwarded to the game. Holding it
   /// (~600 ms) while the chrome is hidden reveals the stream UI.
   static const int _gamepadGuideBit = 0x0400;
@@ -2598,13 +2596,20 @@ class _ReadySurfaceState extends State<_ReadySurface>
     if (stickClickIntercepted) outButtons &= ~stickClickBits;
     // Timestamp-guarded toggle: every fresh press alternates show/hide,
     // immune to repeated state packets or a stale debounce window.
+    debugPrint(
+      '[stickclick] down=$stickClickDown was=$_stickClickWasDown '
+      'mode=${widget.settings.streamStickClickMode.name} '
+      'visible=$_padOverlayVisible',
+    );
     if (stickClickDown && !_stickClickWasDown) {
       final now = DateTime.now();
       final last = _lastStickClickToggleAt;
       if (last == null ||
           now.difference(last) >= const Duration(milliseconds: 450)) {
         _lastStickClickToggleAt = now;
-        setState(() => _padOverlayVisible = !_padOverlayVisible);
+        widget.settings.streamPadVisible = !widget.settings.streamPadVisible;
+      } else {
+        debugPrint('[stickclick] suppressed by window');
       }
     }
     _stickClickWasDown = stickClickDown;
@@ -3205,7 +3210,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
                   // between them pass through to the video surface. Painted BELOW
                   // the chrome/stats/sidebar so the stream UI always stays on top
                   // and hit-tests first.
-                  if (widget.settings.streamGamepad && _padOverlayVisible)
+                  if (widget.settings.streamGamepad &&
+                      widget.settings.streamPadVisible)
                     Positioned(
                       left: 0,
                       right: 0,
@@ -4082,6 +4088,7 @@ class StreamSettingsSidebar extends StatelessWidget {
                         settings.streamGamepadShowDpad = true;
                         settings.streamGamepadShowFaceButtons = true;
                         settings.streamGamepadShowMenu = true;
+                        settings.streamPadVisible = true;
                       },
                     ),
                   ],

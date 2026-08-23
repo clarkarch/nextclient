@@ -34,6 +34,7 @@ class UserSettings extends ChangeNotifier {
   static const _keyStreamGamepadPosition = 'settings.stream.gamepadPosition';
   static const _keyStreamGamepadEdgePad = 'settings.stream.gamepadEdgePad';
   static const _keyStreamStickClickMode = 'settings.stream.stickClickMode';
+  static const _keyStreamPadVisible = 'settings.stream.padVisible';
   static const _keyStreamGamepadOpacity = 'settings.stream.gamepadOpacity';
   static const _keyStreamGamepadShowShoulders =
       'settings.stream.gamepadShowShoulders';
@@ -128,6 +129,7 @@ class UserSettings extends ChangeNotifier {
   double _streamGamepadPosition = 0.0;
   double _streamGamepadEdgePad = 12.0;
   StickClickMode _streamStickClickMode = StickClickMode.direct;
+  bool _streamPadVisible = true;
   double _streamGamepadOpacity = 1.0;
   bool _streamGamepadShowShoulders = true;
   bool _streamGamepadShowSticks = true;
@@ -226,6 +228,11 @@ class UserSettings extends ChangeNotifier {
   /// [StickClickMode.direct] forwards it to the game as a real stick click,
   /// [StickClickMode.togglePad] toggles the virtual gamepad overlay instead.
   StickClickMode get streamStickClickMode => _streamStickClickMode;
+
+  /// Virtual gamepad overlay visibility (toggled by L3/R3 in toggle mode).
+  /// Lives on [UserSettings] — the same notify/rebuild path as the other
+  /// show/hide element toggles, so hiding is guaranteed to stick.
+  bool get streamPadVisible => _streamPadVisible;
 
   /// Whether the shoulder/trigger row (LT/RT/LB/RB) is shown on the gamepad.
   bool get streamGamepadShowShoulders => _streamGamepadShowShoulders;
@@ -561,6 +568,13 @@ class UserSettings extends ChangeNotifier {
     if (_streamStickClickMode == v) return;
     _streamStickClickMode = v;
     _prefs.setString(_keyStreamStickClickMode, v.name);
+    notifyListeners();
+  }
+
+  set streamPadVisible(bool v) {
+    if (_streamPadVisible == v) return;
+    _streamPadVisible = v;
+    _prefs.setBool(_keyStreamPadVisible, v);
     notifyListeners();
   }
 
@@ -1340,6 +1354,7 @@ class UserSettings extends ChangeNotifier {
     _keyStreamGamepadPosition,
     _keyStreamGamepadEdgePad,
     _keyStreamStickClickMode,
+    _keyStreamPadVisible,
     _keyStreamGamepadOpacity,
     _keyStreamGamepadShowShoulders,
     _keyStreamGamepadShowSticks,
