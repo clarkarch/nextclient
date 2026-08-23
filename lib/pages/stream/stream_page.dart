@@ -3968,30 +3968,6 @@ class StreamSettingsSidebar extends StatelessWidget {
                       onChanged: (v) => settings.streamGamepadPosition = v,
                     ),
                     const SizedBox(height: 14),
-                    const _SidebarSubheader('STICK CLICK (L3/R3)'),
-                    Row(
-                      children: [
-                        _ModeButton(
-                          label: 'Direct',
-                          subtitle: 'to the stick',
-                          selected:
-                              settings.streamStickClickMode ==
-                              StickClickMode.direct,
-                          onTap: () => settings.streamStickClickMode =
-                              StickClickMode.direct,
-                        ),
-                        const SizedBox(width: 8),
-                        _ModeButton(
-                          label: 'Show pad',
-                          subtitle: 'L3/R3 buttons',
-                          selected:
-                              settings.streamStickClickMode ==
-                              StickClickMode.button,
-                          onTap: () => settings.streamStickClickMode =
-                              StickClickMode.button,
-                        ),
-                      ],
-                    ),
                     const SizedBox(height: 14),
                     _SliderRow(
                       label: 'Edge padding',
@@ -4057,14 +4033,28 @@ class StreamSettingsSidebar extends StatelessWidget {
                       value: settings.streamGamepadShowMenu,
                       onChanged: (v) => settings.streamGamepadShowMenu = v,
                     ),
-                    _ToggleRow(
-                      label: 'Stick click reveals pad (L3/R3)',
-                      value:
-                          settings.streamStickClickMode ==
-                          StickClickMode.button,
-                      onChanged: (v) => settings.streamStickClickMode = v
-                          ? StickClickMode.button
-                          : StickClickMode.direct,
+                    Row(
+                      children: [
+                        _ModeButton(
+                          label: 'Direct',
+                          subtitle: 'L3/R3 to game',
+                          selected:
+                              settings.streamStickClickMode ==
+                              StickClickMode.direct,
+                          onTap: () => settings.streamStickClickMode =
+                              StickClickMode.direct,
+                        ),
+                        const SizedBox(width: 8),
+                        _ModeButton(
+                          label: 'Show pad',
+                          subtitle: 'click opens this',
+                          selected:
+                              settings.streamStickClickMode ==
+                              StickClickMode.button,
+                          onTap: () => settings.streamStickClickMode =
+                              StickClickMode.button,
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 16),
                     const _SidebarSubheader('LOOK'),
