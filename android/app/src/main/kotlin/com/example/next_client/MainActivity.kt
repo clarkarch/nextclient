@@ -200,23 +200,27 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    private fun keyToFlag(keyCode: Int): Int =
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP -> DPAD_UP
-            KeyEvent.KEYCODE_DPAD_DOWN -> DPAD_DOWN
-            KeyEvent.KEYCODE_DPAD_LEFT -> DPAD_LEFT
-            KeyEvent.KEYCODE_DPAD_RIGHT -> DPAD_RIGHT
-            KeyEvent.KEYCODE_BUTTON_START -> START
-            KeyEvent.KEYCODE_BUTTON_SELECT -> BACK
-            KeyEvent.KEYCODE_BUTTON_L1 -> LB
-            KeyEvent.KEYCODE_BUTTON_R1 -> RB
-            KeyEvent.KEYCODE_BUTTON_A -> A
-            KeyEvent.KEYCODE_BUTTON_B -> B
-            KeyEvent.KEYCODE_BUTTON_X -> X
-            KeyEvent.KEYCODE_BUTTON_Y -> Y
-            KeyEvent.KEYCODE_BUTTON_MODE -> GUIDE
-            else -> 0
-        }
+        private fun keyToFlag(keyCode: Int): Int =
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> DPAD_UP
+                KeyEvent.KEYCODE_DPAD_DOWN -> DPAD_DOWN
+                KeyEvent.KEYCODE_DPAD_LEFT -> DPAD_LEFT
+                KeyEvent.KEYCODE_DPAD_RIGHT -> DPAD_RIGHT
+                KeyEvent.KEYCODE_BUTTON_START -> START
+                KeyEvent.KEYCODE_BUTTON_SELECT -> BACK
+                // Stick clicks (L3/R3): without these the events fall
+                // through to Flutter's keyboard path and get dropped.
+                KeyEvent.KEYCODE_BUTTON_THUMBL -> LS
+                KeyEvent.KEYCODE_BUTTON_THUMBR -> RS
+                KeyEvent.KEYCODE_BUTTON_L1 -> LB
+                KeyEvent.KEYCODE_BUTTON_R1 -> RB
+                KeyEvent.KEYCODE_BUTTON_A -> A
+                KeyEvent.KEYCODE_BUTTON_B -> B
+                KeyEvent.KEYCODE_BUTTON_X -> X
+                KeyEvent.KEYCODE_BUTTON_Y -> Y
+                KeyEvent.KEYCODE_BUTTON_MODE -> GUIDE
+                else -> 0
+            }
 
     // The FlutterView's own key handling consumes gamepad keycodes before the
     // Activity's onKeyDown is reached; dispatchKeyEvent is the first stop in
