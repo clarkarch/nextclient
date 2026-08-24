@@ -21,11 +21,12 @@ import 'device_login.dart'
     show DeviceTokenErrorResponse, exchangeDeviceCode, requestDeviceAuthorization;
 import 'oauth_flow.dart'
     show
+        OAuthBindException,
         buildAuthUrl,
         buildOAuthLoginContext,
         exchangeAuthorizationCode,
-        findAvailablePort,
-        waitForAuthorizationCode;
+        findAvailablePorts,
+        openAuthorizationUrlAndWaitForCode;
 import 'persisted_state.dart' show PersistedAccountState;
 import 'provider_discovery.dart' show ProviderDiscovery, normalizeProvider;
 import 'token_refresh.dart'
@@ -113,24 +114,47 @@ class AuthService {
       username: deps.username,
       port: 0, // resolved below
     );
-    final port = await findAvailablePort(
+
+    // Probe every configured callback port up front, then race the real bind
+    // across candidates: another process can steal a probed port between the
+    // availability check and the actual bind, so fall through to the next port
+    // instead of surfacing a raw socket error.
+    final candidatePorts = await findAvailablePorts(
       tryBind: (p) => _tryBind(p),
     );
+    if (candidatePorts.isEmpty) {
+      throw StateError('No available OAuth callback ports');
+    }
 
-    final authUrl = buildAuthUrl(
-      provider: provider,
-      challenge: context.challenge,
-      port: port,
-      deviceId: context.deviceId,
-      nonce: context.nonce,
-    );
-
-    final codePromise = waitForAuthorizationCode(
-      port,
-      timeout: const Duration(minutes: 2),
-    );
-    await deps.browserLauncher.openUrl(authUrl);
-    final code = await codePromise;
+    var code = '';
+    var port = -1;
+    Object? lastBindFailure;
+    for (final candidate in candidatePorts) {
+      try {
+        code = await openAuthorizationUrlAndWaitForCode(
+          authUrl: buildAuthUrl(
+            provider: provider,
+            challenge: context.challenge,
+            port: candidate,
+            deviceId: context.deviceId,
+            nonce: context.nonce,
+          ),
+          port: candidate,
+          timeout: const Duration(minutes: 2),
+          openExternal: deps.browserLauncher.openUrl,
+        );
+        port = candidate;
+        break;
+      } on OAuthBindException catch (error) {
+        // Bind failed before the browser was opened — safe to retry.
+        lastBindFailure = error;
+      }
+    }
+    if (port < 0) {
+      throw StateError(
+        lastBindFailure?.toString() ?? 'No available OAuth callback ports',
+      );
+    }
 
     final initialTokens = await exchangeAuthorizationCode(
       client: deps.httpClient,

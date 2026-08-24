@@ -1,5 +1,7 @@
+import 'dart:async' show Completer;
 import 'dart:convert' show JsonDecoder;
-import 'dart:io' show HttpServer, HttpStatus, InternetAddress;
+import 'dart:io'
+    show HttpServer, HttpRequest, HttpStatus, InternetAddress;
 
 import 'package:http/http.dart' as http;
 
@@ -69,25 +71,62 @@ String buildAuthUrl({
   return '$authEndpoint?$query';
 }
 
-/// Port of auth/oauthFlow.ts findAvailablePort
-Future<int> findAvailablePort({
+/// Abort signal for a pending OAuth callback wait — mirrors the AbortController
+/// wiring in auth/oauthFlow.ts openAuthorizationUrlAndWaitForCode.
+class OAuthCancelToken {
+  final Completer<void> _cancelled = Completer<void>();
+
+  Future<void> get whenCancelled => _cancelled.future;
+
+  bool get isCancelled => _cancelled.isCompleted;
+
+  void cancel() {
+    if (!_cancelled.isCompleted) _cancelled.complete();
+  }
+}
+
+/// Thrown when the local OAuth callback server cannot be bound, so callers can
+/// fall back to the next redirect port.
+class OAuthBindException implements Exception {
+  final int port;
+  final Object cause;
+
+  const OAuthBindException({required this.port, required this.cause});
+
+  @override
+  String toString() => 'Could not bind OAuth callback port $port: $cause';
+}
+
+/// Port of auth/oauthFlow.ts findAvailablePort — returns every configured
+/// redirect port that can currently be bound, in preference order.
+Future<List<int>> findAvailablePorts({
   required Future<int> Function(int port) tryBind,
 }) async {
+  final available = <int>[];
   for (final port in redirectPorts) {
-    if (await tryBind(port) == port) return port;
+    if (await tryBind(port) == port) available.add(port);
   }
-  throw StateError('No available OAuth callback ports');
+  return available;
 }
 
 /// Port of auth/oauthFlow.ts waitForAuthorizationCode — starts a local HTTP
 /// server on 127.0.0.1:port, waits for the OAuth redirect, extracts the code.
+/// The server is always torn down: on success, on a bad callback, on timeout,
+/// and when [cancelToken] fires.
 Future<String> waitForAuthorizationCode(
   int port, {
   required Duration timeout,
+  OAuthCancelToken? cancelToken,
 }) async {
-  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+  final HttpServer server;
+  try {
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+  } catch (cause) {
+    throw OAuthBindException(port: port, cause: cause);
+  }
 
-  final result = await server.first.then((request) async {
+  try {
+    final request = await _firstRequest(server, timeout, cancelToken);
     final uri = request.uri;
     final code = uri.queryParameters['code'];
     final error = uri.queryParameters['error'];
@@ -108,13 +147,56 @@ Future<String> waitForAuthorizationCode(
 
     if (code != null) return code;
     throw StateError(error ?? 'Authorization failed');
-  }).timeout(timeout, onTimeout: () {
-    server.close(force: true);
+  } finally {
+    await server.close(force: true);
+  }
+}
+
+Future<HttpRequest> _firstRequest(
+  HttpServer server,
+  Duration timeout,
+  OAuthCancelToken? cancelToken,
+) {
+  final requestFuture = server.first.timeout(timeout, onTimeout: () {
     throw StateError('Timed out waiting for OAuth callback');
   });
+  if (cancelToken == null) return requestFuture;
+  return Future.any([
+    requestFuture,
+    cancelToken.whenCancelled.then((_) {
+      throw StateError('OAuth login was cancelled.');
+    }),
+  ]);
+}
 
-  await server.close(force: true);
-  return result;
+/// Port of auth/oauthFlow.ts openAuthorizationUrlAndWaitForCode — opens the
+/// browser and awaits the OAuth redirect. If the browser cannot be opened, the
+/// callback wait is aborted immediately so the port is freed and no unhandled
+/// async error escapes.
+Future<String> openAuthorizationUrlAndWaitForCode({
+  required String authUrl,
+  required int port,
+  required Duration timeout,
+  required Future<void> Function(String url) openExternal,
+}) async {
+  final cancelToken = OAuthCancelToken();
+  final codeFuture = waitForAuthorizationCode(
+    port,
+    timeout: timeout,
+    cancelToken: cancelToken,
+  );
+  try {
+    await openExternal(authUrl);
+  } catch (_) {
+    cancelToken.cancel();
+    try {
+      await codeFuture;
+    } catch (_) {
+      // Expected: the wait was just cancelled.
+    }
+    rethrow;
+  }
+  return codeFuture;
 }
 
 /// Port of auth/oauthFlow.ts exchangeAuthorizationCode

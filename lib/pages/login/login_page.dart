@@ -369,6 +369,7 @@ class _QrLoginPage extends StatefulWidget {
 class _QrLoginPageState extends State<_QrLoginPage> {
   AuthDeviceLoginPollStatus? _status;
   String? _error;
+  String? _transientStatus;
   bool _polling = true;
 
   @override
@@ -377,37 +378,97 @@ class _QrLoginPageState extends State<_QrLoginPage> {
     _poll();
   }
 
-  Future<void> _poll() async {
-    while (mounted) {
-      final result = await widget.services.auth.pollDeviceLogin(
-        attemptId: widget.challenge.attemptId,
-        deviceCode: widget.challenge.deviceCode,
-      );
-      if (!mounted) return;
-      setState(() {
-        _status = result.status;
-        _error = result.error;
-      });
+  @override
+  void dispose() {
+    // Tear the attempt down server-side too so nothing keeps polling for a
+    // dead page.
+    widget.services.auth.cancelDeviceLogin(
+      attemptId: widget.challenge.attemptId,
+    );
+    super.dispose();
+  }
 
-      if (result.status == AuthDeviceLoginPollStatus.authorized) {
-        await widget.services.auth.completeDeviceLogin(
+  Future<void> _poll() async {
+    // Mirrors OpenNOW's renderer loop: sleep before each poll, back off +5s on
+    // slow_down (RFC 8628), survive transient network errors instead of dying
+    // silently, and stop locally once the challenge expires.
+    var intervalSeconds = widget.challenge.intervalSeconds;
+    final expiresAt = widget.challenge.expiresAt;
+    while (mounted && DateTime.now().millisecondsSinceEpoch < expiresAt) {
+      await Future<void>.delayed(Duration(seconds: intervalSeconds));
+      if (!mounted) return;
+
+      final AuthDeviceLoginPollResult result;
+      try {
+        result = await widget.services.auth.pollDeviceLogin(
           attemptId: widget.challenge.attemptId,
+          deviceCode: widget.challenge.deviceCode,
         );
+      } catch (_) {
         if (!mounted) return;
-        Navigator.of(context).pop();
-        widget.onAuthenticated();
-        return;
+        setState(() => _transientStatus = 'Connection problem — retrying...');
+        continue;
       }
-      if (result.status == AuthDeviceLoginPollStatus.expired ||
-          result.status == AuthDeviceLoginPollStatus.accessDenied ||
-          result.status == AuthDeviceLoginPollStatus.error) {
-        setState(() => _polling = false);
-        return;
+      if (!mounted) return;
+
+      switch (result.status) {
+        case AuthDeviceLoginPollStatus.authorized:
+          setState(() {
+            _transientStatus = null;
+            _status = result.status;
+            _error = result.error;
+          });
+          try {
+            await widget.services.auth.completeDeviceLogin(
+              attemptId: widget.challenge.attemptId,
+            );
+          } catch (e) {
+            if (!mounted) return;
+            setState(() {
+              _polling = false;
+              _status = AuthDeviceLoginPollStatus.error;
+              _error = 'Could not finish login: $e';
+            });
+            return;
+          }
+          if (!mounted) return;
+          Navigator.of(context).pop();
+          widget.onAuthenticated();
+          return;
+        case AuthDeviceLoginPollStatus.pending:
+          setState(() {
+            _transientStatus = null;
+            _status = result.status;
+            _error = result.error;
+          });
+          break;
+        case AuthDeviceLoginPollStatus.slowDown:
+          intervalSeconds += 5;
+          setState(() {
+            _transientStatus = null;
+            _status = result.status;
+            _error = result.error;
+          });
+          break;
+        case AuthDeviceLoginPollStatus.expired:
+        case AuthDeviceLoginPollStatus.accessDenied:
+        case AuthDeviceLoginPollStatus.error:
+          setState(() {
+            _transientStatus = null;
+            _status = result.status;
+            _error = result.error;
+            _polling = false;
+          });
+          return;
       }
-      await Future<void>.delayed(
-        Duration(seconds: widget.challenge.intervalSeconds),
-      );
     }
+
+    if (!mounted) return;
+    setState(() {
+      _polling = false;
+      _status = AuthDeviceLoginPollStatus.expired;
+      _error ??= 'QR login expired';
+    });
   }
 
   @override
@@ -459,7 +520,7 @@ class _QrLoginPageState extends State<_QrLoginPage> {
               ),
               const SizedBox(height: 20),
               Text(
-                _statusText(),
+                _transientStatus ?? _statusText(),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: _status == AuthDeviceLoginPollStatus.authorized
