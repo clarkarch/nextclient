@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../main.dart';
 import '../../theme/neon.dart';
@@ -189,9 +190,17 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 12),
                         NeonOutlineButton(
-                          label: 'Browser sign-in (may stall in background)',
+                          label: 'Browser sign-in',
                           icon: Icons.lock_open,
                           onPressed: _busy ? null : _loginBrowser,
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Browser sign-in can stall while the app is '
+                          'backgrounded — QR is more reliable.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: Neon.inkMuted, fontSize: 11, height: 1.3),
                         ),
                       ] else ...[
                         NeonButton(
@@ -530,14 +539,46 @@ class _QrLoginPageState extends State<_QrLoginPage> {
               ),
               const SizedBox(height: 20),
               const Text(
-                'Scan with your phone, or open the link:',
+                'Scan with your phone, or tap to open the link:',
                 style: TextStyle(color: Neon.inkSoft, fontSize: 13),
               ),
               const SizedBox(height: 8),
-              SelectableText(
-                widget.challenge.verificationUriComplete,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Neon.accent, fontSize: 12),
+              InkWell(
+                onTap: () async {
+                  final uri = Uri.tryParse(
+                    widget.challenge.verificationUriComplete,
+                  );
+                  if (uri == null) return;
+                  await launchUrl(
+                    uri,
+                    mode: LaunchMode.externalApplication,
+                  );
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: SelectableText(
+                          widget.challenge.verificationUriComplete,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Neon.accent,
+                            fontSize: 12,
+                            decoration: TextDecoration.underline,
+                            decorationColor: Neon.accent,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.open_in_new,
+                          size: 14, color: Neon.accent),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 8),
               NeonChip(
