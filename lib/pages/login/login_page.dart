@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -174,19 +176,38 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 16),
                       ],
-                      NeonButton(
-                        label: 'Sign in',
-                        icon: Icons.lock_open,
-                        wide: true,
-                        busy: _busy,
-                        onPressed: _loginBrowser,
-                      ),
-                      const SizedBox(height: 12),
-                      NeonOutlineButton(
-                        label: 'Device-code login',
-                        icon: Icons.qr_code,
-                        onPressed: _busy ? null : _startQr,
-                      ),
+                      // Android freezes backgrounded apps while the browser
+                      // handles the NVIDIA login, which can starve the
+                      // loopback OAuth callback — QR login (outbound polling
+                      // only) is the reliable path there, so it leads.
+                      if (Platform.isAndroid || Platform.isIOS) ...[
+                        NeonButton(
+                          label: 'Scan QR to sign in',
+                          icon: Icons.qr_code,
+                          wide: true,
+                          onPressed: _busy ? null : _startQr,
+                        ),
+                        const SizedBox(height: 12),
+                        NeonOutlineButton(
+                          label: 'Browser sign-in (may stall in background)',
+                          icon: Icons.lock_open,
+                          onPressed: _busy ? null : _loginBrowser,
+                        ),
+                      ] else ...[
+                        NeonButton(
+                          label: 'Sign in',
+                          icon: Icons.lock_open,
+                          wide: true,
+                          busy: _busy,
+                          onPressed: _loginBrowser,
+                        ),
+                        const SizedBox(height: 12),
+                        NeonOutlineButton(
+                          label: 'Device-code login',
+                          icon: Icons.qr_code,
+                          onPressed: _busy ? null : _startQr,
+                        ),
+                      ],
                       const SizedBox(height: 22),
                       Row(
                         children: [
@@ -391,10 +412,12 @@ class _QrLoginPageState extends State<_QrLoginPage> {
   Future<void> _poll() async {
     // Mirrors OpenNOW's renderer loop: sleep before each poll, back off +5s on
     // slow_down (RFC 8628), survive transient network errors instead of dying
-    // silently, and stop locally once the challenge expires.
+    // silently. Expiry is server-driven (expired_token) so phone clock skew
+    // cannot cut the attempt short; only a long run of failed round-trips
+    // (offline) ends the loop locally.
     var intervalSeconds = widget.challenge.intervalSeconds;
-    final expiresAt = widget.challenge.expiresAt;
-    while (mounted && DateTime.now().millisecondsSinceEpoch < expiresAt) {
+    var consecutiveFailures = 0;
+    while (mounted) {
       await Future<void>.delayed(Duration(seconds: intervalSeconds));
       if (!mounted) return;
 
@@ -405,11 +428,21 @@ class _QrLoginPageState extends State<_QrLoginPage> {
           deviceCode: widget.challenge.deviceCode,
         );
       } catch (_) {
+        consecutiveFailures++;
         if (!mounted) return;
+        if (consecutiveFailures >= 20) {
+          setState(() {
+            _polling = false;
+            _status = AuthDeviceLoginPollStatus.error;
+            _error = 'Connection lost — check your network and try again.';
+          });
+          return;
+        }
         setState(() => _transientStatus = 'Connection problem — retrying...');
         continue;
       }
       if (!mounted) return;
+      consecutiveFailures = 0;
 
       switch (result.status) {
         case AuthDeviceLoginPollStatus.authorized:
@@ -462,13 +495,6 @@ class _QrLoginPageState extends State<_QrLoginPage> {
           return;
       }
     }
-
-    if (!mounted) return;
-    setState(() {
-      _polling = false;
-      _status = AuthDeviceLoginPollStatus.expired;
-      _error ??= 'QR login expired';
-    });
   }
 
   @override

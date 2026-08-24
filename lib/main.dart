@@ -237,6 +237,7 @@ class AppServices {
         hostname: Platform.localHostname,
         username: Platform.environment['USER'] ?? 'unknown',
         isMac: isMac,
+        isMobile: Platform.isAndroid || Platform.isIOS,
       ),
     );
     await auth.initialize();

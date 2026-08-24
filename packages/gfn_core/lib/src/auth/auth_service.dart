@@ -51,6 +51,11 @@ class AuthServiceDeps {
   final String username;
   final bool isMac;
 
+  /// Mobile platforms freeze backgrounded processes (Cached Apps Freezer),
+  /// which stalls the OAuth callback listener while the browser does the
+  /// login. Mobile therefore gets a much wider callback window.
+  final bool isMobile;
+
   const AuthServiceDeps({
     required this.httpClient,
     required this.tokenStorage,
@@ -60,6 +65,7 @@ class AuthServiceDeps {
     required this.hostname,
     required this.username,
     required this.isMac,
+    this.isMobile = false,
   });
 }
 
@@ -129,6 +135,11 @@ class AuthService {
     var code = '';
     var port = -1;
     Object? lastBindFailure;
+    // Mobile: the app is background-frozen while Chrome handles the NVIDIA
+    // login, so give the callback a wide window to survive late unfreezes.
+    final callbackTimeout = deps.isMobile
+        ? const Duration(minutes: 10)
+        : const Duration(minutes: 2);
     for (final candidate in candidatePorts) {
       try {
         code = await openAuthorizationUrlAndWaitForCode(
@@ -140,7 +151,7 @@ class AuthService {
             nonce: context.nonce,
           ),
           port: candidate,
-          timeout: const Duration(minutes: 2),
+          timeout: callbackTimeout,
           openExternal: deps.browserLauncher.openUrl,
         );
         port = candidate;
