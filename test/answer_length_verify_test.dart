@@ -4,7 +4,14 @@ import 'package:next_client/state/gfn_sdp_munger.dart';
 
 void main() {
   test('post-munge lengths: no-direction vs sendonly', () {
-    final noDir = File('/tmp/gfn_munged2.sdp').readAsStringSync();
+    final fixture = File('/tmp/gfn_munged2.sdp');
+    final harness = File('/tmp/webrtc_neg_test');
+    if (!fixture.existsSync() || !harness.existsSync()) {
+      // Requires a live capture + the webrtc_neg_test harness in /tmp
+      // (see native/gst_bridge/tools). Skip on machines without them.
+      return;
+    }
+    final noDir = fixture.readAsStringSync();
     // Regenerate answers via subprocess: harness writes /tmp/answer.sdp
     // no-direction offer first
     Process.runSync('/tmp/webrtc_neg_test', ['/tmp/gfn_munged2.sdp']);

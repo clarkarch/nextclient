@@ -25,7 +25,13 @@ class NvstBridgeFfi {
   static _NvstFreePtrDart? _freePtrStatic;
   static _NvstFreeStringDart? _freeStrStatic;
 
+  /// C-side log trail collected synchronously while [probe] runs (the probe
+  /// invokes log_cb inline on the calling thread), so a probe failure is
+  /// self-diagnosing even when the verbose-logs sink is disabled.
+  static final List<String> _probeTrail = [];
+
   final NativeCallable<_NvstLogCb> _logCallable;
+  final NativeCallable<_NvstLogCb> _probeLogCallable;
   final NativeCallable<_NvstFrameCb> _frameCallable;
 
   final void Function(String message) onLog;
@@ -39,6 +45,8 @@ class NvstBridgeFfi {
     required this.onLog,
     required this.onFrame,
   })  : _logCallable = NativeCallable<_NvstLogCb>.listener(_logTrampoline),
+        _probeLogCallable =
+            NativeCallable<_NvstLogCb>.isolateLocal(_probeLogTrampoline),
         _frameCallable =
             NativeCallable<_NvstFrameCb>.listener(_frameTrampoline) {
     _probeFn = _lib.lookupFunction<_NvstProbeNative, _NvstProbeDart>(
@@ -83,6 +91,17 @@ class NvstBridgeFfi {
     _current?.onLog(text);
   }
 
+  /// Synchronous log sink for the blocking [probe] FFI call — runs inline on
+  /// the calling thread while C is on the stack.
+  static void _probeLogTrampoline(
+      Pointer<Void> userdata, Pointer<Utf8> message) {
+    final text = message.toDartString();
+    _freeStrStatic?.call(message);
+    if (_probeTrail.length < 64) {
+      _probeTrail.add(text);
+    }
+  }
+
   static void _frameTrampoline(Pointer<Void> userdata, int width, int height,
       int stride, Pointer<Uint8> rgba, int rtpTimestamp) {
     final current = _current;
@@ -93,20 +112,54 @@ class NvstBridgeFfi {
     current.onFrame(width, height, stride, rgba, rtpTimestamp);
   }
 
+  static const int _expectedAbiVersion = 5;
+
+  /// Verifies the loaded library's ABI matches this Dart binding before any
+  /// struct-crossing call. A stale .so beside a fresh Dart build (or the
+  /// reverse) previously crashed with heap corruption.
+  static void _checkAbi(DynamicLibrary lib) {
+    int version = 0;
+    try {
+      final fn = lib.lookupFunction<Int32 Function(), int Function()>(
+        'nvst_bridge_abi_version',
+      );
+      version = fn();
+    } catch (_) {
+      version = 0; // symbol absent → pre-ABI-version library
+    }
+    if (version != _expectedAbiVersion) {
+      throw StateError(
+        'libnvst_bridge.so ABI mismatch: library reports v$version but the '
+        'app was built for v$_expectedAbiVersion.\n'
+        'Rebuild both sides together:\n'
+        '  make -C native/nvst_bridge && flutter build linux --release\n'
+        '(or delete the stale build/linux bundle / .so whichever is old).',
+      );
+    }
+  }
+
   static DynamicLibrary _openLibrary() {
     final override = Platform.environment['NVST_BRIDGE_LIB'];
     if (override != null && override.isNotEmpty) {
-      return DynamicLibrary.open(override);
+      final lib = DynamicLibrary.open(override);
+      _checkAbi(lib);
+      return lib;
     }
     final tried = <String>[];
     for (final candidate in _libraryCandidates()) {
       tried.add(candidate.path);
       if (candidate.existsSync()) {
-        return DynamicLibrary.open(candidate.absolute.path);
+        final lib = DynamicLibrary.open(candidate.absolute.path);
+        _checkAbi(lib);
+        return lib;
       }
     }
     try {
-      return DynamicLibrary.open('libnvst_bridge.so');
+      final lib = DynamicLibrary.open('libnvst_bridge.so');
+      _checkAbi(lib);
+      return lib;
+    } on StateError {
+      rethrow;
     } catch (_) {
       throw StateError(
         'Could not find libnvst_bridge.so. Build it first:\n'
@@ -126,33 +179,45 @@ class NvstBridgeFfi {
 
   /// Runs the RTSP-over-WSS handshake. On success returns the negotiated video
   /// session params; on failure throws with the server's error text.
+  /// [fallbackWsUrl] is the session's signaling WebSocket (wss://host:443/nvst/)
+  /// — the probe falls back to it when the direct rtsps attempts fail.
   NvstVideoSessionParams probe({
     required String rtspsEndpoint,
     required String sessionId,
+    String fallbackWsUrl = '',
+    String authToken = '',
     required int width,
     required int height,
     required int fps,
     required String codec,
   }) {
     final endpoint = rtspsEndpoint.toNativeUtf8();
+    final fbWs = fallbackWsUrl.toNativeUtf8();
+    final authU = authToken.toNativeUtf8();
     final sid = sessionId.toNativeUtf8();
     final codecU = codec.toNativeUtf8();
     final result = calloc<NvstProbeResult>();
+    _probeTrail.clear();
     try {
       final rc = _probeFn(
         endpoint,
+        fbWs,
+        authU,
         sid,
         width,
         height,
         fps,
         codecU,
         result,
-        _logCallable.nativeFunction,
+        _probeLogCallable.nativeFunction,
         nullptr,
       );
       final res = result.ref;
       if (rc != 0 || res.ok == 0) {
-        throw StateError('NVST RTSP probe failed: ${_cstr(res.error, 256)}');
+        throw StateError(
+          'NVST RTSP probe failed: ${_cstr(res.error, 256)}\n'
+          '${_probeTrail.join('\n')}',
+        );
       }
       return NvstVideoSessionParams(
         clientUdpPort: res.client_udp_port,
@@ -162,11 +227,19 @@ class NvstBridgeFfi {
         srtpKeyId: res.srtp_key_id,
         pingPayload: _cstr(res.ping_payload, 64),
         codec: _cstr(res.codec, 8),
+        pingVersion: res.ping_version,
+        localIceUfrag: _cstr(res.local_ice_ufrag, 64),
+        localIcePwd: _cstr(res.local_ice_pwd, 128),
+        remoteIceUfrag: _cstr(res.remote_ice_ufrag, 64),
+        remoteIcePwd: _cstr(res.remote_ice_pwd, 128),
       );
     } finally {
-      malloc.free(endpoint);
-      malloc.free(sid);
-      malloc.free(codecU);
+      malloc
+        ..free(endpoint)
+        ..free(fbWs)
+        ..free(authU)
+        ..free(sid)
+        ..free(codecU);
       calloc.free(result);
     }
   }
@@ -183,6 +256,11 @@ class NvstBridgeFfi {
       _writeFixed(s.ref.codec, 8, session.codec);
       s.ref.video_peer_port = session.videoPeerPort;
       s.ref.srtp_key_id = session.srtpKeyId;
+      s.ref.ping_version = session.pingVersion;
+      _writeFixed(s.ref.local_ice_ufrag, 64, session.localIceUfrag);
+      _writeFixed(s.ref.local_ice_pwd, 128, session.localIcePwd);
+      _writeFixed(s.ref.remote_ice_ufrag, 64, session.remoteIceUfrag);
+      _writeFixed(s.ref.remote_ice_pwd, 128, session.remoteIcePwd);
 
       _bridge = _startFn(
         s,
@@ -211,6 +289,7 @@ class NvstBridgeFfi {
   void dispose() {
     stop();
     _logCallable.close();
+    _probeLogCallable.close();
     _frameCallable.close();
     if (identical(_current, this)) _current = null;
   }
@@ -251,6 +330,13 @@ class NvstVideoSessionParams {
   final int srtpKeyId;
   final String pingPayload;
   final String codec;
+  /// Negotiated ping protocol version (0/legacy = raw PING punch, 6 =
+  /// authenticated ICE/STUN punch using the credentials below).
+  final int pingVersion;
+  final String localIceUfrag;
+  final String localIcePwd;
+  final String remoteIceUfrag;
+  final String remoteIcePwd;
 
   const NvstVideoSessionParams({
     required this.clientUdpPort,
@@ -260,6 +346,11 @@ class NvstVideoSessionParams {
     required this.srtpKeyId,
     required this.pingPayload,
     required this.codec,
+    this.pingVersion = 0,
+    this.localIceUfrag = '',
+    this.localIcePwd = '',
+    this.remoteIceUfrag = '',
+    this.remoteIcePwd = '',
   });
 }
 
@@ -286,6 +377,16 @@ final class NvstProbeResult extends Struct {
   external Array<Uint8> ping_payload;
   @Array(8)
   external Array<Uint8> codec;
+  @Uint32()
+  external int ping_version;
+  @Array(64)
+  external Array<Uint8> local_ice_ufrag;
+  @Array(128)
+  external Array<Uint8> local_ice_pwd;
+  @Array(64)
+  external Array<Uint8> remote_ice_ufrag;
+  @Array(128)
+  external Array<Uint8> remote_ice_pwd;
 }
 
 final class NvstVideoSession extends Struct {
@@ -303,6 +404,16 @@ final class NvstVideoSession extends Struct {
   external Array<Uint8> ping_payload;
   @Array(8)
   external Array<Uint8> codec;
+  @Uint32()
+  external int ping_version;
+  @Array(64)
+  external Array<Uint8> local_ice_ufrag;
+  @Array(128)
+  external Array<Uint8> local_ice_pwd;
+  @Array(64)
+  external Array<Uint8> remote_ice_ufrag;
+  @Array(128)
+  external Array<Uint8> remote_ice_pwd;
 }
 
 typedef _NvstLogCb = Void Function(Pointer<Void> userdata, Pointer<Utf8> message);
@@ -311,6 +422,8 @@ typedef _NvstFrameCb = Void Function(Pointer<Void> userdata, Int32 width,
 
 typedef _NvstProbeNative = Int32 Function(
     Pointer<Utf8> rtsps_endpoint,
+    Pointer<Utf8> fallback_ws_url,
+    Pointer<Utf8> auth_token,
     Pointer<Utf8> session_id,
     Int32 width,
     Int32 height,
@@ -321,6 +434,8 @@ typedef _NvstProbeNative = Int32 Function(
     Pointer<Void> userdata);
 typedef _NvstProbeDart = int Function(
     Pointer<Utf8> rtsps_endpoint,
+    Pointer<Utf8> fallback_ws_url,
+    Pointer<Utf8> auth_token,
     Pointer<Utf8> session_id,
     int width,
     int height,

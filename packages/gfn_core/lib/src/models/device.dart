@@ -1,4 +1,4 @@
-enum GfnDeviceOs { windows, macOS, android, iOS }
+enum GfnDeviceOs { windows, macOS, linux, android, iOS }
 
 enum GfnDeviceType { desktop, console }
 
@@ -32,6 +32,8 @@ class GfnDeviceIdentity {
         return 'WINDOWS';
       case GfnDeviceOs.macOS:
         return 'MACOS';
+      case GfnDeviceOs.linux:
+        return 'LINUX';
       case GfnDeviceOs.android:
         return 'ANDROID';
       case GfnDeviceOs.iOS:

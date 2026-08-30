@@ -80,6 +80,7 @@ class CloudMatchService {
       enablePersistingInGameSettings: input.enablePersistingInGameSettings ?? false,
       supportsInGameSettingsPersistence:
           input.supportsInGameSettingsPersistence ?? false,
+      supportedCodecs: input.supportedCodecs,
     );
 
     final query = Uri(queryParameters: {

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show utf8;
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 import 'dart:math' show max, min;
 import 'dart:typed_data';
 
@@ -13,6 +13,7 @@ import 'package:gfn_core/gfn_core.dart';
 
 import 'gfn_cursor_overlay.dart';
 import 'gfn_input_protocol.dart';
+import 'gfn_sdp_munger.dart' show GfnSdpMunger, IceCredentials, RiInputCapabilities;
 import 'latency_guard.dart';
 import 'gfn_keyboard_mapping.dart';
 import 'process_env.dart' show applyDecoderBackend, applyRendererBackend;
@@ -140,6 +141,10 @@ class WebRtcStreamSession implements StreamTransport {
   @override
   int? get inputQueueBufferedBytes => _reliableInputChannel?.bufferedAmount;
 
+  @override
+  bool get canSendMousePartiallyReliable =>
+      _canUsePartiallyReliableInput(inputMouseRel);
+
   // --- Input transport state ---
   final GfnInputEncoder _inputEncoder = GfnInputEncoder();
   bool _inputReady = false;
@@ -172,9 +177,8 @@ class WebRtcStreamSession implements StreamTransport {
   static const int _defaultPartialReliableThresholdMs = 300;
   static const int _partiallyReliableGamepadMaskAll = (1 << 4) - 1;
   static const int _partiallyReliableHidDeviceMaskAll = 0xFFFFFFFF;
-  static const int _officialMinBitrateKbps = 4000;
-  static const int _highResolutionPixelCount = 2764800;
-  static const int _highBitratePacingThresholdKbps = 42000;
+  // Keep for _uncappedBitrateKbps reference; official min/pacing thresholds
+  // now live in GfnSdpMunger (single source of truth).
 
   /// b=AS value used in constant-quality mode: far above any GFN encode rate,
   /// so the SDP bandwidth attribute stops being a practical cap.
@@ -420,7 +424,8 @@ class WebRtcStreamSession implements StreamTransport {
 
       // 1. Point server ICE candidates at the WebRTC media endpoint from
       //    CloudMatch when one is present (usage 2 = WebRTC, 17 = WebRTC
-      //    fallback), fixing any 0.0.0.0 placeholders in the offer.
+      //    fallback), fixing any 0.0.0.0 placeholders and rewriting all
+      //    candidates to the media ip:port (mirrors webrtcbin_ffi + ice.ts).
       var processedOffer = sdp;
       final media = session.mediaConnectionInfo;
       if (media != null && (media.usage == 2 || media.usage == 17)) {
@@ -429,6 +434,17 @@ class WebRtcStreamSession implements StreamTransport {
           _log('Fixed server IP in SDP offer: ${media.ip}');
         }
         processedOffer = fixed;
+        if (media.port > 0) {
+          final rewritten = GfnSdpMunger.rewriteIceCandidateEndpoints(
+            processedOffer,
+            media.ip,
+            media.port,
+          );
+          if (rewritten != processedOffer) {
+            _log('Rewrote ICE candidates to ${media.ip}:${media.port}');
+          }
+          processedOffer = rewritten;
+        }
       }
 
       // 2. Filter the offer to the requested codec so the negotiated codec
@@ -502,6 +518,11 @@ class WebRtcStreamSession implements StreamTransport {
         constantQuality: settings.optConstantQuality,
       );
 
+      // Dump the exact on-wire answer for offline diffing against the
+      // webrtcbin transport (/tmp/gfn_webrtcbin_answer.sdp).
+      try {
+        File('/tmp/gfn_libwebrtc_answer.sdp').writeAsStringSync(finalSdp);
+      } catch (_) {}
       await _signaling?.sendAnswer(
         SendAnswerRequest(sdp: finalSdp, nvstSdp: nvstSdp),
       );
@@ -1262,11 +1283,6 @@ class WebRtcStreamSession implements StreamTransport {
     VideoCodec.av1 => 'AV1',
   };
 
-  String _normalizeCodec(String name) {
-    final upper = name.toUpperCase();
-    return upper == 'HEVC' ? 'H265' : upper;
-  }
-
   (int, int) _parseResolution(String resolution) {
     final parts = resolution.split('x');
     final width = int.tryParse(parts.isNotEmpty ? parts[0] : '') ?? 0;
@@ -1345,100 +1361,21 @@ class WebRtcStreamSession implements StreamTransport {
     return sdp.replaceAllMapped(re, (m) => '${m.group(1)}$ip${m.group(2)}');
   }
 
-  /// Port of OpenNOW's preferCodec(): hard-filter the offer SDP down to the
-  /// requested video codec so the negotiated answer matches nvstSdp.
+  /// Soft preferCodec for the flutter path — reorders so the requested codec
+  /// is first but keeps fallbacks (matches OpenNOW's keepFallbacks:true web
+  /// behavior). Prevents the `m=video 0` hang when the decoder can't handle
+  /// the primary. Delegates to [GfnSdpMunger] (single source of truth).
   String _preferCodec(String sdp, String codec) {
-    final normalized = _normalizeCodec(codec);
-    final lineEnding = sdp.contains('\r\n') ? '\r\n' : '\n';
-    final lines = sdp.split(RegExp(r'\r?\n'));
-
-    final payloadTypesByCodec = <String, List<String>>{};
-    final codecByPayloadType = <String, String>{};
-    final rtxAptByPayloadType = <String, String>{};
-
-    var inVideo = false;
-    for (final line in lines) {
-      if (line.startsWith('m=video')) {
-        inVideo = true;
-        continue;
-      }
-      if (line.startsWith('m=') && inVideo) inVideo = false;
-      if (!inVideo || !line.startsWith('a=rtpmap:')) continue;
-
-      final parts = line.substring('a=rtpmap:'.length).split(RegExp(r'\s+'));
-      final pt = parts.isNotEmpty ? parts[0] : '';
-      final codecName = _normalizeCodec(
-        (parts.length > 1 ? parts[1].split('/').first : '').trim(),
-      );
-      if (pt.isEmpty || codecName.isEmpty) continue;
-      (payloadTypesByCodec[codecName] ??= []).add(pt);
-      codecByPayloadType[pt] = codecName;
-    }
-
-    inVideo = false;
-    for (final line in lines) {
-      if (line.startsWith('m=video')) {
-        inVideo = true;
-        continue;
-      }
-      if (line.startsWith('m=') && inVideo) inVideo = false;
-      if (!inVideo || !line.startsWith('a=fmtp:')) continue;
-
-      final parts = line.substring('a=fmtp:'.length).split(RegExp(r'\s+'));
-      final pt = parts.isNotEmpty ? parts[0] : '';
-      final params = parts.length > 1 ? parts[1] : '';
-      if (pt.isEmpty || params.isEmpty) continue;
-      final apt = RegExp(
-        r'(?:^|;)\s*apt=(\d+)',
-        caseSensitive: false,
-      ).firstMatch(params)?.group(1);
-      if (apt != null) rtxAptByPayloadType[pt] = apt;
-    }
-
-    final preferredPayloads = payloadTypesByCodec[normalized] ?? [];
-    if (preferredPayloads.isEmpty) return sdp;
-
-    final preferred = preferredPayloads.toSet();
-    final allowed = <String>{...preferred};
-    // Keep RTX payloads linked to preferred payloads (apt mapping).
-    for (final entry in rtxAptByPayloadType.entries) {
-      if (preferred.contains(entry.value) &&
-          codecByPayloadType[entry.key] == 'RTX') {
-        allowed.add(entry.key);
-      }
-    }
-
-    final filtered = <String>[];
-    inVideo = false;
-    for (final line in lines) {
-      if (line.startsWith('m=video')) {
-        inVideo = true;
-        final parts = line.split(RegExp(r'\s+'));
-        final header = parts.take(3).toList();
-        final available = parts.skip(3).where(allowed.contains).toList();
-        final ordered = <String>[
-          ...preferredPayloads.where(available.contains),
-          ...available.where((pt) => !preferred.contains(pt)),
-        ];
-        filtered.add(
-          ordered.isNotEmpty ? [...header, ...ordered].join(' ') : line,
-        );
-        continue;
-      }
-      if (line.startsWith('m=') && inVideo) inVideo = false;
-      if (inVideo &&
-          (line.startsWith('a=rtpmap:') ||
-              line.startsWith('a=fmtp:') ||
-              line.startsWith('a=rtcp-fb:'))) {
-        final pt =
-            line.split(':').elementAtOrNull(1)?.split(RegExp(r'\s+')).first ??
-            '';
-        if (pt.isNotEmpty && !allowed.contains(pt)) continue;
-      }
-      filtered.add(line);
-    }
-
-    return filtered.join(lineEnding);
+    final isH265 = codec.toUpperCase() == 'H265' || codec.toUpperCase() == 'HEVC';
+    final preferProfile = isH265
+        ? (settings.colorQuality.bitDepth == 1 ? 2 : 1)
+        : null;
+    return GfnSdpMunger.preferCodec(
+      sdp,
+      codec,
+      keepFallbacks: true,
+      preferHevcProfileId: preferProfile,
+    );
   }
 
   /// Port of OpenNOW's mungeAnswerSdp(): inject b=AS bitrate limits after
@@ -1488,9 +1425,9 @@ class WebRtcStreamSession implements StreamTransport {
     );
   }
 
-  /// Port of OpenNOW's buildNvstSdp(): the fake-SDP capability blob NVIDIA's
-  /// streamer requires in the answer so it knows the client's viewport,
-  /// bitrate budget, encoder preferences, and input-channel capabilities.
+  /// Delegates to [GfnSdpMunger.buildNvstSdp] (single source of truth).
+  /// Keeps the flutter_webrtc and webrtcbin transports byte-identical for the
+  /// same settings — drift between them shows up as silent video on one path.
   String _buildNvstSdp({
     required int width,
     required int height,
@@ -1508,299 +1445,34 @@ class WebRtcStreamSession implements StreamTransport {
     bool enableFec = true,
     bool constantQuality = false,
   }) {
-    final maxBitrate = max(_officialMinBitrateKbps, maxBitrateKbps.floor());
-    // Constant quality starts the encoder at the full budget (no slow ramp
-    // from max/4) — there's no adaptive BWE to ramp up against.
-    final startupBitrate = constantQuality
-        ? maxBitrate
-        : max(_officialMinBitrateKbps, (maxBitrate / 4).round());
-    final isHighFps = fps >= 90;
-    final is90Fps = fps == 90;
-    final is120Fps = fps == 120;
-    final is240Fps = fps >= 240;
-    final isAv1 = codec == 'AV1';
-    final pixelCount = width * height;
-    final useHighThroughputPacing =
-        pixelCount >= _highResolutionPixelCount ||
-        maxBitrate >= _highBitratePacingThresholdKbps;
-    final supportsHighBitDepth = codec == 'H265' || codec == 'AV1';
-    final bitDepth = supportsHighBitDepth && colorQuality.startsWith('10bit')
-        ? 10
-        : 8;
-    final minTargetFrameTimeUs = max(
-      1000,
-      // Low-latency mode tightens the server's target frame time (95% -> 60%)
-      // so the encoder/sender holds less buffered video ahead of the display.
-      (1000000 * (lowLatencyMode ? 60 : 95) ~/ (max(1, fps) * 100)),
+    return GfnSdpMunger.buildNvstSdp(
+      width: width,
+      height: height,
+      fps: fps,
+      maxBitrateKbps: maxBitrateKbps,
+      codec: codec,
+      colorQuality: colorQuality,
+      credentials: IceCredentials(
+        ufrag: credentials.ufrag,
+        pwd: credentials.pwd,
+        fingerprint: credentials.fingerprint,
+      ),
+      caps: RiInputCapabilities(
+        partialReliableThresholdMs: caps.partialReliableThresholdMs,
+        hidDeviceMask: caps.hidDeviceMask,
+        enablePartiallyReliableTransferGamepad:
+            caps.enablePartiallyReliableTransferGamepad,
+        enablePartiallyReliableTransferHid:
+            caps.enablePartiallyReliableTransferHid,
+      ),
+      priority: priority,
+      lowLatencyMode: lowLatencyMode,
+      recoveryProfile: recoveryProfile,
+      minBitrateKbps: minBitrateKbps,
+      enableNack: enableNack,
+      enableFec: enableFec,
+      constantQuality: constantQuality,
     );
-    final (
-      nackQueueLength,
-      nackQueueMaxPackets,
-      nackMaxPacketCount,
-    ) = switch (recoveryProfile) {
-      StreamRecoveryProfile.smooth => (1024, 512, 25),
-      StreamRecoveryProfile.balanced => (512, 256, 16),
-      StreamRecoveryProfile.latency => (256, 128, 8),
-    };
-    final preemptiveIdr = recoveryProfile == StreamRecoveryProfile.latency;
-    final hidDeviceMask = caps.hidDeviceMask;
-    final enablePartiallyReliableTransferGamepad =
-        caps.enablePartiallyReliableTransferGamepad;
-    final enablePartiallyReliableTransferHid =
-        caps.enablePartiallyReliableTransferHid;
-
-    // Experimental server-side adaptation policy. The official profile locks
-    // resolution (dynamicStreamingMode:0, minResolutionPercent:100, CPM off)
-    // and only drops decode FPS on high-FPS sessions. The alternative presets
-    // ask the server to adapt differently under load — unverified against the
-    // live server, so they only affect new sessions and may be ignored.
-    final allowResolutionScaling =
-        priority == StreamPriority.balanced || priority == StreamPriority.fps;
-    final fpsFirst = priority == StreamPriority.fps;
-    final minResolutionPercent = switch (priority) {
-      StreamPriority.quality => 100,
-      StreamPriority.balanced => 60,
-      StreamPriority.fps => 40,
-    };
-    final dfcEnable = isHighFps || priority != StreamPriority.quality;
-
-    final lines = <String>[
-      'v=0',
-      'o=SdpTest test_id_13 14 IN IPv4 127.0.0.1',
-      's=-',
-      't=0 0',
-      'a=general.icePassword:${credentials.pwd}',
-      'a=general.iceUserNameFragment:${credentials.ufrag}',
-      'a=general.dtlsFingerprint:${credentials.fingerprint}',
-      'm=video 0 RTP/AVP',
-      'a=msid:fbc-video-0',
-      // Official dynamicStreamingMode=0 path disables server resolution/FPS
-      // switching. The experimental presets re-enable resolution adaptation.
-      'a=vqos.dynamicStreamingMode:${allowResolutionScaling ? 1 : 0}',
-      'a=vqos.drc.enable:0',
-      'a=vqos.calculateAvgVideoStreamingBitrate:1',
-    ];
-
-    if (enableFec) {
-      lines.addAll([
-        // Match the stable Android-native recovery profile. Large FEC/NACK
-        // bursts amplify congestion after packet loss instead of letting BWE
-        // recover.
-        'a=vqos.fec.rateDropWindow:10',
-        'a=vqos.fec.minRequiredFecPackets:2',
-        'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
-        'a=vqos.fec.repairMinPercent:5',
-        'a=vqos.fec.repairPercent:5',
-        'a=vqos.fec.repairMaxPercent:35',
-      ]);
-    }
-
-    if (dfcEnable) {
-      lines.addAll([
-        'a=vqos.dfc.enable:1',
-        'a=vqos.dfc.decodeFpsAdjPercent:${fpsFirst ? 95 : 85}',
-        'a=vqos.dfc.targetDownCooldownMs:250',
-        'a=vqos.dfc.dfcAlgoVersion:${is120Fps || is240Fps ? 2 : 1}',
-        'a=vqos.dfc.minTargetFps:${is120Fps || is240Fps ? 100 : 60}',
-        'a=vqos.resControl.dfc.useClientFpsPerf:0',
-        'a=vqos.dfc.adjustResAndFps:${allowResolutionScaling ? 1 : 0}',
-      ]);
-    } else {
-      lines.addAll(['a=vqos.dfc.enable:0', 'a=vqos.dfc.adjustResAndFps:0']);
-    }
-
-    lines.addAll([
-      'a=video.dx9EnableNv12:1',
-      'a=video.dx9EnableHdr:1',
-      'a=vqos.qpg.enable:1',
-      'a=vqos.resControl.qp.qpg.featureSetting:7',
-      'a=video.adaptiveQuantization.spatialAQSetting:7',
-      'a=video.adaptiveQuantization.temporalAQSetting:0',
-      'a=video.adaptiveQuantization.spatialAQStrength:12',
-      'a=video.adaptiveQuantization.qpThresholdAdjPercent:2',
-      'a=video.adaptiveQuantization.saqAdaptMinQpThresholdPercent:40',
-      'a=video.adaptiveQuantization.saqAdaptMaxQpThresholdPercent:100',
-      'a=video.adaptiveQuantization.saqAdaptDecayStrengthX100:250',
-      'a=video.adaptiveQuantization.perfAdjEnablement:1',
-      'a=video.framePacing.mode:2',
-      'a=video.framePacing.pid.minTargetFrameTimeUs:$minTargetFrameTimeUs',
-      'a=bwe.useOwdCongestionControl:1',
-      'a=video.enableRtpNack:${enableNack ? 1 : 0}',
-      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:${lowLatencyMode ? 100 : 200}',
-      'a=vqos.drc.bitrateIirFilterFactor:18',
-      'a=video.packetSize:1140',
-      // Official packet pacing profile (Nvsc dumps + DESCRIBE enableAccurateSleep).
-      'a=packetPacing.version:3',
-      'a=packetPacing.mode:1',
-      'a=packetPacing.minNumPacketsPerGroup:15',
-      'a=packetPacing.enableAccurateSleep:1',
-      'a=packetPacing.enableSmoothTransition:1',
-      'a=packetPacing.allowFpsBasedToggle:1',
-      'a=vqos.relaxMaxBitrate.overrideAvgBitrateThresholdPercent:4',
-      'a=vqos.relaxMaxBitrate.customAvgBitrateThresholdPercent:65',
-      'a=vqos.relaxMaxBitrate.overrideAvgQpThresholdPercent:7',
-      'a=vqos.relaxMaxBitrate.customAvgQpThresholdPercent:51',
-      'a=vqos.relaxMaxBitrate.iirFilterFactor:120',
-      'a=vqos.qpDelta.qpDeltaMaxPercent:10',
-      'a=vqos.qpDelta.qpDeltaSurfaceAdjustmentStrengthPercent:70',
-      'a=vqos.qpDelta.qpDeltaVbvUsageFactorPercentH264:100',
-      'a=vqos.qpDelta.qpDeltaVbvUsageFactorPercentH265:100',
-      'a=vqos.qpDelta.qpDeltaVbvUsageFactorPercentAv1:100',
-      'a=vqos.qpDelta.qpDeltaMinPercent:60',
-      'a=vqos.qpDelta.qpDeltaIirFactor:60',
-      'a=vqos.qpDelta.qpDeltaThrottlePercent:100',
-    ]);
-
-    if (isHighFps) {
-      lines.addAll([
-        'a=bwe.iirFilterFactor:8',
-        'a=video.encoderFeatureSetting:47',
-        'a=video.encoderPreset:6',
-        'a=vqos.resControl.cpmRtc.badNwSkipFramesCount:600',
-        'a=vqos.resControl.cpmRtc.decodeTimeThresholdMs:${is90Fps ? 11 : 9}',
-        'a=video.fbcDynamicFpsGrabTimeoutMs:${is90Fps
-            ? 9
-            : is120Fps
-            ? 6
-            : 18}',
-        'a=vqos.resControl.cpmRtc.serverResolutionUpdateCoolDownCount:${is120Fps ? 6000 : 12000}',
-      ]);
-    }
-
-    if (is240Fps) {
-      lines.addAll([
-        'a=video.enableNextCaptureMode:1',
-        'a=vqos.maxStreamFpsEstimate:240',
-        // Official 240 FPS DESCRIBE uses 63 strips (not the older web-client
-        // value of 3).
-        'a=video.videoSplitEncodeStripsPerFrame:63',
-        'a=video.updateSplitEncodeStateDynamically:1',
-        'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:65535',
-        'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:65535',
-      ]);
-    }
-
-    lines.addAll([
-      'a=vqos.adjustStreamingFpsDuringOutOfFocus:1',
-      'a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1',
-      'a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1',
-      // Experimental: disable CPM resolution changes (prevents SSRC switches)
-      // unless a scaling preset is active.
-      'a=vqos.resControl.cpmRtc.featureMask:${allowResolutionScaling ? 1 : 0}',
-      'a=vqos.resControl.cpmRtc.enable:${allowResolutionScaling ? 1 : 0}',
-      // Never scale down resolution on the default quality profile.
-      'a=vqos.resControl.cpmRtc.minResolutionPercent:$minResolutionPercent',
-      // Infinite cooldown on quality (prevents resolution changes); shorter on
-      // scaling presets.
-      'a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:${allowResolutionScaling ? 5000 : 999999}',
-    ]);
-
-    lines.addAll([
-      'a=packetPacing.numGroups:${is120Fps ? 3 : 5}',
-      'a=packetPacing.maxDelayUs:${lowLatencyMode ? 500 : 1000}',
-      'a=packetPacing.minNumPacketsFrame:10',
-      'a=video.rtpNackQueueLength:$nackQueueLength',
-      'a=video.rtpNackQueueMaxPackets:$nackQueueMaxPackets',
-      'a=video.rtpNackMaxPacketCount:$nackMaxPacketCount',
-    ]);
-
-    // Latency recovery profile asks for a fresh keyframe as soon as a burst of
-    // loss hits instead of waiting on slow deep retransmits. Skipped on 240 FPS
-    // where the high-FPS block already pins the preemptive-IDR thresholds.
-    if (preemptiveIdr && !is240Fps) {
-      lines.addAll([
-        'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:1',
-        'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:1000',
-      ]);
-    }
-
-    if (useHighThroughputPacing) {
-      lines.add('a=vqos.drc.iirFilterFactor:100');
-      if (!isAv1) {
-        lines.addAll([
-          'a=vqos.drc.qpMaxResThresholdAdj:4',
-          'a=vqos.dfc.qpMaxResThresholdAdj:4',
-          'a=vqos.grc.qpMaxResThresholdAdj:2',
-        ]);
-      }
-    }
-
-    if (isAv1) {
-      final av1QpMaxResThresholdAdj = useHighThroughputPacing ? 20 : 0;
-      lines.addAll([
-        'a=vqos.drc.minQpHeadroom:20',
-        'a=vqos.drc.lowerQpThreshold:100',
-        'a=vqos.drc.upperQpThreshold:200',
-        'a=vqos.drc.minAdaptiveQpThreshold:180',
-        'a=vqos.drc.qpMaxResThresholdAdj:$av1QpMaxResThresholdAdj',
-        'a=vqos.drc.qpCodecThresholdAdj:0',
-        'a=vqos.dfc.minQpHeadroom:20',
-        'a=vqos.dfc.qpLowerLimit:100',
-        'a=vqos.dfc.qpMaxUpperLimit:200',
-        'a=vqos.dfc.qpMinUpperLimit:180',
-        'a=vqos.dfc.qpMaxResThresholdAdj:$av1QpMaxResThresholdAdj',
-        'a=vqos.dfc.qpCodecThresholdAdj:0',
-        'a=vqos.grc.minQpHeadroom:20',
-        'a=vqos.grc.lowerQpThreshold:100',
-        'a=vqos.grc.upperQpThreshold:200',
-        'a=vqos.grc.minAdaptiveQpThreshold:180',
-        'a=vqos.grc.qpMaxResThresholdAdj:$av1QpMaxResThresholdAdj',
-        'a=vqos.grc.qpCodecThresholdAdj:0',
-        'a=video.minQp:25',
-        'a=video.enableAv1RcPrecisionFactor:1',
-      ]);
-    }
-
-    lines.addAll([
-      'a=video.clientViewportWd:$width',
-      'a=video.clientViewportHt:$height',
-      'a=video.maxFPS:$fps',
-      'a=video.initialBitrateKbps:$startupBitrate',
-      'a=video.initialPeakBitrateKbps:$startupBitrate',
-      'a=vqos.bw.maximumBitrateKbps:$maxBitrate',
-      'a=vqos.bw.minimumBitrateKbps:$minBitrateKbps',
-      'a=vqos.bw.peakBitrateKbps:$maxBitrate',
-      'a=vqos.bw.serverPeakBitrateKbps:$maxBitrate',
-      // Constant quality: disable the server's adaptive bandwidth estimation
-      // and bitrate limiting so the encode bitrate holds at the max even in
-      // complex scenes (no quality shed on feedback). Default: adaptive.
-      'a=vqos.bw.enableBandwidthEstimation:${constantQuality ? 0 : 1}',
-      'a=vqos.bw.disableBitrateLimit:${constantQuality ? 1 : 0}',
-      'a=vqos.grc.maximumBitrateKbps:$maxBitrate',
-      'a=vqos.grc.enable:0',
-      'a=video.maxNumReferenceFrames:4',
-      'a=video.mapRtpTimestampsToFrames:1',
-      'a=video.encoderCscMode:3',
-      'a=video.dynamicRangeMode:0',
-      'a=video.bitDepth:$bitDepth',
-      'a=video.scalingFeature1:${isAv1 ? 1 : 0}',
-      'a=video.prefilterParams.prefilterModel:0',
-      // Audio track (receive-only from server).
-      'm=audio 0 RTP/AVP',
-      'a=msid:audio',
-      'a=aqos.enableRedundancy:1',
-      'a=aqos.redundancyLevel:2',
-      'a=aqos.enableRedundancyForMic:1',
-      'a=aqos.redundancyLevelForMic:3',
-      'a=audio.enableDynamicAudioConfig:1',
-      'a=audio.enableTimestampAudioBuffer:1',
-      // Mic track (send to server).
-      'm=mic 0 RTP/AVP',
-      'a=msid:mic',
-      'a=rtpmap:0 PCMU/8000',
-      // Input/application track.
-      'm=application 0 RTP/AVP',
-      'a=msid:input_1',
-      'a=ri.partialReliableThresholdMs:${caps.partialReliableThresholdMs}',
-      'a=ri.hidDeviceMask:$hidDeviceMask',
-      'a=ri.enablePartiallyReliableTransferGamepad:$enablePartiallyReliableTransferGamepad',
-      'a=ri.enablePartiallyReliableTransferHid:$enablePartiallyReliableTransferHid',
-      'a=ri.timestampsEnabled:1',
-      'a=ri.useMultipleGamepads:1',
-      '',
-    ]);
-
-    return lines.join('\n');
   }
 
   /// Tears down signaling, the peer connection, and the renderer. Never

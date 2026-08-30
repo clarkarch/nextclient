@@ -40,9 +40,11 @@ String gfnJwtAuthorization(String token) => 'GFNJWT $token';
 String bearerAuthorization(String token) => 'Bearer $token';
 
 /// Port of deviceIdentity.ts DESKTOP_IDENTITY_BY_PLATFORM — desktop always
-/// uses clientPlatformName "windows" even on Linux/macOS (matching OpenNOW).
+/// uses clientPlatformName "windows" even on Linux/macOS (matching OpenNOW),
+/// but nv-device-os must match the host OS (WINDOWS/MACOS/LINUX).
 class DeviceIdentityResolver {
-  static const _linux = GfnDeviceIdentity(
+  // ignore: unused_field - kept for completeness (Windows target)
+  static const _windows = GfnDeviceIdentity(
     deviceOs: GfnDeviceOs.windows,
     deviceType: GfnDeviceType.desktop,
     deviceMake: 'UNKNOWN',
@@ -50,7 +52,21 @@ class DeviceIdentityResolver {
     clientPlatformName: 'windows',
   );
 
-  static const _desktopIdentity = _linux;
+  static const _macos = GfnDeviceIdentity(
+    deviceOs: GfnDeviceOs.macOS,
+    deviceType: GfnDeviceType.desktop,
+    deviceMake: 'UNKNOWN',
+    deviceModel: 'UNKNOWN',
+    clientPlatformName: 'windows',
+  );
+
+  static const _linux = GfnDeviceIdentity(
+    deviceOs: GfnDeviceOs.linux,
+    deviceType: GfnDeviceType.desktop,
+    deviceMake: 'UNKNOWN',
+    deviceModel: 'UNKNOWN',
+    clientPlatformName: 'windows',
+  );
 
   static const steamDeckIdentity = GfnDeviceIdentity(
     deviceOs: GfnDeviceOs.windows,
@@ -60,8 +76,18 @@ class DeviceIdentityResolver {
     clientPlatformName: 'SteamOS',
   );
 
-  GfnDeviceIdentity resolve({bool identifyAsSteamDeck = false}) {
-    return identifyAsSteamDeck ? steamDeckIdentity : _desktopIdentity;
+  GfnDeviceIdentity resolve({
+    bool identifyAsSteamDeck = false,
+    bool isMac = false,
+    bool isLinux = false,
+  }) {
+    if (identifyAsSteamDeck) return steamDeckIdentity;
+    if (isMac) return _macos;
+    if (isLinux) return _linux;
+    // Default to linux identity when platform is unknown — matches next_client
+    // target (Linux/Android). Keep WINDOWS available via explicit flag if needed.
+    // Use caller-supplied isMac/isLinux; unknown falls through to _linux.
+    return _linux;
   }
 }
 
@@ -146,8 +172,10 @@ Map<String, String> buildGfnLcarsHeaders(
   required bool isMac,
   bool identifyAsSteamDeck = false,
 }) {
-  final identity =
-      DeviceIdentityResolver().resolve(identifyAsSteamDeck: identifyAsSteamDeck);
+  final identity = DeviceIdentityResolver().resolve(
+    identifyAsSteamDeck: identifyAsSteamDeck,
+    isMac: isMac,
+  );
   final headers = <String, String>{
     'Accept': options.accept ?? 'application/json',
   };
@@ -177,8 +205,10 @@ Map<String, String> buildGfnGraphQlHeaders(
   required bool isMac,
   bool identifyAsSteamDeck = false,
 }) {
-  final identity =
-      DeviceIdentityResolver().resolve(identifyAsSteamDeck: identifyAsSteamDeck);
+  final identity = DeviceIdentityResolver().resolve(
+    identifyAsSteamDeck: identifyAsSteamDeck,
+    isMac: isMac,
+  );
   final headers = <String, String>{
     'Accept': 'application/json, text/plain, */*',
     'Content-Type': 'application/json',
@@ -232,8 +262,10 @@ Map<String, String> buildGfnCloudMatchHeaders(
   GfnCloudMatchHeadersOptions options, {
   required bool isMac,
 }) {
-  final identity = DeviceIdentityResolver()
-      .resolve(identifyAsSteamDeck: options.identifyAsSteamDeck);
+  final identity = DeviceIdentityResolver().resolve(
+    identifyAsSteamDeck: options.identifyAsSteamDeck,
+    isMac: isMac,
+  );
   final headers = <String, String>{
     'User-Agent': gfnUserAgentForPlatform(isMac: isMac),
     'Authorization': gfnJwtAuthorization(options.token),
@@ -258,8 +290,10 @@ Map<String, String> buildGfnCloudMatchClaimHeaders(
   GfnCloudMatchHeadersOptions options, {
   required bool isMac,
 }) {
-  final identity = DeviceIdentityResolver()
-      .resolve(identifyAsSteamDeck: options.identifyAsSteamDeck);
+  final identity = DeviceIdentityResolver().resolve(
+    identifyAsSteamDeck: options.identifyAsSteamDeck,
+    isMac: isMac,
+  );
   final headers = <String, String>{
     'User-Agent': gfnUserAgentForPlatform(isMac: isMac),
     'Authorization': gfnJwtAuthorization(options.token),

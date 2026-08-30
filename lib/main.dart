@@ -185,6 +185,12 @@ class AppServices {
     this._fileLogSink,
   });
 
+  /// Clears the cached subscription — called when auth refreshes or switches
+  /// account so the next loadSubscription() refetches for the new user/tier.
+  void clearSubscriptionCache() {
+    _subscription = null;
+  }
+
   /// Flushes the disk log file (used at app exit so the tail is persisted).
   Future<void> flushLogs() => _fileLogSink?.flush() ?? Future.value();
 
@@ -227,6 +233,9 @@ class AppServices {
     final random = _SecureRandom();
     final isMac = Platform.isMacOS;
 
+    // Shared mutable ref so AuthService can clear the subscription cache
+    // (mirrors enrichmentCaches.clearSubscription()).
+    AppServices? servicesRef;
     final auth = AuthService(
       deps: AuthServiceDeps(
         httpClient: client,
@@ -235,9 +244,10 @@ class AppServices {
         clock: clock,
         random: random,
         hostname: Platform.localHostname,
-        username: Platform.environment['USER'] ?? 'unknown',
+        username: _resolveUsername(),
         isMac: isMac,
         isMobile: Platform.isAndroid || Platform.isIOS,
+        onSubscriptionInvalidated: () => servicesRef?.clearSubscriptionCache(),
       ),
     );
     await auth.initialize();
@@ -279,7 +289,7 @@ class AppServices {
           '${settings.maxPerformanceMode ? ' · max-performance ENGAGED' : ''}',
     );
 
-    return AppServices._(
+    final services = AppServices._(
       auth: auth,
       catalog: catalog,
       cloudMatch: cloudMatch,
@@ -292,6 +302,25 @@ class AppServices {
       logFilePath: logFilePath,
       fileLogSink: fileLogSink,
     );
+    servicesRef = services;
+    return services;
+  }
+
+  static String _resolveUsername() {
+    final env = Platform.environment;
+    String? pick(String key) {
+      final v = env[key];
+      if (v == null) return null;
+      final t = v.trim();
+      return t.isEmpty ? null : t;
+    }
+
+    final userProfile = pick('USERPROFILE')?.split(RegExp(r'[\\/]')).last.trim();
+    return pick('USER') ??
+        pick('USERNAME') ??
+        pick('LOGNAME') ??
+        (userProfile != null && userProfile.isNotEmpty ? userProfile : null) ??
+        'unknown';
   }
 
   static String _stableDeviceId(SharedPreferences prefs) {
@@ -299,7 +328,7 @@ class AppServices {
     if (persisted != null && persisted.isNotEmpty) return persisted;
     final generated = generateDeviceId(
       hostname: Platform.localHostname,
-      username: Platform.environment['USER'] ?? 'unknown',
+      username: _resolveUsername(),
     );
     prefs.setString('gfn-device-id', generated);
     return generated;

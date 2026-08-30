@@ -36,6 +36,7 @@ import 'token_refresh.dart'
         refreshWithClientToken,
         requestClientToken;
 import 'user_info.dart' show fetchUserInfo;
+import '../subscription/subscription_service.dart' show SubscriptionService;
 
 // Port of auth.ts (AuthService) + auth/sessionValidity.ts +
 // auth/accountManager.ts. Platform-specific bits (shell.openExternal, the local
@@ -56,6 +57,12 @@ class AuthServiceDeps {
   /// login. Mobile therefore gets a much wider callback window.
   final bool isMobile;
 
+  /// Optional hook to clear subscription/vpc caches — mirrors
+  /// SubscriptionVpcEnrichmentCaches.clearSubscription(). Called before
+  /// tier enrichment and on account switch/logout so the next
+  /// loadSubscription() refetches for the new user.
+  final void Function()? onSubscriptionInvalidated;
+
   const AuthServiceDeps({
     required this.httpClient,
     required this.tokenStorage,
@@ -66,6 +73,7 @@ class AuthServiceDeps {
     required this.username,
     required this.isMac,
     this.isMobile = false,
+    this.onSubscriptionInvalidated,
   });
 }
 
@@ -381,13 +389,17 @@ class AuthService {
         );
       }
 
-      _state.accounts.updateSession(
-        AuthSession(
-          provider: baseSession.provider,
-          tokens: refreshedTokens,
-          user: resolvedUser,
-        ),
+      final updatedSession = AuthSession(
+        provider: baseSession.provider,
+        tokens: refreshedTokens,
+        user: resolvedUser,
       );
+      _state.accounts.updateSession(updatedSession);
+      // Mirror enrichmentCaches.clearSubscription() before enrichment.
+      deps.onSubscriptionInvalidated?.call();
+      // Best-effort tier enrichment — mirrors SubscriptionVpcEnrichmentCaches.enrichUserTier()
+      // but without vpcId cache. Failure is non-fatal (keeps existing tier).
+      await _tryEnrichUserTier(updatedSession);
       await _state.persist();
       return AuthSessionResult(
         session: _state.accounts.getSession(),
@@ -527,16 +539,52 @@ class AuthService {
     if (target == null) {
       throw StateError('Saved account not found');
     }
+
+    final previousActiveUserId = _state.accounts.getActiveUserId();
+    final previousSelectedProvider =
+        _state.accounts.getPersistedSelectedProvider();
+
     _state.accounts.setActiveAccount(userId);
+    deps.onSubscriptionInvalidated?.call();
     _cachedSession = _state.accounts.getSession();
 
     final result = await ensureValidSessionWithStatus(
       forceRefresh: true,
       expectedUserId: userId,
     );
-    if (result.session == null || result.session!.user.userId != userId) {
-      _state.accounts.setActiveAccount(null);
+
+    final missingRefreshToken =
+        result.refresh.outcome == AuthRefreshOutcome.missingRefreshToken;
+    final refreshFailed = result.refresh.outcome == AuthRefreshOutcome.failed;
+    final switchedUserMismatch = result.session?.user.userId != userId;
+
+    if (result.session == null ||
+        refreshFailed ||
+        missingRefreshToken ||
+        switchedUserMismatch) {
+      if (missingRefreshToken) {
+        // Incomplete login (e.g. legacy or truncated token) — prune it like
+        // original AccountManager.switchAccount and restore previous.
+        _state.accounts.removeAccount(userId);
+        _state.accounts.setActiveAccount(previousActiveUserId);
+        _cachedSession = _state.accounts.getSession();
+        await _state.persist();
+        throw StateError(
+          'Saved login for this account is incomplete. Please log in to this account again.',
+        );
+      }
+
+      _state.accounts.setActiveAccount(previousActiveUserId);
+      if (previousActiveUserId != null &&
+          _state.accounts.hasAccount(previousActiveUserId)) {
+        _state.accounts.setSelectedProvider(previousSelectedProvider);
+      }
       _cachedSession = _state.accounts.getSession();
+      await _state.persist();
+
+      if (switchedUserMismatch) {
+        throw StateError('Switched session did not match the selected account.');
+      }
       throw StateError(result.refresh.message);
     }
     _cachedSession = result.session;
@@ -549,6 +597,7 @@ class AuthService {
     if (_state.accounts.getActiveUserId() == userId) {
       _state.accounts.setActiveAccount(_state.accounts.firstUserId());
     }
+    deps.onSubscriptionInvalidated?.call();
     _cachedSession = _state.accounts.getSession();
     await _state.persist();
   }
@@ -559,6 +608,7 @@ class AuthService {
 
   Future<void> logoutAll() async {
     _state.accounts.reset();
+    deps.onSubscriptionInvalidated?.call();
     _cachedSession = null;
     await _state.persist();
   }
@@ -611,18 +661,68 @@ class AuthService {
     } catch (_) {
       // Fall back to OAuth token only.
     }
-    return AuthSession(
+    var session = AuthSession(
       provider: normalizeProvider(provider),
       tokens: tokens,
       user: user,
     );
+    // Best-effort tier enrichment on fresh login (same as refresh path).
+    try {
+      final token = tokens.idToken ?? tokens.accessToken;
+      final svc = SubscriptionService(client: deps.httpClient, isMac: deps.isMac);
+      final sub = await svc.fetchSubscription(token: token, userId: user.userId);
+      if (sub.membershipTier.isNotEmpty && sub.membershipTier != user.membershipTier) {
+        session = AuthSession(
+          provider: session.provider,
+          tokens: session.tokens,
+          user: AuthUser(
+            userId: user.userId,
+            displayName: user.displayName,
+            email: user.email,
+            avatarUrl: user.avatarUrl,
+            membershipTier: sub.membershipTier,
+          ),
+        );
+      }
+    } catch (_) {}
+    return session;
   }
 
   Future<AuthSession> _saveLoginSession(AuthSession session) async {
+    deps.onSubscriptionInvalidated?.call();
     final normalized = _state.accounts.setSession(session);
     _cachedSession = normalized;
     await _state.persist();
     return normalized;
+  }
+
+  Future<void> _enrichSessionTier(AuthSession session) async {
+    try {
+      final token = session.tokens.idToken ?? session.tokens.accessToken;
+      final svc = SubscriptionService(client: deps.httpClient, isMac: deps.isMac);
+      final sub = await svc.fetchSubscription(token: token, userId: session.user.userId);
+      if (sub.membershipTier.isNotEmpty && sub.membershipTier != session.user.membershipTier) {
+        final enriched = AuthSession(
+          provider: session.provider,
+          tokens: session.tokens,
+          user: AuthUser(
+            userId: session.user.userId,
+            displayName: session.user.displayName,
+            email: session.user.email,
+            avatarUrl: session.user.avatarUrl,
+            membershipTier: sub.membershipTier,
+          ),
+        );
+        _state.accounts.updateSession(enriched);
+        if (_state.accounts.getActiveUserId() == session.user.userId) {
+          _cachedSession = enriched;
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _tryEnrichUserTier(AuthSession session) async {
+    await _enrichSessionTier(session);
   }
 
   Future<void> _logout() async {
@@ -630,6 +730,7 @@ class AuthService {
     if (activeUserId == null) return;
     _state.accounts.removeAccount(activeUserId);
     _state.accounts.setActiveAccount(_state.accounts.firstUserId());
+    deps.onSubscriptionInvalidated?.call();
     _cachedSession = _state.accounts.getSession();
     await _state.persist();
   }

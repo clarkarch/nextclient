@@ -10,7 +10,7 @@
 
 CC      ?= gcc
 PKGS    := gstreamer-1.0 gstreamer-app-1.0 gstreamer-sdp-1.0 \
-           gstreamer-video-1.0 gstreamer-webrtc-1.0
+           gstreamer-video-1.0 gstreamer-webrtc-1.0 gstreamer-va-1.0 libva libdrm
 CFLAGS  += -std=c11 -O2 -fPIC -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LIBS    := $(shell pkg-config --libs $(PKGS))
 

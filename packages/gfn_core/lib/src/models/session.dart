@@ -501,6 +501,8 @@ class SessionCreateRequest {
   final bool? supportsInGameSettingsPersistence;
   final String zone;
   final StreamSettings settings;
+  final List<VideoCodec>? supportedCodecs;
+  final ExistingSessionStrategy? existingSessionStrategy;
   final String? proxyUrl;
 
   const SessionCreateRequest({
@@ -513,6 +515,8 @@ class SessionCreateRequest {
     this.supportsInGameSettingsPersistence,
     required this.zone,
     required this.settings,
+    this.supportedCodecs,
+    this.existingSessionStrategy,
     this.proxyUrl,
   });
 }
@@ -598,6 +602,41 @@ class SessionHelpers {
   static bool isSessionReadyForConnectStatus(int status) {
     return status == 2 || status == 3;
   }
+}
+
+// Port of sessionSelection.ts
+bool isAutoResumeReadySession(ActiveSessionInfo entry) {
+  return entry.serverIp != null && (entry.status == 2 || entry.status == 3);
+}
+
+bool isActiveCreateSessionConflict(ActiveSessionInfo entry) {
+  return entry.status == 1 || entry.status == 2 || entry.status == 3;
+}
+
+ActiveSessionInfo? selectReadySessionToClaim(
+  List<ActiveSessionInfo> activeSessions,
+  int numericAppId,
+) {
+  for (final s in activeSessions) {
+    if (isAutoResumeReadySession(s) && s.appId == numericAppId) return s;
+  }
+  for (final s in activeSessions) {
+    if (isAutoResumeReadySession(s)) return s;
+  }
+  return null;
+}
+
+ActiveSessionInfo? selectLaunchingSession(
+  List<ActiveSessionInfo> activeSessions,
+  int numericAppId,
+) {
+  for (final s in activeSessions) {
+    if (s.serverIp != null && s.appId == numericAppId && s.status == 1) return s;
+  }
+  for (final s in activeSessions) {
+    if (s.serverIp != null && s.status == 1) return s;
+  }
+  return null;
 }
 
 /// Port of OpenNOW's getSessionAdItems (sessionAds preferred, then ads).

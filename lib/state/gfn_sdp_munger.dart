@@ -256,9 +256,18 @@ class GfnSdpMunger {
     return result;
   }
 
-  /// Hard-filter the offer SDP down to the requested video codec so the
-  /// negotiated answer matches nvstSdp (port of OpenNOW's preferCodec()).
-  static String preferCodec(String sdp, String codec) {
+  /// Port of OpenNOW's preferCodec(). When [keepFallbacks] is true (web/
+  /// flutter path) it reorders the video m-line so the preferred codec comes
+  /// first but keeps every payload — avoiding the `m=video 0` reject that hangs
+  /// on `Waiting for game video...` when the requested codec isn't decodable.
+  /// Hard-filter (native/webrtcbin) strips to preferred + RTX (+ FLEXFEC).
+  static String preferCodec(
+    String sdp,
+    String codec, {
+    bool keepFallbacks = false,
+    String? fallbackCodec,
+    int? preferHevcProfileId,
+  }) {
     final normalized = normalizeCodec(codec);
     final lineEnding = sdp.contains('\r\n') ? '\r\n' : '\n';
     final lines = sdp.split(RegExp(r'\r?\n'));
@@ -305,24 +314,90 @@ class GfnSdpMunger {
       if (apt != null) rtxAptByPayloadType[pt] = apt;
     }
 
-    final preferredPayloads = payloadTypesByCodec[normalized] ?? [];
-    if (preferredPayloads.isEmpty) return sdp;
+    // Need fmtp map for H265 profile ordering
+    final fmtpByPayload = <String, String>{};
+    inVideo = false;
+    for (final line in lines) {
+      if (line.startsWith('m=video')) {
+        inVideo = true;
+        continue;
+      }
+      if (line.startsWith('m=') && inVideo) inVideo = false;
+      if (!inVideo || !line.startsWith('a=fmtp:')) continue;
+      final rest = line.substring('a=fmtp:'.length);
+      final colonIdx = rest.indexOf(' ');
+      if (colonIdx < 0) continue;
+      final pt = rest.substring(0, colonIdx).trim();
+      final params = rest.substring(colonIdx + 1);
+      if (pt.isNotEmpty) fmtpByPayload[pt] = params;
+    }
 
-    final preferred = preferredPayloads.toSet();
+    final rawPreferred = payloadTypesByCodec[normalized] ?? [];
+    if (rawPreferred.isEmpty) return sdp;
+
+    // H265 profile ordering: prefer requested profile-id first
+    List<String> orderedPreferred = rawPreferred;
+    if (normalized == 'H265' && preferHevcProfileId != null) {
+      int score(String pt) {
+        final fmtp = fmtpByPayload[pt] ?? '';
+        final m = RegExp(r'(?:^|;)\s*profile-id=(\d+)', caseSensitive: false).firstMatch(fmtp);
+        final profile = m?.group(1);
+        if (profile == preferHevcProfileId.toString()) return 0;
+        if (profile == null || profile.isEmpty) return 1;
+        return 2;
+      }
+
+      orderedPreferred = [...rawPreferred]..sort((a, b) => score(a) - score(b));
+    }
+
+    List<String> orderedFallback = [];
+    if (keepFallbacks && fallbackCodec != null) {
+      final fbNorm = normalizeCodec(fallbackCodec);
+      if (fbNorm != normalized) {
+        final fbRaw = payloadTypesByCodec[fbNorm] ?? [];
+        if (fbNorm == 'H265' && preferHevcProfileId != null) {
+          int score(String pt) {
+            final fmtp = fmtpByPayload[pt] ?? '';
+            final m = RegExp(r'(?:^|;)\s*profile-id=(\d+)', caseSensitive: false).firstMatch(fmtp);
+            final profile = m?.group(1);
+            if (profile == preferHevcProfileId.toString()) return 0;
+            if (profile == null || profile.isEmpty) return 1;
+            return 2;
+          }
+
+          orderedFallback = [...fbRaw]..sort((a, b) => score(a) - score(b));
+        } else {
+          orderedFallback = fbRaw;
+        }
+      }
+    }
+
+    final preferred = orderedPreferred.toSet();
     final allowed = <String>{...preferred};
     for (final entry in rtxAptByPayloadType.entries) {
-      if (preferred.contains(entry.value) &&
-          codecByPayloadType[entry.key] == 'RTX') {
+      if (preferred.contains(entry.value) && codecByPayloadType[entry.key] == 'RTX') {
         allowed.add(entry.key);
       }
     }
-    // OpenNOW parity: keep FLEXFEC-03 payloads alive. OpenNOW's prefer_codec
-    // explicitly re-adds flexfec payloads, and its working webrtcbin answer
-    // includes them — the offer fed to webrtcbin must match that shape so the
-    // negotiated session lines up with the server's FEC-FR ssrc-group.
-    for (final entry in codecByPayloadType.entries) {
-      if (entry.value == 'FLEXFEC-03') allowed.add(entry.key);
+    // Native sdp.rs (webrtcbin path): FLEXFEC-03 payloads are ALWAYS allowed —
+    // hard filtering keeps preferred + apt-RTX + FLEXFEC, then reorders.
+    if (!keepFallbacks) {
+      for (final entry in codecByPayloadType.entries) {
+        if (entry.value == 'FLEXFEC-03') {
+          allowed.add(entry.key);
+        }
+      }
+    } else {
+      // Soft (web codec.ts) mode keeps EVERY payload — reorder only, so the
+      // primary codecs stay in the m-line and the intersection can never
+      // collapse to FEC-only.
+      for (final pts in payloadTypesByCodec.values) {
+        for (final pt in pts) {
+          allowed.add(pt);
+        }
+      }
     }
+
     final filtered = <String>[];
     inVideo = false;
     for (final line in lines) {
@@ -330,14 +405,23 @@ class GfnSdpMunger {
         inVideo = true;
         final parts = line.split(RegExp(r'\s+'));
         final header = parts.take(3).toList();
-        final available = parts.skip(3).where(allowed.contains).toList();
-        final ordered = <String>[
-          ...preferredPayloads.where(available.contains),
-          ...available.where((pt) => !preferred.contains(pt)),
-        ];
-        filtered.add(
-          ordered.isNotEmpty ? [...header, ...ordered].join(' ') : line,
-        );
+        final payloadsInLine = parts.skip(3).toList();
+        final available = keepFallbacks
+            ? payloadsInLine
+            : payloadsInLine.where(allowed.contains).toList();
+        final ordered = <String>[];
+        for (final pt in orderedPreferred) {
+          if (available.contains(pt)) ordered.add(pt);
+        }
+        for (final pt in orderedFallback) {
+          if (!preferred.contains(pt) && available.contains(pt) && !ordered.contains(pt)) {
+            ordered.add(pt);
+          }
+        }
+        for (final pt in available) {
+          if (!preferred.contains(pt) && !ordered.contains(pt)) ordered.add(pt);
+        }
+        filtered.add(ordered.isNotEmpty ? [...header, ...ordered].join(' ') : line);
         continue;
       }
       if (line.startsWith('m=') && inVideo) inVideo = false;
@@ -345,9 +429,11 @@ class GfnSdpMunger {
           (line.startsWith('a=rtpmap:') ||
               line.startsWith('a=fmtp:') ||
               line.startsWith('a=rtcp-fb:'))) {
-        final pt =
-            line.split(':').elementAtOrNull(1)?.split(RegExp(r'\s+')).first ??
-            '';
+        if (keepFallbacks) {
+          filtered.add(line);
+          continue;
+        }
+        final pt = line.split(':').elementAtOrNull(1)?.split(RegExp(r'\s+')).first ?? '';
         if (pt.isNotEmpty && !allowed.contains(pt)) continue;
       }
       filtered.add(line);
@@ -574,6 +660,14 @@ class GfnSdpMunger {
     final extmap3 = offerExtmap3 ??
         'http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01';
 
+    // The libwebrtc answer echoes EVERY offer extmap (transport-cc 3,
+    // video-timing 7, playout-delay 12 …). GFN's sender paces with them —
+    // mirror the whole set, not just extmap 3.
+    final offerExtmapLines = offerSdp
+        .split(RegExp(r'\r?\n'))
+        .where((l) => l.startsWith('a=extmap:'))
+        .toList();
+
     // Idempotent: if any media section already advertises these, skip.
     final hasMsidSemantic = lines.any((l) => l.startsWith('a=msid-semantic:'));
     final hasTrickle = lines.any((l) => l.startsWith('a=ice-options:'));
@@ -584,6 +678,7 @@ class GfnSdpMunger {
 
     var inAvMedia = false;
     var addedThisSection = false;
+    final sectionExtmaps = <String>{};
     var msidSemanticInserted = hasMsidSemantic;
     for (final line in lines) {
       // RFC 4566: v=0 must be the first line, so msid-semantic goes in the
@@ -595,15 +690,28 @@ class GfnSdpMunger {
       if (line.startsWith('m=')) {
         inAvMedia = line.startsWith('m=video') || line.startsWith('m=audio');
         addedThisSection = false;
+        sectionExtmaps.clear();
         out.add(line);
         continue;
       }
       out.add(line);
       if (inAvMedia &&
           !addedThisSection &&
-          line.startsWith('a=mid:') &&
-          (!hasExtmap3 || !hasTrickle || !hasRtcpRsize)) {
-        if (!hasExtmap3) out.add('a=extmap:3 $extmap3');
+          line.startsWith('a=mid:')) {
+        // Echo every offer extmap per media section (webrtcbin answers with
+        // none of them) — GFN's sender paces with transport-cc (3),
+        // video-timing (7) and playout-delay (12). The libwebrtc answer
+        // carries the full set in EVERY m-section.
+        for (final ext in offerExtmapLines) {
+          if (sectionExtmaps.add(ext)) {
+            out.add(ext);
+          }
+        }
+        final extmap3Line = 'a=extmap:3 $extmap3';
+        if (!offerExtmapLines.any((l) => l.startsWith('a=extmap:3 ')) &&
+            sectionExtmaps.add(extmap3Line)) {
+          out.add(extmap3Line);
+        }
         if (!hasTrickle) out.add('a=ice-options:trickle');
         if (!hasRtcpRsize) out.add('a=rtcp-rsize');
         addedThisSection = true;
@@ -733,6 +841,20 @@ class GfnSdpMunger {
       }
     }
 
+    // webrtcbin also drops rtcp-fb lines for the payloads it KEPT (nack /
+    // nack pli / ccm fir / transport-cc) — NVIDIA's sender requires them for
+    // loss retransmission and PLI keyframe requests. Re-add every offer
+    // rtcp-fb for kept payloads that the answer lacks.
+    for (final pt in kept) {
+      final fbs = offRtcpFb[pt] ?? const <String>[];
+      for (final fb in fbs) {
+        final line = 'a=rtcp-fb:$pt $fb';
+        if (!videoAttrLines.contains(line)) {
+          injected.add(line);
+        }
+      }
+    }
+
     // Re-insert video attrs + rtx lines right after the m= line (skipping any
     // c= line that lives at the head of videoAttrLines).
     var insertAt = firstVideoIndex + 1;
@@ -773,6 +895,12 @@ class GfnSdpMunger {
   /// The fake-SDP capability blob NVIDIA's streamer requires in the answer so
   /// it knows the client's viewport, bitrate budget, encoder preferences, and
   /// input-channel capabilities.
+  ///
+  /// Port of OpenNOW's `sdp/nvstOffer.ts` — byte-for-byte aligned with the
+  /// official `play.geforcenow.com` bundle when experimental knobs are off.
+  /// When priority / low-latency / recovery / constantQuality differ from the
+  /// safe defaults the same base is patched with the minimal overrides that
+  /// actually change server behavior (preserving the official shape otherwise).
   static String buildNvstSdp({
     required int width,
     required int height,
@@ -790,15 +918,12 @@ class GfnSdpMunger {
     bool enableFec = true,
     bool constantQuality = false,
   }) {
+    // -----------------------------------------------------------------
+    // Official baseline — verbatim port of nvstOffer.ts (web transport)
+    // -----------------------------------------------------------------
     final maxBitrate = max(_officialMinBitrateKbps, maxBitrateKbps.floor());
-    // Constant quality starts the encoder at the full budget (no slow ramp
-    // from max/4) — there's no adaptive BWE to ramp up against.
-    final startupBitrate = constantQuality
-        ? maxBitrate
-        : max(
-            _officialMinBitrateKbps,
-            (maxBitrate / 4).round(),
-          );
+    final startupBitrate =
+        max(_officialMinBitrateKbps, (maxBitrate / 4).round());
     final isHighFps = fps >= 90;
     final is90Fps = fps == 90;
     final is120Fps = fps == 120;
@@ -811,35 +936,13 @@ class GfnSdpMunger {
     final bitDepth = supportsHighBitDepth && colorQuality.startsWith('10bit')
         ? 10
         : 8;
-    final minTargetFrameTimeUs = max(
-      1000,
-      // Low-latency mode tightens the server's target frame time (95% -> 60%)
-      // so the encoder/sender holds less buffered video ahead of the display.
-      (1000000 * (lowLatencyMode ? 60 : 95) ~/ (max(1, fps) * 100)),
-    );
-    final (nackQueueLength, nackQueueMaxPackets, nackMaxPacketCount) =
-        switch (recoveryProfile) {
-      StreamRecoveryProfile.smooth => (1024, 512, 25),
-      StreamRecoveryProfile.balanced => (512, 256, 16),
-      StreamRecoveryProfile.latency => (256, 128, 8),
-    };
-    final preemptiveIdr = recoveryProfile == StreamRecoveryProfile.latency;
     final hidDeviceMask = caps.hidDeviceMask;
     final enablePartiallyReliableTransferGamepad =
         caps.enablePartiallyReliableTransferGamepad;
     final enablePartiallyReliableTransferHid =
         caps.enablePartiallyReliableTransferHid;
 
-    final allowResolutionScaling =
-        priority == StreamPriority.balanced || priority == StreamPriority.fps;
-    final fpsFirst = priority == StreamPriority.fps;
-    final minResolutionPercent = switch (priority) {
-      StreamPriority.quality => 100,
-      StreamPriority.balanced => 60,
-      StreamPriority.fps => 40,
-    };
-    final dfcEnable = isHighFps || priority != StreamPriority.quality;
-
+    // Official lines (mirrors nvstOffer.ts exactly)
     final lines = <String>[
       'v=0',
       'o=SdpTest test_id_13 14 IN IPv4 127.0.0.1',
@@ -850,40 +953,29 @@ class GfnSdpMunger {
       'a=general.dtlsFingerprint:${credentials.fingerprint}',
       'm=video 0 RTP/AVP',
       'a=msid:fbc-video-0',
-      'a=vqos.dynamicStreamingMode:${allowResolutionScaling ? 1 : 0}',
-      'a=vqos.drc.enable:0',
-      'a=vqos.calculateAvgVideoStreamingBitrate:1',
+      'a=vqos.fec.rateDropWindow:10',
+      'a=vqos.fec.minRequiredFecPackets:2',
+      'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
+      'a=vqos.fec.repairMinPercent:5',
+      'a=vqos.fec.repairPercent:5',
+      'a=vqos.fec.repairMaxPercent:35',
+      'a=vqos.dynamicStreamingMode:3',
+      'a=vqos.bllFec.enable:0',
     ];
 
-    if (enableFec) {
-      // Match the stable Android-native recovery profile. Large FEC/NACK
-      // bursts amplify congestion after packet loss instead of letting BWE
-      // recover.
+    if (isHighFps) {
       lines.addAll([
-        'a=vqos.fec.rateDropWindow:10',
-        'a=vqos.fec.minRequiredFecPackets:2',
-        'a=vqos.drc.minRequiredBitrateCheckEnabled:1',
-        'a=vqos.fec.repairMinPercent:5',
-        'a=vqos.fec.repairPercent:5',
-        'a=vqos.fec.repairMaxPercent:35',
-      ]);
-    }
-
-    if (dfcEnable) {
-      lines.addAll([
+        'a=vqos.drc.enable:0',
         'a=vqos.dfc.enable:1',
-        'a=vqos.dfc.decodeFpsAdjPercent:${fpsFirst ? 95 : 85}',
+        'a=vqos.dfc.decodeFpsAdjPercent:85',
         'a=vqos.dfc.targetDownCooldownMs:250',
         'a=vqos.dfc.dfcAlgoVersion:${is120Fps || is240Fps ? 2 : 1}',
-        'a=vqos.dfc.minTargetFps:${is120Fps || is240Fps ? 100 : 60}',
+        'a=vqos.dfc.minTargetFps:${is90Fps ? 60 : 100}',
         'a=vqos.resControl.dfc.useClientFpsPerf:0',
-        'a=vqos.dfc.adjustResAndFps:${allowResolutionScaling ? 1 : 0}',
+        'a=vqos.dfc.adjustResAndFps:1',
       ]);
     } else {
-      lines.addAll([
-        'a=vqos.dfc.enable:0',
-        'a=vqos.dfc.adjustResAndFps:0',
-      ]);
+      lines.add('a=vqos.drc.enable:1');
     }
 
     lines.addAll([
@@ -891,40 +983,12 @@ class GfnSdpMunger {
       'a=video.dx9EnableHdr:1',
       'a=vqos.qpg.enable:1',
       'a=vqos.resControl.qp.qpg.featureSetting:7',
-      'a=video.adaptiveQuantization.spatialAQSetting:7',
-      'a=video.adaptiveQuantization.temporalAQSetting:0',
-      'a=video.adaptiveQuantization.spatialAQStrength:12',
-      'a=video.adaptiveQuantization.qpThresholdAdjPercent:2',
-      'a=video.adaptiveQuantization.saqAdaptMinQpThresholdPercent:40',
-      'a=video.adaptiveQuantization.saqAdaptMaxQpThresholdPercent:100',
-      'a=video.adaptiveQuantization.saqAdaptDecayStrengthX100:250',
-      'a=video.adaptiveQuantization.perfAdjEnablement:1',
-      'a=video.framePacing.mode:2',
-      'a=video.framePacing.pid.minTargetFrameTimeUs:$minTargetFrameTimeUs',
       'a=bwe.useOwdCongestionControl:1',
-      'a=video.enableRtpNack:${enableNack ? 1 : 0}',
-      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:${lowLatencyMode ? 100 : 200}',
+      'a=video.enableRtpNack:1',
+      'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:200',
       'a=vqos.drc.bitrateIirFilterFactor:18',
       'a=video.packetSize:1140',
-      'a=packetPacing.version:3',
-      'a=packetPacing.mode:1',
       'a=packetPacing.minNumPacketsPerGroup:15',
-      'a=packetPacing.enableAccurateSleep:1',
-      'a=packetPacing.enableSmoothTransition:1',
-      'a=packetPacing.allowFpsBasedToggle:1',
-      'a=vqos.relaxMaxBitrate.overrideAvgBitrateThresholdPercent:4',
-      'a=vqos.relaxMaxBitrate.customAvgBitrateThresholdPercent:65',
-      'a=vqos.relaxMaxBitrate.overrideAvgQpThresholdPercent:7',
-      'a=vqos.relaxMaxBitrate.customAvgQpThresholdPercent:51',
-      'a=vqos.relaxMaxBitrate.iirFilterFactor:120',
-      'a=vqos.qpDelta.qpDeltaMaxPercent:10',
-      'a=vqos.qpDelta.qpDeltaSurfaceAdjustmentStrengthPercent:70',
-      'a=vqos.qpDelta.qpDeltaVbvUsageFactorPercentH264:100',
-      'a=vqos.qpDelta.qpDeltaVbvUsageFactorPercentH265:100',
-      'a=vqos.qpDelta.qpDeltaVbvUsageFactorPercentAv1:100',
-      'a=vqos.qpDelta.qpDeltaMinPercent:60',
-      'a=vqos.qpDelta.qpDeltaIirFactor:60',
-      'a=vqos.qpDelta.qpDeltaThrottlePercent:100',
     ]);
 
     if (isHighFps) {
@@ -936,6 +1000,7 @@ class GfnSdpMunger {
         'a=vqos.resControl.cpmRtc.decodeTimeThresholdMs:${is90Fps ? 11 : 9}',
         'a=video.fbcDynamicFpsGrabTimeoutMs:${is90Fps ? 9 : is120Fps ? 6 : 18}',
         'a=vqos.resControl.cpmRtc.serverResolutionUpdateCoolDownCount:${is120Fps ? 6000 : 12000}',
+        if (is120Fps || is240Fps) 'a=video.fakeEncodeFps:120',
       ]);
     }
 
@@ -945,8 +1010,6 @@ class GfnSdpMunger {
         'a=vqos.maxStreamFpsEstimate:240',
         'a=video.videoSplitEncodeStripsPerFrame:63',
         'a=video.updateSplitEncodeStateDynamically:1',
-        'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:65535',
-        'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:65535',
       ]);
     }
 
@@ -954,30 +1017,14 @@ class GfnSdpMunger {
       'a=vqos.adjustStreamingFpsDuringOutOfFocus:1',
       'a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1',
       'a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1',
-      'a=vqos.resControl.cpmRtc.featureMask:${allowResolutionScaling ? 1 : 0}',
-      'a=vqos.resControl.cpmRtc.enable:${allowResolutionScaling ? 1 : 0}',
-      'a=vqos.resControl.cpmRtc.minResolutionPercent:$minResolutionPercent',
-      'a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:${allowResolutionScaling ? 5000 : 999999}',
-    ]);
-
-    lines.addAll([
+      'a=vqos.resControl.cpmRtc.featureMask:3',
       'a=packetPacing.numGroups:${is120Fps ? 3 : 5}',
-      'a=packetPacing.maxDelayUs:${lowLatencyMode ? 500 : 1000}',
+      'a=packetPacing.maxDelayUs:1000',
       'a=packetPacing.minNumPacketsFrame:10',
-      'a=video.rtpNackQueueLength:$nackQueueLength',
-      'a=video.rtpNackQueueMaxPackets:$nackQueueMaxPackets',
-      'a=video.rtpNackMaxPacketCount:$nackMaxPacketCount',
+      'a=video.rtpNackQueueLength:1024',
+      'a=video.rtpNackQueueMaxPackets:512',
+      'a=video.rtpNackMaxPacketCount:25',
     ]);
-
-    // Latency recovery profile asks for a fresh keyframe as soon as a burst of
-    // loss hits instead of waiting on slow deep retransmits. Skipped on 240 FPS
-    // where the high-FPS block already pins the preemptive-IDR thresholds.
-    if (preemptiveIdr && !is240Fps) {
-      lines.addAll([
-        'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:1',
-        'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:1000',
-      ]);
-    }
 
     if (useHighThroughputPacing) {
       lines.add('a=vqos.drc.iirFilterFactor:100');
@@ -1016,6 +1063,7 @@ class GfnSdpMunger {
       ]);
     }
 
+    // Tail before optional experimental patches
     lines.addAll([
       'a=video.clientViewportWd:$width',
       'a=video.clientViewportHt:$height',
@@ -1023,31 +1071,21 @@ class GfnSdpMunger {
       'a=video.initialBitrateKbps:$startupBitrate',
       'a=video.initialPeakBitrateKbps:$startupBitrate',
       'a=vqos.bw.maximumBitrateKbps:$maxBitrate',
-      'a=vqos.bw.minimumBitrateKbps:$minBitrateKbps',
-      'a=vqos.bw.peakBitrateKbps:$maxBitrate',
-      'a=vqos.bw.serverPeakBitrateKbps:$maxBitrate',
-      // Constant quality: disable the server's adaptive bandwidth estimation
-      // and bitrate limiting so the encode bitrate holds at the max even in
-      // complex scenes (no quality shed on feedback). Default: adaptive.
-      'a=vqos.bw.enableBandwidthEstimation:${constantQuality ? 0 : 1}',
-      'a=vqos.bw.disableBitrateLimit:${constantQuality ? 1 : 0}',
-      'a=vqos.grc.maximumBitrateKbps:$maxBitrate',
-      'a=vqos.grc.enable:0',
+      'a=vqos.bw.minimumBitrateKbps:$_officialMinBitrateKbps',
       'a=video.maxNumReferenceFrames:4',
       'a=video.mapRtpTimestampsToFrames:1',
       'a=video.encoderCscMode:3',
-      'a=video.dynamicRangeMode:0',
+      'a=video.encoderHdrCscMode:4',
+      'a=video.dynamicRangeMode:${bitDepth == 10 ? 1 : 0}',
       'a=video.bitDepth:$bitDepth',
+      if (codec == 'H265' && bitDepth == 10) 'a=video.minQp:14',
       'a=video.scalingFeature1:${isAv1 ? 1 : 0}',
+      'a=video.prefilterParams.prefilterMode:0',
       'a=video.prefilterParams.prefilterModel:0',
+      'a=video.prefilterParams.denoiseLevel:0',
+      'a=video.prefilterParams.sharpnessLevel:0',
       'm=audio 0 RTP/AVP',
       'a=msid:audio',
-      'a=aqos.enableRedundancy:1',
-      'a=aqos.redundancyLevel:2',
-      'a=aqos.enableRedundancyForMic:1',
-      'a=aqos.redundancyLevelForMic:3',
-      'a=audio.enableDynamicAudioConfig:1',
-      'a=audio.enableTimestampAudioBuffer:1',
       'm=mic 0 RTP/AVP',
       'a=msid:mic',
       'a=rtpmap:0 PCMU/8000',
@@ -1057,10 +1095,226 @@ class GfnSdpMunger {
       'a=ri.hidDeviceMask:$hidDeviceMask',
       'a=ri.enablePartiallyReliableTransferGamepad:$enablePartiallyReliableTransferGamepad',
       'a=ri.enablePartiallyReliableTransferHid:$enablePartiallyReliableTransferHid',
-      'a=ri.timestampsEnabled:1',
-      'a=ri.useMultipleGamepads:1',
       '',
     ]);
+
+    // -----------------------------------------------------------------
+    // Experimental overrides — applied only when the caller diverges
+    // from the official safe defaults. Keeps the happy path byte-identical
+    // to play.geforcenow.com for BWE performance.
+    // -----------------------------------------------------------------
+    final hasExperimental = priority != StreamPriority.quality ||
+        lowLatencyMode ||
+        recoveryProfile != StreamRecoveryProfile.smooth ||
+        minBitrateKbps != _officialMinBitrateKbps ||
+        !enableNack ||
+        !enableFec ||
+        constantQuality;
+
+    if (!hasExperimental) return lines.join('\n');
+
+    // For experimental sessions, patch the official lines in-place rather than
+    // rebuilding from scratch — keeps the diff minimal and auditable.
+    return _applyExperimentalPatches(
+      lines: lines,
+      priority: priority,
+      lowLatencyMode: lowLatencyMode,
+      recoveryProfile: recoveryProfile,
+      minBitrateKbps: minBitrateKbps,
+      enableNack: enableNack,
+      enableFec: enableFec,
+      constantQuality: constantQuality,
+      maxBitrate: maxBitrate,
+      fps: fps,
+      isHighFps: isHighFps,
+      is120Fps: is120Fps,
+      is240Fps: is240Fps,
+    );
+  }
+
+  /// Patches an official nvstSdp with the minimal experimental overrides.
+  static String _applyExperimentalPatches({
+    required List<String> lines,
+    required StreamPriority priority,
+    required bool lowLatencyMode,
+    required StreamRecoveryProfile recoveryProfile,
+    required int minBitrateKbps,
+    required bool enableNack,
+    required bool enableFec,
+    required bool constantQuality,
+    required int maxBitrate,
+    required int fps,
+    required bool isHighFps,
+    required bool is120Fps,
+    required bool is240Fps,
+  }) {
+    final allowResolutionScaling =
+        priority == StreamPriority.balanced || priority == StreamPriority.fps;
+    final fpsFirst = priority == StreamPriority.fps;
+    final minResolutionPercent = switch (priority) {
+      StreamPriority.quality => 100,
+      StreamPriority.balanced => 60,
+      StreamPriority.fps => 40,
+    };
+
+    // Helpers to replace a line by prefix
+    void replace(String prefix, String value) {
+      final idx = lines.indexWhere((l) => l.startsWith(prefix));
+      if (idx >= 0) lines[idx] = value;
+    }
+
+    void removePrefix(String prefix) {
+      lines.removeWhere((l) => l.startsWith(prefix));
+    }
+
+    // Priority: dynamicStreamingMode 3 -> 1/0
+    if (priority != StreamPriority.quality) {
+      replace(
+        'a=vqos.dynamicStreamingMode:',
+        'a=vqos.dynamicStreamingMode:${allowResolutionScaling ? 1 : 0}',
+      );
+      // DRC/DFC: official for high-fps is fixed; for priority we enable
+      // resolution-aware DFC even at 60 fps.
+      if (!isHighFps) {
+        // At 60 fps official has only drc.enable:1 — replace with DFC set.
+        removePrefix('a=vqos.drc.enable:');
+        final drcIdx = lines.indexWhere((l) => l.startsWith('a=vqos.dfc.enable:'));
+        if (drcIdx < 0) {
+          final insertAt = lines.indexWhere((l) => l.startsWith('a=video.dx9'));
+          lines.insertAll(insertAt, [
+            'a=vqos.dfc.enable:1',
+            'a=vqos.dfc.decodeFpsAdjPercent:${fpsFirst ? 95 : 85}',
+            'a=vqos.dfc.targetDownCooldownMs:250',
+            'a=vqos.dfc.dfcAlgoVersion:1',
+            'a=vqos.dfc.minTargetFps:60',
+            'a=vqos.resControl.dfc.useClientFpsPerf:0',
+            'a=vqos.dfc.adjustResAndFps:${allowResolutionScaling ? 1 : 0}',
+          ]);
+        }
+      } else {
+        replace(
+          'a=vqos.dfc.decodeFpsAdjPercent:',
+          'a=vqos.dfc.decodeFpsAdjPercent:${fpsFirst ? 95 : 85}',
+        );
+        replace(
+          'a=vqos.dfc.adjustResAndFps:',
+          'a=vqos.dfc.adjustResAndFps:${allowResolutionScaling ? 1 : 0}',
+        );
+      }
+      // CPM resolution control: official featureMask:3 -> allow scaling
+      replace(
+        'a=vqos.resControl.cpmRtc.featureMask:',
+        'a=vqos.resControl.cpmRtc.featureMask:${allowResolutionScaling ? 1 : 0}',
+      );
+      // Inject the extra CPM lines official does NOT send but priority expects
+      final cpmIdx = lines.indexWhere(
+        (l) => l.startsWith('a=vqos.resControl.cpmRtc.featureMask:'),
+      );
+      if (cpmIdx >= 0 &&
+          !lines.any((l) => l.startsWith('a=vqos.resControl.cpmRtc.enable:'))) {
+        lines.insertAll(cpmIdx + 1, [
+          'a=vqos.resControl.cpmRtc.enable:${allowResolutionScaling ? 1 : 0}',
+          'a=vqos.resControl.cpmRtc.minResolutionPercent:$minResolutionPercent',
+          'a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:${allowResolutionScaling ? 5000 : 999999}',
+          'a=vqos.calculateAvgVideoStreamingBitrate:1',
+        ]);
+      }
+    }
+
+    if (lowLatencyMode) {
+      replace(
+        'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:',
+        'a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:100',
+      );
+      replace('a=packetPacing.maxDelayUs:', 'a=packetPacing.maxDelayUs:500');
+      // Tighten frame pacing if present; official has no framePacing line,
+      // so insert one when low-latency is requested.
+      final hasFraming = lines.any((l) => l.startsWith('a=video.framePacing'));
+      if (!hasFraming) {
+        final pacingIdx = lines.indexWhere(
+          (l) => l.startsWith('a=packetPacing.minNumPacketsPerGroup:'),
+        );
+        final minFrameUs = max(
+          1000,
+          (1000000 * 60 ~/ (max(1, fps) * 100)),
+        );
+        lines.insertAll(pacingIdx, [
+          'a=video.framePacing.mode:2',
+          'a=video.framePacing.pid.minTargetFrameTimeUs:$minFrameUs',
+        ]);
+      }
+    }
+
+    if (recoveryProfile != StreamRecoveryProfile.smooth) {
+      final (qlen, qmax, qcount) = switch (recoveryProfile) {
+        StreamRecoveryProfile.smooth => (1024, 512, 25),
+        StreamRecoveryProfile.balanced => (512, 256, 16),
+        StreamRecoveryProfile.latency => (256, 128, 8),
+      };
+      replace('a=video.rtpNackQueueLength:', 'a=video.rtpNackQueueLength:$qlen');
+      replace(
+        'a=video.rtpNackQueueMaxPackets:',
+        'a=video.rtpNackQueueMaxPackets:$qmax',
+      );
+      replace(
+        'a=video.rtpNackMaxPacketCount:',
+        'a=video.rtpNackMaxPacketCount:$qcount',
+      );
+      if (recoveryProfile == StreamRecoveryProfile.latency && !is240Fps) {
+        // Insert preemptive IDR for latency recovery (skip 240fps pin)
+        final nackIdx = lines.indexWhere(
+          (l) => l.startsWith('a=video.rtpNackMaxPacketCount:'),
+        );
+        lines.insertAll(nackIdx + 1, [
+          'a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:1',
+          'a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:1000',
+        ]);
+      }
+    }
+
+    if (minBitrateKbps != _officialMinBitrateKbps) {
+      replace(
+        'a=vqos.bw.minimumBitrateKbps:',
+        'a=vqos.bw.minimumBitrateKbps:$minBitrateKbps',
+      );
+    }
+
+    if (!enableNack) {
+      replace('a=video.enableRtpNack:', 'a=video.enableRtpNack:0');
+    }
+
+    if (!enableFec) {
+      removePrefix('a=vqos.fec.');
+      removePrefix('a=vqos.bllFec.enable:');
+      removePrefix('a=vqos.drc.minRequiredBitrateCheckEnabled:');
+    }
+
+    if (constantQuality) {
+      final startup = maxBitrate;
+      replace(
+        'a=video.initialBitrateKbps:',
+        'a=video.initialBitrateKbps:$startup',
+      );
+      replace(
+        'a=video.initialPeakBitrateKbps:',
+        'a=video.initialPeakBitrateKbps:$startup',
+      );
+      // Inject BWE disable lines after maximumBitrateKbps
+      final maxIdx = lines.indexWhere(
+        (l) => l.startsWith('a=vqos.bw.maximumBitrateKbps:'),
+      );
+      if (maxIdx >= 0 &&
+          !lines.any((l) => l.startsWith('a=vqos.bw.enableBandwidthEstimation:'))) {
+        lines.insertAll(maxIdx + 2, [
+          'a=vqos.bw.peakBitrateKbps:$maxBitrate',
+          'a=vqos.bw.serverPeakBitrateKbps:$maxBitrate',
+          'a=vqos.bw.enableBandwidthEstimation:0',
+          'a=vqos.bw.disableBitrateLimit:1',
+          'a=vqos.grc.maximumBitrateKbps:$maxBitrate',
+          'a=vqos.grc.enable:0',
+        ]);
+      }
+    }
 
     return lines.join('\n');
   }

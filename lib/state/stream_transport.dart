@@ -72,6 +72,11 @@ abstract class StreamTransport {
   /// pressure.
   int? get inputQueueBufferedBytes => null;
 
+  /// Whether mouse move packets can be sent on the partially-reliable channel.
+  /// When true the adaptive sampler keeps a fixed base interval (PR packets
+  /// stay on their own channel and don't feel reliable-channel pressure).
+  bool get canSendMousePartiallyReliable => false;
+
   // --- Input (mirrors the WebRtcStreamSession input API) --------------------
 
   void sendKeyEvent(KeyEvent event);
@@ -115,6 +120,7 @@ StreamTransport createStreamTransport({
   required UserSettings settings,
   required LogSink log,
   ValueChanged<String>? onStatus,
+  String? authToken,
 }) {
   switch (kind) {
     case StreamTransportKind.flutterWebrtc:
@@ -137,6 +143,7 @@ StreamTransport createStreamTransport({
         settings: settings,
         log: log,
         onStatus: onStatus,
+        authToken: authToken,
       );
   }
 }

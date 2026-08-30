@@ -124,8 +124,21 @@ class GstBridgeFfi {
       throw StateError('gst_bridge: bridge_create returned NULL — is the '
           'webrtcbin plugin installed? (gst-plugins-bad)');
     }
+    _bridgeCreated = true;
     _current = this;
   }
+
+  /// Native bridge handle (for the in-tree GPU-texture plugin). Null before
+  /// startVideo succeeds.
+  int? get bridgePointer {
+    if (!_bridgeCreated) return null;
+    return _bridge == nullptr ? null : _bridge.address;
+  }
+
+  bool _bridgeCreated = false;
+
+  /// Absolute path of the loaded bridge library (for dlopen by the plugin).
+  static String? resolvedLibraryPath;
 
   /// Creates the bridge (allocates the GStreamer pipeline + starts the loop
   /// thread). Throws [StateError] if the library or webrtcbin plugin is
@@ -202,13 +215,17 @@ class GstBridgeFfi {
   static DynamicLibrary _openLibrary() {
     final override = Platform.environment['GST_BRIDGE_LIB'];
     if (override != null && override.isNotEmpty) {
-      return DynamicLibrary.open(override);
+      final lib = DynamicLibrary.open(override);
+      resolvedLibraryPath = override;
+      return lib;
     }
     final tried = <String>[];
     for (final candidate in _libraryCandidates()) {
       tried.add(candidate.path);
       if (candidate.existsSync()) {
-        return DynamicLibrary.open(candidate.absolute.path);
+        final lib = DynamicLibrary.open(candidate.absolute.path);
+        resolvedLibraryPath = candidate.absolute.path;
+        return lib;
       }
     }
     try {

@@ -104,6 +104,13 @@ class PersistedAuthState {
           AuthSession.fromJson(entry),
         );
       }
+    } else if (parsed['session'] is Map<String, dynamic>) {
+      final entry = parsed['session'] as Map<String, dynamic>;
+      final user = entry['user'];
+      final userId = user is Map ? user['userId'] as String? : null;
+      if (userId != null) {
+        sessions[userId] = _normalizeSession(AuthSession.fromJson(entry));
+      }
     }
 
     final active = parsed['activeUserId'];

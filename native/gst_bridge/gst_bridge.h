@@ -79,6 +79,49 @@ int bridge_send_input(GstBridge* bridge, const uint8_t* data, size_t len,
 int bridge_frames_decoded(GstBridge* bridge);
 int bridge_frames_dropped(GstBridge* bridge);
 
+// GPU-texture path: a double-buffered "latest frame" slot. The embedder's
+// FlTextureGL::populate() calls bridge_acquire_latest_frame() on the raster
+// thread; the returned buffer stays valid until the NEXT acquire. Enable
+// with bridge_enable_frame_slot() before streaming starts (the appsink then
+// also stores frames into the slot; the Dart frame callback still fires).
+void bridge_enable_frame_slot(GstBridge* bridge);
+
+int bridge_frame_slot_enabled(GstBridge* bridge);
+
+// Returns the newest frame. The buffer stays valid until the next call.
+int bridge_acquire_latest_frame(GstBridge* bridge, const uint8_t** out_data,
+                                int32_t* out_width, int32_t* out_height,
+                                int32_t* out_stride, uint32_t* out_seq);
+
+// Called once per produced frame (from the GStreamer streaming thread) so the
+// embedder can mark the texture dirty — Flutter only re-invokes populate()
+// after fl_texture_registrar_mark_texture_frame_available().
+typedef void (*bridge_slot_notify_cb)(void* userdata);
+void bridge_set_frame_slot_notify(GstBridge* bridge,
+                                  bridge_slot_notify_cb notify, void* userdata);
+
+// GPU zero-copy mode: the appsink negotiates VAMemory (RGBA via vapostproc),
+// frames are exported as dmabuf fds (vaExportSurfaceHandle) and the embedder
+// imports them as EGLImages on the raster thread. 0 = pixel slot (CPU RGBA),
+// 1 = dmabuf slot.
+int bridge_frame_slot_mode(GstBridge* bridge);
+
+typedef struct BridgeDmaBufFrame {
+  int fds[4];
+  int nfd;
+  uint32_t fourcc;  // DRM fourcc (ABGR8888 for RGBA surfaces)
+  int32_t width;
+  int32_t height;
+  int32_t strides[4];
+  int32_t offsets[4];
+  uint64_t modifiers[4];  // DRM format modifiers (per object)
+  uint32_t seq;
+} BridgeDmaBufFrame;
+
+// Consumer owns the fds until the next call; close them after EGLImage
+// import (the image holds its own dmabuf reference).
+int bridge_acquire_latest_dmabuf(GstBridge* bridge, BridgeDmaBufFrame* out);
+
 void bridge_free_string(char* s);
 // Frees a frame buffer handed to the frame callback.
 void bridge_free_ptr(void* p);

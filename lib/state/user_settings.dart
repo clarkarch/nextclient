@@ -167,13 +167,13 @@ class UserSettings extends ChangeNotifier {
   bool _uiScaleTouched = false;
   bool _uiAnimations = true;
   bool _logsEnabled = false;
-  bool _latencyGuardEnabled = false;
+  bool _latencyGuardEnabled = true;
   bool _zeroPlayoutDelayEnabled = false;
   bool _hideTitleBar = false;
   bool _maxPerformanceMode = false;
-  // --- Experimental stream optimizations (all default to the safe profile) --
+  // --- Experimental stream optimizations (all default to the safe official profile) --
   bool _optLowLatencyMode = false;
-  StreamRecoveryProfile _optRecoveryProfile = StreamRecoveryProfile.latency;
+  StreamRecoveryProfile _optRecoveryProfile = StreamRecoveryProfile.smooth;
   int _optMinBitrateKbps = 4000;
   bool _optEnableNack = true;
   bool _optEnableFec = true;
@@ -357,9 +357,7 @@ class UserSettings extends ChangeNotifier {
   BackgroundStyle get effectiveBackgroundStyle =>
       _maxPerformanceMode ? BackgroundStyle.subtle : _backgroundStyle;
   bool get effectiveUiAnimations => _maxPerformanceMode ? false : _uiAnimations;
-  Duration get statsPollInterval => _maxPerformanceMode
-      ? const Duration(milliseconds: 1000)
-      : const Duration(milliseconds: 500);
+  Duration get statsPollInterval => const Duration(milliseconds: 1000);
   bool get performanceShadowsEnabled => !_maxPerformanceMode;
 
   bool get optLowLatencyMode => _optLowLatencyMode;
@@ -1314,7 +1312,7 @@ class UserSettings extends ChangeNotifier {
     _hideTitleBar = false;
     _maxPerformanceMode = false;
     _optLowLatencyMode = false;
-    _optRecoveryProfile = StreamRecoveryProfile.latency;
+    _optRecoveryProfile = StreamRecoveryProfile.smooth;
     _optMinBitrateKbps = 4000;
     _optEnableNack = true;
     _optEnableFec = true;

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:gfn_core/gfn_core.dart';
 
+import '../../state/user_settings.dart';
+
 import '../../main.dart';
 import '../../state/title_bar_controller.dart';
 import '../../theme/neon.dart';
@@ -13,6 +15,7 @@ import '../log_viewer_page.dart';
 import 'account_page.dart';
 import 'debug_settings_page.dart';
 import 'language_page.dart';
+import 'low_level_settings_page.dart';
 import 'performance_settings_page.dart';
 import 'region_page.dart';
 import 'stream_quality_page.dart';
@@ -264,9 +267,27 @@ class SettingsPage extends StatelessWidget {
   /// Debug). Experimental options now live inside their own pages, marked with
   /// an EXPERIMENTAL tag instead of a separate category.
   Widget _advancedSettingsCard(BuildContext context) {
+    final s = services.settings;
+    final lowLevelSummary = !s.streamPriorityEnabled &&
+            !s.optLowLatencyMode &&
+            s.optRecoveryProfile == StreamRecoveryProfile.smooth &&
+            s.optMinBitrateKbps == 4000 &&
+            s.optEnableNack &&
+            s.optEnableFec &&
+            !s.optConstantQuality
+        ? 'Official profile'
+        : 'Custom overrides';
     return _FancyCard(
       child: Column(
         children: [
+          NeonSettingTile(
+            icon: Icons.tune,
+            title: 'Low level',
+            subtitle: 'nvstSdp · NACK/FEC · priority · $lowLevelSummary',
+            onTap: () => _open(context, LowLevelSettingsPage(services: services)),
+            trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+          ),
+          const Divider(height: 1),
           NeonSettingTile(
             icon: Icons.computer,
             title: 'Client',

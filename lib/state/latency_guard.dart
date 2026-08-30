@@ -40,11 +40,11 @@ class LatencyGuard {
   /// Backlog above this many frames counts as "behind live".
   static const double backlogThreshold = 3;
 
-  /// Consecutive hot polls before firing (~3 s at the 500 ms poll rate).
-  static const int triggerSamples = 6;
+  /// Consecutive hot polls before firing (~3 s at the 1 s poll rate).
+  static const int triggerSamples = 3;
 
   /// Rolling window of jitter-buffer delay samples (~24 s of polls).
-  static const int jbWindow = 48;
+  static const int jbWindow = 24;
 
   /// Newest-half vs oldest-half growth ratio treated as buildup.
   static const double jbGrowthRatio = 1.4;
@@ -58,7 +58,7 @@ class LatencyGuard {
   static const double jbAbsoluteCapMs = 100;
 
   /// Cool polls required to close an episode after it opened.
-  static const int recoverySamples = 10;
+  static const int recoverySamples = 6;
 
   final List<double> _jbHistory = [];
   int _backlogStrikes = 0;

@@ -11,12 +11,47 @@ const appLaunchModeWireValues = <AppLaunchMode, int>{
 int appLaunchModeWireValue(AppLaunchMode? mode) =>
     appLaunchModeWireValues[mode ?? AppLaunchMode.default_]!;
 
+int codecWireValue(VideoCodec codec) {
+  switch (codec) {
+    case VideoCodec.h264:
+      return 1;
+    case VideoCodec.h265:
+      return 2;
+    case VideoCodec.av1:
+      return 3;
+  }
+}
+
+const _officialCodecLadders = <int, List<int>>{
+  0: [0],
+  1: [1],
+  2: [2, 1],
+  3: [3, 2, 1],
+};
+
+int resolveRequestedCodecWireValue(
+  int preferenceWireValue,
+  List<int> supportedCodecWireValues,
+) {
+  final ladder = _officialCodecLadders[preferenceWireValue] ??
+      [preferenceWireValue];
+  if (supportedCodecWireValues.isEmpty) {
+    return ladder.first;
+  }
+  final supported = Set<int>.from(supportedCodecWireValues);
+  for (final v in ladder) {
+    if (supported.contains(v)) return v;
+  }
+  return ladder.first;
+}
+
 /// Port of buildRequestedStreamingFeatures
 Map<String, dynamic> buildRequestedStreamingFeatures({
   required StreamSettings settings,
   required int bitDepth,
   required int chromaFormat,
   required bool hdrEnabled,
+  List<VideoCodec>? supportedCodecs,
 }) {
   final cloudGsync = settings.enableCloudGsync;
   return {
@@ -32,6 +67,14 @@ Map<String, dynamic> buildRequestedStreamingFeatures({
     'prefilterSharpness': 0,
     'prefilterNoiseReduction': 0,
     'hudStreamingMode': 0,
+    'maxBitrateKbps': (settings.maxBitrateMbps * 1000).round(),
+    'codec': resolveRequestedCodecWireValue(
+      codecWireValue(settings.codec),
+      (supportedCodecs ?? const <VideoCodec>[]).map(codecWireValue).toList(),
+    ),
+    'vsync': false,
+    'dynamicStreamingMode': 3,
+    'audioChannelCount': 2,
   };
 }
 

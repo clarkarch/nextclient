@@ -82,6 +82,20 @@ class MainActivity : FlutterActivity() {
             // Prefer a stable 60Hz refresh while streaming to avoid the
             // compositor bouncing between 60/90/120Hz on variable-refresh
             // devices, which thrashes the Flutter raster thread.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    // API 31+: per-Surface setFrameRate is the preferred SF hint
+                    // over preferredDisplayModeId (works with Flutter SurfaceProducer).
+                    w.decorView.post {
+                        try {
+                            w.decorView.setFrameRate(
+                                60f,
+                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+                            )
+                        } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
                     val display = w.decorView.display

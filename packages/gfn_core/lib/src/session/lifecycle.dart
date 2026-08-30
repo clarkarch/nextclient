@@ -72,6 +72,20 @@ class SessionLifecycle {
     _transition(SessionState.requesting, 'Requesting session');
 
     try {
+      // If force-new was requested, stop existing active sessions first
+      // (mirrors OpenNOW's stopActiveSessionsForCreate).
+      if (request.existingSessionStrategy == ExistingSessionStrategy.forceNew) {
+        final token = request.token ?? await getToken();
+        final base = request.streamingBaseUrl ?? 'https://prod.cloudmatchbeta.nvidiagrid.net';
+        try {
+          await stopActiveSessionsForCreate(
+            token: token,
+            streamingBaseUrl: base,
+            zone: request.zone,
+            appId: request.appId,
+          );
+        } catch (_) {}
+      }
       var info = await cloudMatch.createSession(request);
       _session = info;
 
@@ -96,8 +110,9 @@ class SessionLifecycle {
         ));
         // Poll responses may drop ad creatives (sessionAds=null after the
         // first poll). Merge so queue ads don't vanish — matches OpenNOW's
-        // mergePolledSessionState.
-        info = mergePolledSessionState(_session!, polled);
+        // mergePolledSessionState. Merge with the local `info` — reading
+        // `_session!` here races with a concurrent stop() nulling it.
+        info = mergePolledSessionState(info, polled);
         _session = info;
       }
 
@@ -182,6 +197,36 @@ class SessionLifecycle {
       _lastError = error.toString();
       _transition(SessionState.error, _lastError!);
       rethrow;
+    }
+  }
+
+  /// Port of sessionLifecycle.ts stopActiveSessionsForCreate
+  Future<void> stopActiveSessionsForCreate({
+    required String token,
+    required String streamingBaseUrl,
+    required String zone,
+    required String appId,
+  }) async {
+    final activeSessions = await cloudMatch.getActiveSessions(
+      token: token,
+      streamingBaseUrl: streamingBaseUrl,
+    );
+    final sessionsToStop = activeSessions.where(isActiveCreateSessionConflict).toList();
+    if (sessionsToStop.isEmpty) return;
+    for (final s in sessionsToStop) {
+      final serverIp = s.serverIp;
+      if (serverIp == null || serverIp.isEmpty) continue;
+      try {
+        await cloudMatch.stopSession(SessionStopRequest(
+          token: token,
+          streamingBaseUrl: streamingBaseUrl,
+          serverIp: serverIp,
+          zone: zone,
+          sessionId: s.sessionId,
+        ));
+      } catch (_) {
+        // best-effort — match OpenNOW which continues on single stop failure
+      }
     }
   }
 

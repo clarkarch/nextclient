@@ -393,6 +393,57 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
               onChanged: (v) => s.inputCursorOverlay = v,
             ),
           ),
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.ads_click,
+            title: 'Native cursor for system styles',
+            subtitle: 'Predefined cursors as OS cursor (WM effects). Off = overlay bitmap even for system cursors.',
+            trailing: NeonSwitch(
+              value: s.inputCursorNative,
+              onChanged: (v) => s.inputCursorNative = v,
+            ),
+          ),
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.touch_app_outlined,
+            title: 'Touch input',
+            subtitle: s.inputTouchEnabled ? 'Touch emits game input' : 'Touch ignored (mouse/keyboard only)',
+            trailing: NeonSwitch(
+              value: s.inputTouchEnabled,
+              onChanged: (v) => s.inputTouchEnabled = v,
+            ),
+          ),
+          if (s.inputTouchEnabled) ...[
+            const Divider(height: 1),
+            NeonSettingTile(
+              icon: Icons.pan_tool_outlined,
+              title: 'Touch mode',
+              subtitle: s.inputTouchMode == TouchInputMode.absolute
+                  ? 'Absolute: finger pins pointer'
+                  : 'Relative: finger drags like trackpad',
+              trailing: NeonDropdown<TouchInputMode>(
+                value: s.inputTouchMode,
+                width: 130,
+                onChanged: (v) {
+                  if (v != null) s.inputTouchMode = v;
+                },
+                items: const [
+                  NeonDropdownItem(TouchInputMode.relative, 'Relative'),
+                  NeonDropdownItem(TouchInputMode.absolute, 'Absolute'),
+                ],
+              ),
+            ),
+          ],
+          const Divider(height: 1),
+          NeonSettingTile(
+            icon: Icons.keyboard_hide_outlined,
+            title: 'Tap to dismiss keyboard',
+            subtitle: 'Tap the stream to close soft keyboard (else stays open).',
+            trailing: NeonSwitch(
+              value: s.keyboardTapToDismiss,
+              onChanged: (v) => s.keyboardTapToDismiss = v,
+            ),
+          ),
         ],
       ),
     );

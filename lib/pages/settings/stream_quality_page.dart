@@ -8,11 +8,11 @@ import '../../theme/neon.dart';
 import '../../widgets/neon_button.dart';
 import '../../widgets/neon_card.dart';
 import '../../widgets/neon_dropdown.dart';
-import '../../widgets/neon_experimental_tag.dart';
 import '../../widgets/neon_option_chip.dart';
 import '../../widgets/neon_page_scaffold.dart';
 import '../../widgets/neon_setting_tile.dart';
 import '../../widgets/neon_switch.dart';
+import 'low_level_settings_page.dart';
 
 /// Stream options sent to the NVIDIA server on launch. Options are gated by
 /// the account's entitled resolutions when the subscription is known.
@@ -292,18 +292,6 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
                     _SectionLabel(label: 'Max bitrate'),
                     const SizedBox(height: 10),
                     _bitrateSlider(s),
-                    const SizedBox(height: 6),
-                    _toggleRow(
-                      icon: Icons.auto_awesome_motion,
-                      title: 'Constant quality',
-                      subtitle:
-                          'Holds full bitrate during complex scenes by '
-                          'disabling the server\'s adaptive rate control. '
-                          'Best on stable connections — pair with a higher '
-                          'Max bitrate.',
-                      value: s.optConstantQuality,
-                      onChanged: (v) => s.optConstantQuality = v,
-                    ),
                     const SizedBox(height: 22),
                     const _SectionLabel(label: 'Codec'),
                     const SizedBox(height: 10),
@@ -343,7 +331,7 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
                 ),
               ),
               const SizedBox(height: 14),
-              _experimentalServerCard(s),
+              _lowLevelNavCard(context),
             ],
           );
         },
@@ -351,184 +339,29 @@ class _StreamQualityPageState extends State<StreamQualityPage> {
     );
   }
 
-  /// Server-side adaptation knobs sent via nvstSdp (the server may ignore
-  /// them). Kept as stable settings but flagged EXPERIMENTAL.
-  Widget _experimentalServerCard(UserSettings s) {
+  Widget _lowLevelNavCard(BuildContext context) {
+    final s = widget.services.settings;
+    final isOfficial = !s.streamPriorityEnabled &&
+        !s.optLowLatencyMode &&
+        s.optRecoveryProfile == StreamRecoveryProfile.smooth &&
+        s.optMinBitrateKbps == 4000 &&
+        s.optEnableNack &&
+        s.optEnableFec &&
+        !s.optConstantQuality;
     return NeonCard(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'SERVER ADAPTATION',
-                  style: TextStyle(
-                    color: Neon.accent,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 2,
-                  ),
-                ),
-              ),
-              const NeonExperimentalTag(),
-            ],
+      padding: EdgeInsets.zero,
+      child: NeonSettingTile(
+        icon: Icons.tune,
+        title: 'Low level tuning',
+        subtitle: isOfficial
+            ? 'Official profile · tap to tweak priority, recovery, pacing'
+            : 'Custom overrides active · tap to edit nvstSdp knobs',
+        trailing: const Icon(Icons.chevron_right, color: Neon.inkMuted),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => LowLevelSettingsPage(services: widget.services),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Unverified options baked into nvstSdp at session start — they only '
-            'affect new sessions and the server may ignore them.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'STREAM PRIORITY PRESETS',
-                  style: TextStyle(
-                    color: Neon.accent,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 2,
-                  ),
-                ),
-              ),
-              NeonSwitch(
-                value: s.streamPriorityEnabled,
-                onChanged: (v) => s.streamPriorityEnabled = v,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            s.streamPriorityEnabled
-                ? 'Active — the preset below is sent via nvstSdp. OFF is the '
-                      'safe default (matches the original OpenNOW profile).'
-                : 'Off (default) — the stream uses the safe quality profile, '
-                      'matching original OpenNOW behavior. Enable to experiment.',
-            style: const TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final p in StreamPriority.values)
-                NeonOptionChip(
-                  label: p.name.toUpperCase(),
-                  selected: p == s.streamPriority,
-                  enabled: s.streamPriorityEnabled,
-                  onTap: () => s.streamPriority = p,
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _toggleRow(
-            icon: Icons.bolt_outlined,
-            title: 'Low-latency mode',
-            subtitle: 'Tightens server frame pacing, packet delay budget and '
-                'RTCP feedback cadence. Lower input latency, less jitter '
-                'tolerance.',
-            value: s.optLowLatencyMode,
-            onChanged: (v) => s.optLowLatencyMode = v,
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'RECOVERY',
-            style: TextStyle(
-              color: Neon.accent,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 2,
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'How the server repairs packet loss. Smooth keeps a deep NACK '
-            'window (resilient, but grows latency under loss); latency uses a '
-            'shallow window + fresh keyframes.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final p in StreamRecoveryProfile.values)
-                NeonOptionChip(
-                  label: p.name.toUpperCase(),
-                  selected: p == s.optRecoveryProfile,
-                  onTap: () => s.optRecoveryProfile = p,
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'MIN BITRATE FLOOR',
-            style: TextStyle(
-              color: Neon.accent,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 2,
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Lower bound the server targets even when bandwidth estimation '
-            'drops. Higher = stable quality; lower = faster BWE shed.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: Slider(
-                  value: (s.optMinBitrateKbps / 1000).clamp(1, 30),
-                  min: 1,
-                  max: 30,
-                  divisions: 29,
-                  activeColor: Neon.accent,
-                  inactiveColor: Neon.bgC,
-                  label: '${s.optMinBitrateKbps ~/ 1000} Mbps',
-                  onChanged: (v) =>
-                      s.optMinBitrateKbps = (v * 1000).round(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '${s.optMinBitrateKbps ~/ 1000} Mbps',
-                style: const TextStyle(
-                  color: Neon.inkSoft,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          _toggleRow(
-            icon: Icons.refresh,
-            title: 'Enable NACK retransmission',
-            subtitle: 'Request re-sends of lost RTP packets.',
-            value: s.optEnableNack,
-            onChanged: (v) => s.optEnableNack = v,
-          ),
-          _toggleRow(
-            icon: Icons.dehaze,
-            title: 'Enable FEC forward error correction',
-            subtitle: 'Recover loss with redundant packets.',
-            value: s.optEnableFec,
-            onChanged: (v) => s.optEnableFec = v,
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Both negotiate recovery with the server. Disabling both maximizes '
-            'bandwidth headroom for video but makes loss bursts more visible.',
-            style: TextStyle(color: Neon.inkMuted, fontSize: 12),
-          ),
-        ],
+        ),
       ),
     );
   }

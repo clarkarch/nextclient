@@ -144,11 +144,15 @@ class _StreamPageState extends State<StreamPage> {
 
   void _startUiFpsTracking() {
     if (_uiFpsActive) return;
-    // Max-performance: skip the per-frame post-frame callback chain entirely.
-    // It re-schedules every vsync and adds dart overhead while in-game;
-    // the exit report will simply omit the UI-fps row, which is preferable to
-    // burning frames for telemetry.
+    // Skip the per-frame post-frame callback chain when telemetry is muted:
+    // it re-schedules every vsync and burns frames while in-game. The overlay's
+    // own Ticker already samples UI FPS when visible, so this chain is only
+    // needed for the exit report — and max-performance omits that row entirely.
     if (widget.services.settings.maxPerformanceMode) return;
+    // When the stats overlay is off, also skip the chain — the Ticker in
+    // _StatsOverlay is not running, so this would be the sole per-frame wakeup.
+    // The exit report will omit the UI-fps row in that case.
+    if (!widget.services.settings.streamShowFps) return;
     _uiFpsActive = true;
     _uiFrames = 0;
     _uiWindowStart = null;
@@ -157,7 +161,8 @@ class _StreamPageState extends State<StreamPage> {
 
   void _onUiFrame(Duration elapsed) {
     if (!_uiFpsActive) return;
-    if (widget.services.settings.maxPerformanceMode) {
+    if (widget.services.settings.maxPerformanceMode ||
+        !widget.services.settings.streamShowFps) {
       _uiFpsActive = false;
       return;
     }
@@ -323,6 +328,12 @@ class _StreamPageState extends State<StreamPage> {
   /// video to its surface.
   Future<void> _connectStream(SessionInfo session) async {
     if (_transport != null) return;
+    String? authToken;
+    try {
+      authToken = await widget.services.auth.resolveJwtToken();
+    } catch (_) {
+      // NVST-only; other transports ignore it.
+    }
     final transport = createStreamTransport(
       kind: widget.services.settings.streamTransport,
       session: session,
@@ -331,6 +342,7 @@ class _StreamPageState extends State<StreamPage> {
       onStatus: (msg) {
         if (mounted) setState(() => _webrtcStatus = msg);
       },
+      authToken: authToken,
     );
     _transport = transport;
     // Start the session stats rollup for the on-exit report.
@@ -350,8 +362,9 @@ class _StreamPageState extends State<StreamPage> {
         'stream',
         'Stream session started',
       );
-    } catch (e) {
+    } catch (e, stack) {
       debugPrint('[stream] transport start failed: $e');
+      debugPrint('$stack');
       widget.services.logSink.log(
         LogLevel.error,
         'stream',
@@ -431,13 +444,14 @@ class _StreamPageState extends State<StreamPage> {
         'Session launched [SESSION ID REDACTED]',
       );
       if (launched != null && mounted) await _connectStream(launched);
-    } catch (e) {
+    } catch (e, stack) {
       widget.services.logSink.log(
         LogLevel.error,
         'stream',
         'Launch failed: $e',
       );
       debugPrint('Launch failed: $e');
+      debugPrint('$stack');
     }
   }
 
@@ -2337,7 +2351,8 @@ class _ReadySurfaceState extends State<_ReadySurface>
           ? base
           : _mouseFlushIntervalMs,
       reliableBufferedAmount: widget.transport?.inputQueueBufferedBytes ?? 0,
-      canUsePartiallyReliableMouse: false,
+      canUsePartiallyReliableMouse:
+          widget.transport?.canSendMousePartiallyReliable ?? false,
       backpressureThresholdBytes: 64 * 1024,
       minIntervalMs: 2,
       maxIntervalMs: 20,
@@ -2629,11 +2644,9 @@ class _ReadySurfaceState extends State<_ReadySurface>
     _rightStickY = -ry;
     _leftTrigger = lt;
     _rightTrigger = rt;
-    // Drop the virtual-pad latch timer: a physical controller already samples
-    // at its own rate, so stream its latest state as it arrives.
-    _gamepadFlushTimer?.cancel();
-    _gamepadFlushTimer = null;
-    _sendGamepadState();
+    // Coalesce physical controller at 16 ms like the virtual pad — Android
+    // MotionEvents can arrive at 125-500 Hz and each packet would flood SCTP.
+    _scheduleGamepadFlush();
   }
 
   void _sendGamepadState() {

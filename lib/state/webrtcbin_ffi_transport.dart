@@ -4,8 +4,9 @@ import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
-import 'package:flutter/services.dart' show KeyEvent, KeyDownEvent, KeyUpEvent, KeyRepeatEvent;
+import 'package:flutter/foundation.dart' show ValueListenable, ValueNotifier;
+import 'package:flutter/services.dart'
+    show KeyEvent, KeyDownEvent, KeyUpEvent, KeyRepeatEvent, MethodChannel;
 import 'package:flutter/widgets.dart';
 import 'package:gfn_core/gfn_core.dart';
 import 'package:path_provider/path_provider.dart' show getTemporaryDirectory;
@@ -36,6 +37,13 @@ class WebRtcBinFfiTransport implements StreamTransport {
   final UserSettings settings;
   final LogSink log;
 
+  // GPU-texture path: when the in-tree Linux plugin attaches, frames are
+  // uploaded to a FlTextureGL on the raster thread and rendered via a
+  // Texture widget — no Dart-side image decode.
+  int? gpuTextureId;
+  final ValueNotifier<int?> gpuTextureNotifier = ValueNotifier(null);
+  bool get useGpuTexture => gpuTextureId != null;
+
   /// Latest decoded frame, rendered by [buildVideoView]. Also drives
   /// [rendererHasVideo].
   final ValueNotifier<ui.Image?> frameImage = ValueNotifier(null);
@@ -61,6 +69,12 @@ class WebRtcBinFfiTransport implements StreamTransport {
   // Input transport state (same protocol as the libwebrtc path).
   final GfnInputEncoder _inputEncoder = GfnInputEncoder();
   bool _inputReady = false;
+  // Mirrors the libwebrtc session: if the server's NVST input handshake
+  // doesn't arrive within the grace window of the reliable channel opening,
+  // go input-ready with protocol v2 anyway (heartbeats make the server start
+  // the full-rate stream and accept input).
+  Timer? _inputReadyFallbackTimer;
+  static const Duration _inputReadyFallbackDelay = Duration(seconds: 3);
   bool _reliableInputOpen = false;
   bool _partiallyReliableInputOpen = false;
   Timer? _inputHeartbeatTimer;
@@ -108,7 +122,8 @@ class WebRtcBinFfiTransport implements StreamTransport {
   int? get videoHeight => _videoHeight;
 
   @override
-  bool get rendererHasVideo => frameImage.value != null;
+  bool get rendererHasVideo =>
+      useGpuTexture || frameImage.value != null;
 
   /// No WebRTC cursor_channel on the GStreamer bridge path — cursor rendering
   /// stays server-side.
@@ -121,10 +136,19 @@ class WebRtcBinFfiTransport implements StreamTransport {
   int? get inputQueueBufferedBytes => null;
 
   @override
+  bool get canSendMousePartiallyReliable =>
+      _canUsePartiallyReliableInput(inputMouseRel);
+
+  @override
   Future<void> start() async {
     if (_disposed) return;
     final bridge = GstBridgeFfi.create(
-      onLog: (msg) => log.log(LogLevel.debug, 'gstbridge', msg),
+      onLog: (msg) {
+        // Always on stdout — the sink is gated by verbose-logs/max-perf, and
+        // transport failures are undiagnosable without these lines.
+        debugPrint('[gstbridge] $msg');
+        log.log(LogLevel.debug, 'gstbridge', msg);
+      },
       onIceCandidate: _onLocalIceCandidate,
       onFrame: _onNativeFrame,
       onChannel: _onChannelState,
@@ -132,6 +156,27 @@ class WebRtcBinFfiTransport implements StreamTransport {
     );
     _bridge = bridge;
     _log('GStreamer bridge created (webrtcbin)');
+
+    // GPU-texture path (Linux runner plugin): register the bridge's frame
+    // slot as a FlTextureGL so video renders on the raster thread instead of
+    // through Dart image decoding. Failure falls back to RawImage silently.
+    try {
+      final libPath = GstBridgeFfi.resolvedLibraryPath;
+      final ptr = bridge.bridgePointer;
+      if (libPath != null && ptr != null) {
+        const ch = MethodChannel('next_client/gst_texture');
+        final id = await ch.invokeMethod<int>('attach', {
+          'bridge': ptr,
+          'libPath': libPath,
+        });
+        if (id != null && id != 0) {
+          gpuTextureId = id;
+          _log('GPU texture attached (id $id) — raster-thread rendering');
+        }
+      }
+    } catch (e) {
+      _log('GPU texture attach failed ($e) — using RawImage fallback');
+    }
 
     _startStatsPolling();
     _log('Signaling: [SERVER HOST REDACTED]');
@@ -261,7 +306,20 @@ class WebRtcBinFfiTransport implements StreamTransport {
       }
       processedOffer = duplicated;
 
-      final filtered = GfnSdpMunger.preferCodec(processedOffer, codec);
+      final isH265ForPref = codec.toUpperCase() == 'H265';
+      final preferProfile = isH265ForPref
+          ? (streamSettings.colorQuality.bitDepth == 1 ? 2 : 1)
+          : null;
+      // Soft mode (web parity): reorder H264 first but KEEP every payload —
+      // the working libwebrtc answer keeps 96 101 99 100 97 102 98 (FEC
+      // included) and the server's sender behaves differently when payloads
+      // are stripped.
+      final filtered = GfnSdpMunger.preferCodec(
+        processedOffer,
+        codec,
+        keepFallbacks: true,
+        preferHevcProfileId: preferProfile,
+      );
       if (filtered != processedOffer) {
         _log('Filtered offer SDP to codec $codec');
       }
@@ -412,11 +470,21 @@ class WebRtcBinFfiTransport implements StreamTransport {
         minBitrateKbps: settings.optMinBitrateKbps,
         enableNack: settings.optEnableNack,
         enableFec: settings.optEnableFec,
-        constantQuality: settings.optConstantQuality,
+        // Force BWE-off (Moonlight model: no server-side congestion
+        // estimation, full rate) for the webrtcbin transport — GStreamer
+        // webrtcbin sends no transport-cc feedback, so NVIDIA's bandwidth
+        // estimator throttles the stream to its ~2.5 Mbps warm-up floor
+        // (~14 fps @1080p) without it. libwebrtc keeps the user setting.
+        constantQuality: true,
       );
       _log('nvstSdp: codec=$codec ${dims.$1}x${dims.$2}@${streamSettings.fps}fps '
           'max=${streamSettings.maxBitrateMbps}Mbps ufrag=${credentials.ufrag} '
           'pwd=${credentials.pwd} fp=${credentials.fingerprint}');
+      // Dump the exact on-wire answer for offline diffing against the
+      // libwebrtc transport (/tmp/gfn_libwebrtc_answer.sdp).
+      try {
+        File('/tmp/gfn_webrtcbin_answer.sdp').writeAsStringSync(gfnAnswer);
+      } catch (_) {}
       await _signaling?.sendAnswer(
         SendAnswerRequest(sdp: gfnAnswer, nvstSdp: nvstSdp),
       );
@@ -471,6 +539,20 @@ class WebRtcBinFfiTransport implements StreamTransport {
 
   void _onNativeFrame(int width, int height, int stride,
       ffi.Pointer<ffi.Uint8> rgba, int rtpTimestamp) {
+    _established = true;
+    _videoWidth = width;
+    _videoHeight = height;
+    if (useGpuTexture) {
+      // Mount the Texture widget on the first real frame — before this the
+      // raster thread has nothing to upload, and populate() running without a
+      // frame is a crash window we don't need. The raster thread now consumes
+      // the frame slot directly; the Dart decode pipeline stays off.
+      if (gpuTextureNotifier.value == null && gpuTextureId != null) {
+        gpuTextureNotifier.value = gpuTextureId;
+      }
+      _bridge?.freePtr(rgba.cast());
+      return;
+    }
     final rowBytes = width * 4;
     final total = stride > 0 && height > 0 ? stride * height : 0;
     if (total <= 0 || rowBytes <= 0) {
@@ -529,7 +611,15 @@ class WebRtcBinFfiTransport implements StreamTransport {
   void _onChannelState(int channel, bool open) {
     if (channel == 1) {
       _reliableInputOpen = open;
-      if (open) _log('Reliable input channel open');
+      if (open) {
+        _log('Reliable input channel open');
+        _armInputReadyFallback();
+      } else {
+        _inputReady = false;
+        _inputReadyFallbackTimer?.cancel();
+        _inputReadyFallbackTimer = null;
+        _inputHeartbeatTimer?.cancel();
+      }
     } else if (channel == 2) {
       _partiallyReliableInputOpen = open;
       if (open) {
@@ -539,7 +629,15 @@ class WebRtcBinFfiTransport implements StreamTransport {
   }
 
   void _onChannelMessage(int channel, Uint8List bytes) {
-    if (bytes.length < 2 || channel != 1) return;
+    if (channel != 1) return;
+    if (!_inputReady && bytes.isNotEmpty) {
+      final hex = bytes
+          .take(16)
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join(' ');
+      _log('inbound reliable ch ${bytes.length}B: $hex');
+    }
+    if (bytes.length < 2) return;
     if (_inputReady) return; // post-handshake messages: telemetry, ignore
 
     final view = ByteData.sublistView(bytes);
@@ -554,12 +652,29 @@ class WebRtcBinFfiTransport implements StreamTransport {
       return; // Not a handshake.
     }
 
+    _inputReadyFallbackTimer?.cancel();
+    _inputReadyFallbackTimer = null;
     _inputEncoder.clock.start();
     _inputReady = true;
     _inputEncoder.setProtocolVersion(version);
     _log('Input handshake complete (protocol v$version) — starting heartbeat');
     _startInputHeartbeat();
     if (_gamepadTouched) _sendLatchedGamepadState();
+  }
+
+  void _armInputReadyFallback() {
+    _inputReadyFallbackTimer?.cancel();
+    _inputReadyFallbackTimer = Timer(_inputReadyFallbackDelay, () {
+      _inputReadyFallbackTimer = null;
+      if (_inputReady || _disposed) return;
+      _inputEncoder.clock.start();
+      _inputReady = true;
+      _log('No input handshake within '
+          '${_inputReadyFallbackDelay.inSeconds}s — assuming protocol v2'
+          ' (fallback)');
+      _startInputHeartbeat();
+      if (_gamepadTouched) _sendLatchedGamepadState();
+    });
   }
 
   void _startInputHeartbeat() {
@@ -749,7 +864,7 @@ class WebRtcBinFfiTransport implements StreamTransport {
 
   void _startStatsPolling() {
     _statsTimer?.cancel();
-    _statsTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _statsTimer = Timer.periodic(settings.statsPollInterval, (_) {
       unawaited(_pollStats());
     });
   }
@@ -805,6 +920,16 @@ class WebRtcBinFfiTransport implements StreamTransport {
     return _GstVideoView(transport: this, placeholder: placeholder);
   }
 
+  /// Detaches the GPU texture (runner plugin) if one is registered.
+  Future<void> _detachGpuTexture() async {
+    if (gpuTextureId == null) return;
+    gpuTextureId = null;
+    try {
+      await const MethodChannel('next_client/gst_texture')
+          .invokeMethod('detach');
+    } catch (_) {}
+  }
+
   // ---------------------------------------------------------------------
   // Teardown
   // ---------------------------------------------------------------------
@@ -822,8 +947,11 @@ class WebRtcBinFfiTransport implements StreamTransport {
 
     _inputHeartbeatTimer?.cancel();
     _inputHeartbeatTimer = null;
+    _inputReadyFallbackTimer?.cancel();
+    _inputReadyFallbackTimer = null;
     _inputReady = false;
 
+    await _detachGpuTexture();
     final bridge = _bridge;
     _bridge = null;
     bridge?.dispose();
@@ -845,14 +973,22 @@ class _GstVideoView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ui.Image?>(
-      valueListenable: transport.frameImage,
-      builder: (context, image, _) {
-        if (image == null) return placeholder;
-        return RawImage(
-          image: image,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
+    return ValueListenableBuilder<int?>(
+      valueListenable: transport.gpuTextureNotifier,
+      builder: (context, textureId, _) {
+        if (textureId != null) {
+          return Texture(textureId: textureId);
+        }
+        return ValueListenableBuilder<ui.Image?>(
+          valueListenable: transport.frameImage,
+          builder: (context, image, _) {
+            if (image == null) return placeholder;
+            return RawImage(
+              image: image,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.medium,
+            );
+          },
         );
       },
     );

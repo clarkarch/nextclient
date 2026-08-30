@@ -8,6 +8,10 @@
 //     -> videoconvert
 //     -> video/x-raw,format=RGBA
 //     -> appsink             // new-sample -> bridge_frame_cb
+//   webrtcbin (audio RTP pad)
+//     -> decodebin           // auto: rtpopusdepay + opusdec
+//     -> audioconvert -> audioresample -> autoaudiosink (sync=false)
+//                            // (OpenNOW parity: local audio playback)
 //
 // Threading: a dedicated GLib main loop runs on a background thread; every
 // action (set-remote-description, create-answer, set-local-description,
@@ -20,6 +24,11 @@
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 #include <gst/sdp/gstsdpmessage.h>
+#include <unistd.h>
+#include <va/va.h>
+#include <va/va_drmcommon.h>
+#include <drm_fourcc.h>
+#include <gst/va/gstva.h>
 #include <gst/video/video.h>
 #include <gst/webrtc/datachannel.h>
 #include <gst/webrtc/webrtc.h>
@@ -30,6 +39,11 @@
 #include <string.h>
 
 #define LOG_LINE_MAX 512
+
+// Dmabuf frame slot helpers (defined below the sample handler).
+void bridge_close_dmabuf_fds(BridgeDmaBufFrame* f);
+int bridge_frame_slot_mode(GstBridge* bridge);
+int bridge_acquire_latest_dmabuf(GstBridge* bridge, BridgeDmaBufFrame* out);
 
 struct GstBridge {
   GMainLoop* loop;
@@ -44,8 +58,24 @@ struct GstBridge {
   // Video decode chain (created once when the video pad appears).
   GstElement* decodebin;
   GstElement* convert;
+  GstElement* vapostproc;  // GPU zero-copy mode: VA postproc (VAMemory RGBA)
   GstElement* appsink;
   gboolean video_attached;
+  guint video_ssrc;        // remote video SSRC (from RTP caps) for PLI/FIR
+  guint keyframe_retry_id; // GLib timeout source id
+  GstPad* video_rtp_pad;   // webrtcbin video src pad (ref'd) — keyframe events
+  guint rtp_probe_id;      // pad probe id (RTP delivery counter)
+  int rtp_frames_window;   // RTP buffers seen in the current 5s window
+  int rtp_fps_last;        // last logged RTP buffers/s
+
+  // Audio decode chain (created once when the audio pad appears):
+  // decodebin -> queue -> audioconvert -> audioresample -> autoaudiosink
+  // (OpenNOW parity: audio always decoded via decodebin + autoaudiosink).
+  GstElement* audio_queue;
+  GstElement* audio_convert;
+  GstElement* audio_resample;
+  GstElement* audio_sink;
+  gboolean audio_attached;
 
   bridge_log_cb log_cb;
   bridge_ice_cb ice_cb;
@@ -61,6 +91,32 @@ struct GstBridge {
   GMutex stats_mutex;
   int frames_decoded;
   gboolean destroyed;
+
+  // GPU-texture frame slot (swap-on-acquire double buffer, see
+  // bridge_enable_frame_slot). The producer ONLY ever writes slot_scratch;
+  // the consumer's buffer is handed over at acquire and stays untouched by
+  // the producer until the consumer releases it at the NEXT acquire.
+  GMutex slot_mutex;
+  uint8_t* slot_consumer;  // consumer-owned between acquire calls
+  size_t slot_consumer_cap;
+  int32_t slot_width;
+  int32_t slot_height;
+  int32_t slot_stride;
+  uint8_t* slot_scratch;   // producer-only until the next acquire swaps it in
+  size_t slot_scratch_cap;
+  int32_t slot_pending_width;
+  int32_t slot_pending_height;
+  int32_t slot_pending_stride;
+  uint32_t slot_seq;
+  gboolean slot_pending;
+  gboolean slot_has_frame;
+  gboolean slot_enabled;
+  // GPU zero-copy mode: frames exported as dmabuf fds instead of pixels.
+  gboolean slot_is_dmabuf;
+  BridgeDmaBufFrame slot_dmabuf_pending;
+  BridgeDmaBufFrame slot_dmabuf_consumer;
+  bridge_slot_notify_cb slot_notify;
+  void* slot_notify_userdata;
 
   // M-line index of the SCTP (application) section — the only transport
   // webrtcbin actually creates and gathers candidates for. Remote candidates
@@ -115,6 +171,80 @@ static GstFlowReturn on_new_sample(GstElement* sink, gpointer user_data) {
     return GST_FLOW_OK;
   }
 
+  // GPU zero-copy mode: export the VA surface as dmabuf fds — the CPU never
+  // maps or copies a pixel.
+  if (b->slot_is_dmabuf) {
+    g_mutex_lock(&b->stats_mutex);
+    b->frames_decoded++;
+    g_mutex_unlock(&b->stats_mutex);
+
+    VASurfaceID surface = gst_va_buffer_get_surface(buffer);
+    GstVaDisplay* va_display = gst_va_buffer_peek_display(buffer);
+    if (surface == VA_INVALID_ID || !va_display) {
+      gst_sample_unref(sample);
+      return GST_FLOW_OK;
+    }
+    VADisplay dpy = (VADisplay)gst_va_display_get_va_dpy(va_display);
+    if (!dpy) {
+      gst_sample_unref(sample);
+      return GST_FLOW_OK;
+    }
+    vaSyncSurface(dpy, surface);
+
+    BridgeDmaBufFrame f;
+    memset(&f, 0, sizeof(f));
+    f.width = GST_VIDEO_INFO_WIDTH(&info);
+    f.height = GST_VIDEO_INFO_HEIGHT(&info);
+    f.seq = (uint32_t)g_atomic_int_add(&b->slot_seq, 1) + 1;
+    // GStreamer RGBA VAMemory surfaces: VA_FOURCC_RGBA == DRM_FORMAT_ABGR8888
+    f.fourcc = DRM_FORMAT_ABGR8888;
+    f.nfd = 1;
+    f.fds[0] = -1;
+
+    VADRMPRIMESurfaceDescriptor h;
+    memset(&h, 0, sizeof(h));
+    VAStatus st = vaExportSurfaceHandle(dpy, surface,
+                                        VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+                                        VA_EXPORT_SURFACE_READ_ONLY |
+                                            VA_EXPORT_SURFACE_COMPOSED_LAYERS,
+                                        &h);
+    if (st != VA_STATUS_SUCCESS) {
+      static gboolean warned = FALSE;
+      if (!warned) {
+        bridge_log(b, "webrtcbin: vaExportSurfaceHandle failed (%d) — "
+                      "zero-copy frames unavailable", (int)st);
+        warned = TRUE;
+      }
+      gst_sample_unref(sample);
+      return GST_FLOW_OK;
+    }
+    f.nfd = h.num_objects;
+    for (uint32_t i = 0; i < h.num_objects && i < 4; i++) {
+      f.fds[i] = h.objects[i].fd;
+      f.modifiers[i] = h.objects[i].drm_format_modifier;
+    }
+    f.fourcc = h.fourcc;
+    if (h.num_layers > 0) {
+      // Single composed layer: 1 plane for RGBA.
+      f.strides[0] = (int32_t)h.layers[0].pitch[0];
+      f.offsets[0] = (int32_t)h.layers[0].offset[0];
+    }
+
+    g_mutex_lock(&b->slot_mutex);
+    // Producer-side lifecycle: close the previous unconsumed pending export.
+    bridge_close_dmabuf_fds(&b->slot_dmabuf_pending);
+    b->slot_dmabuf_pending = f;
+    b->slot_pending = TRUE;
+    b->slot_has_frame = TRUE;
+    bridge_slot_notify_cb notify = b->slot_notify;
+    void* notify_ud = b->slot_notify_userdata;
+    g_mutex_unlock(&b->slot_mutex);
+    if (notify) notify(notify_ud);
+
+    gst_sample_unref(sample);
+    return GST_FLOW_OK;
+  }
+
   GstMapInfo map;
   if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
     gst_sample_unref(sample);
@@ -137,6 +267,39 @@ static GstFlowReturn on_new_sample(GstElement* sink, gpointer user_data) {
     b->frames_decoded++;
     g_mutex_unlock(&b->stats_mutex);
   }
+
+  // GPU-texture slot: store the newest frame (producer copies outside the
+  // lock into scratch, then swaps pointers under the lock).
+  if (b->slot_enabled && map.data && map.size > 0) {
+    size_t need = (size_t)map.size;
+    if (b->slot_scratch_cap < need) {
+      g_mutex_lock(&b->slot_mutex);
+      uint8_t* grown = (uint8_t*)realloc(b->slot_scratch, need);
+      if (grown) {
+        b->slot_scratch = grown;
+        b->slot_scratch_cap = need;
+      }
+      g_mutex_unlock(&b->slot_mutex);
+    }
+    if (b->slot_scratch && b->slot_scratch_cap >= need) {
+      memcpy(b->slot_scratch, map.data, need);
+      g_mutex_lock(&b->slot_mutex);
+      b->slot_pending_width = GST_VIDEO_INFO_WIDTH(&info);
+      b->slot_pending_height = GST_VIDEO_INFO_HEIGHT(&info);
+      b->slot_pending_stride = GST_VIDEO_INFO_PLANE_STRIDE(&info, 0);
+      b->slot_seq++;
+      b->slot_pending = TRUE;
+      b->slot_has_frame = TRUE;
+      bridge_slot_notify_cb notify = b->slot_notify;
+      void* notify_ud = b->slot_notify_userdata;
+      g_mutex_unlock(&b->slot_mutex);
+      // Flutter only re-invokes populate() after
+      // fl_texture_registrar_mark_texture_frame_available() — the plugin
+      // hooks this to mark the texture dirty per frame. Thread-safe: the
+      // registrar posts to the platform thread internally.
+      if (notify) notify(notify_ud);
+    }
+  }
   gst_buffer_unmap(buffer, &map);
   gst_sample_unref(sample);
   return GST_FLOW_OK;
@@ -150,6 +313,23 @@ static void on_decodebin_pad_added(GstElement* element, GstPad* pad,
                                    gpointer user_data) {
   GstBridge* b = (GstBridge*)user_data;
   (void)element;
+  if (b->vapostproc) {
+    // GPU zero-copy mode: decodebin's raw video pad -> vapostproc sink.
+    GstCaps* caps = gst_pad_get_current_caps(pad);
+    const gchar* name =
+        caps ? gst_structure_get_name(gst_caps_get_structure(caps, 0)) : NULL;
+    gboolean is_raw = name && g_str_has_prefix(name, "video/x-raw");
+    if (caps) gst_caps_unref(caps);
+    if (!is_raw) return;
+    GstPad* sinkpad = gst_element_get_static_pad(b->vapostproc, "sink");
+    if (sinkpad) {
+      if (gst_pad_link(pad, sinkpad) != GST_PAD_LINK_OK) {
+        bridge_log(b, "webrtcbin: decodebin->vapostproc link failed");
+      }
+      gst_object_unref(sinkpad);
+    }
+    return;
+  }
   if (!b->convert) return;
   // decodebin can emit audio + video src pads; only the video one belongs on
   // the videoconvert->appsink chain. (The RTP pad feed is video-only in
@@ -174,6 +354,184 @@ static void on_decodebin_pad_added(GstElement* element, GstPad* pad,
   }
   gst_element_sync_state_with_parent(b->convert);
   gst_element_sync_state_with_parent(b->appsink);
+}
+
+// ---------------------------------------------------------------------------
+// Audio decode chain (webrtcbin audio RTP pad -> decodebin -> autoaudiosink)
+// ---------------------------------------------------------------------------
+
+static void on_audio_decodebin_pad_added(GstElement* element, GstPad* pad,
+                                         gpointer user_data) {
+  GstBridge* b = (GstBridge*)user_data;
+  (void)element;
+  // The dynamic raw-audio pad links to the QUEUE's sink — audioconvert's
+  // sink is already consumed by the static queue->convert chain.
+  if (!b->audio_queue) return;
+  GstCaps* caps = gst_pad_get_current_caps(pad);
+  const gchar* name =
+      caps ? gst_structure_get_name(gst_caps_get_structure(caps, 0)) : NULL;
+  gboolean is_audio_raw = name && g_str_has_prefix(name, "audio/x-raw");
+  if (caps) gst_caps_unref(caps);
+  if (!is_audio_raw) return;
+  GstPad* sinkpad = gst_element_get_static_pad(b->audio_queue, "sink");
+  if (sinkpad) {
+    if (gst_pad_link(pad, sinkpad) != GST_PAD_LINK_OK) {
+      bridge_log(b, "webrtcbin: decodebin->queue link failed");
+    }
+    gst_object_unref(sinkpad);
+  }
+  gst_element_sync_state_with_parent(b->audio_convert);
+  gst_element_sync_state_with_parent(b->audio_resample);
+  gst_element_sync_state_with_parent(b->audio_sink);
+}
+
+// OpenNOW parity (gstreamer_pipeline.rs:2866-2880): audio is always decoded
+// through a decodebin into `queue -> audioconvert -> audioresample ->
+// autoaudiosink` with low-latency sink config (sync=false). decodebin has a
+// single sink pad, so the audio media gets its own decodebin.
+static void attach_audio_chain(GstBridge* b, GstPad* pad) {
+  if (b->audio_attached) return;
+
+  GstElement* decodebin = gst_element_factory_make("decodebin", "decodebin-audio");
+  GstElement* queue = gst_element_factory_make("queue", "audio-queue");
+  GstElement* convert =
+      gst_element_factory_make("audioconvert", "audioconvert");
+  GstElement* resample =
+      gst_element_factory_make("audioresample", "audioresample");
+  GstElement* sink = gst_element_factory_make("autoaudiosink", "audio-sink");
+  if (!decodebin || !queue || !convert || !resample || !sink) {
+    bridge_log(b, "webrtcbin: failed to create audio decode chain elements");
+    return;
+  }
+
+  // OpenNOW AUDIO_QUEUE_MAX_BUFFERS=2; sink low-latency config (sync=false)
+  // matches their configure_sink call. (GstAutoAudioSink is a bin — it has
+  // `sync` but neither `async` nor `qos`; setting those logs a CRITICAL.)
+  g_object_set(G_OBJECT(queue), "max-size-buffers", 2, "max-size-bytes", 0,
+               "max-size-time", 0, NULL);
+  g_object_set(G_OBJECT(sink), "sync", FALSE, NULL);
+
+  gst_bin_add_many(GST_BIN(b->pipeline), decodebin, queue, convert, resample,
+                   sink, NULL);
+  if (!gst_element_link_many(queue, convert, resample, sink, NULL)) {
+    bridge_log(b, "webrtcbin: audio chain link failed");
+    return;
+  }
+  g_signal_connect(decodebin, "pad-added",
+                   G_CALLBACK(on_audio_decodebin_pad_added), b);
+  b->audio_queue = queue;
+  b->audio_convert = convert;
+  b->audio_resample = resample;
+  b->audio_sink = sink;
+
+  GstPad* sinkpad = gst_element_get_static_pad(decodebin, "sink");
+  if (sinkpad) {
+    if (gst_pad_link(pad, sinkpad) != GST_PAD_LINK_OK) {
+      bridge_log(b, "webrtcbin: failed to link audio pad to decodebin");
+    }
+    gst_object_unref(sinkpad);
+  }
+  gst_element_sync_state_with_parent(decodebin);
+  gst_element_sync_state_with_parent(queue);
+  b->audio_attached = TRUE;
+  bridge_log(b, "webrtcbin: audio RTP pad attached (decodebin->autoaudiosink)");
+}
+
+// RTP delivery counter: distinguishes "server sends ~14fps" from "the decode
+// pipeline drops to ~14fps".
+static GstPadProbeReturn rtp_buffer_probe(GstPad* pad,
+                                          GstPadProbeInfo* info,
+                                          gpointer user_data) {
+  (void)pad;
+  (void)info;
+  GstBridge* b = (GstBridge*)user_data;
+  g_mutex_lock(&b->stats_mutex);
+  b->rtp_frames_window++;
+  g_mutex_unlock(&b->stats_mutex);
+  return GST_PAD_PROBE_OK;
+}
+
+// RTP delivery rate: distinguishes "the server sends ~14 fps" from "our
+// pipeline drops to ~14 fps". Logged every 5 s on the GLib loop thread.
+static gboolean rtp_fps_log_tick(gpointer user_data) {
+  GstBridge* b = (GstBridge*)user_data;
+  if (!b || b->destroyed) return G_SOURCE_REMOVE;
+  g_mutex_lock(&b->stats_mutex);
+  int n = b->rtp_frames_window;
+  b->rtp_frames_window = 0;
+  g_mutex_unlock(&b->stats_mutex);
+  bridge_log(b, "webrtcbin: rtp delivery %d fps (5s window)", n / 5);
+  return G_SOURCE_CONTINUE;
+}
+
+// Log which decoder decodebin actually plugged (avdec = software).
+static gboolean log_decodebin_children(gpointer user_data) {
+  GstBridge* b = (GstBridge*)user_data;
+  if (!b || b->destroyed || !b->decodebin) return G_SOURCE_REMOVE;
+  GList* children = GST_BIN_CHILDREN(b->decodebin);
+  for (GList* it = children; it; it = it->next) {
+    GstElement* el = GST_ELEMENT(it->data);
+    GstElementFactory* f = gst_element_get_factory(el);
+    if (f) {
+      bridge_log(b, "webrtcbin: decodebin plugged: %s (%s)",
+                 GST_OBJECT_NAME(f),
+                 gst_element_factory_get_klass(f));
+    }
+  }
+  return G_SOURCE_REMOVE;
+}
+
+// ---------------------------------------------------------------------------
+// Keyframe requests (Moonlight parity: ControlStream.c requestIdrFrameFunc —
+// request an IDR at stream start so the client never displays a mid-GOP
+// blocky frame). WebRTC equivalent: RTCP FIR, PLI as fallback.
+// ---------------------------------------------------------------------------
+
+// Fire a keyframe request now and twice more at ~500ms intervals. The timer
+// runs on the GLib loop thread (all webrtcbin actions resolve there).
+static void schedule_initial_keyframe_requests(GstBridge* b);
+
+struct KeyframeCtx {
+  GstBridge* bridge;
+  int ticks;
+};
+
+static gboolean keyframe_retry_tick(gpointer user_data) {
+  struct KeyframeCtx* ctx = (struct KeyframeCtx*)user_data;
+  GstBridge* b = ctx->bridge;
+  if (!b || b->destroyed) {
+    b->keyframe_retry_id = 0;
+    g_free(ctx);
+    return G_SOURCE_REMOVE;
+  }
+  if (b->video_rtp_pad) {
+    // Upstream GstVideoForceKeyUnit on the RTP pad — webrtcbin converts it
+    // to a RTCP PLI/FIR to the sender. (webrtcbin 1.28 has no send-rtcp-fir
+    // / send-rtcp-pli action signals — those emitted GLib-CRITICALs.)
+    GstEvent* ev = gst_video_event_new_upstream_force_key_unit(
+        GST_CLOCK_TIME_NONE, TRUE, 0);
+    gst_pad_send_event(b->video_rtp_pad, ev);
+    bridge_log(b, "webrtcbin: keyframe requested (force-key-unit, tick %d)",
+               ctx->ticks + 1);
+  }
+  ctx->ticks++;
+  if (ctx->ticks >= 3) {
+    b->keyframe_retry_id = 0;
+    g_free(ctx);
+    return G_SOURCE_REMOVE;
+  }
+  return G_SOURCE_CONTINUE;
+}
+
+static void schedule_initial_keyframe_requests(GstBridge* b) {
+  if (b->keyframe_retry_id != 0) {
+    g_source_remove(b->keyframe_retry_id);
+    b->keyframe_retry_id = 0;
+  }
+  struct KeyframeCtx* ctx = g_new0(struct KeyframeCtx, 1);
+  ctx->bridge = b;
+  ctx->ticks = 0;
+  b->keyframe_retry_id = g_timeout_add(500, keyframe_retry_tick, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,10 +564,21 @@ static void on_pad_added(GstElement* element, GstPad* pad, gpointer user_data) {
   bridge_log(b, "webrtcbin: pad added (%s) media=%s caps=%s",
              name ? name : "?", media ? media : "(none)", caps_str);
   g_free(caps_str);
+  // Remote video SSRC from the RTP caps — needed for RTCP FIR/PLI. Must be
+  // read BEFORE the caps are unref'd below.
+  if (media && g_strcmp0(media, "video") == 0 && caps) {
+    gst_structure_get_uint(gst_caps_get_structure(caps, 0), "ssrc",
+                           &b->video_ssrc);
+  }
   if (caps) gst_caps_unref(caps);
-  if (is_audio || !is_rtp) {
-    bridge_log(b, "webrtcbin: ignoring %s pad",
-               is_audio ? "audio" : "non-RTP");
+  if (!is_rtp) {
+    bridge_log(b, "webrtcbin: ignoring non-RTP pad");
+    return;
+  }
+  if (is_audio) {
+    // Audio media: decode + play locally (OpenNOW parity). The video chain
+    // below stays untouched; each media gets its own decodebin.
+    attach_audio_chain(b, pad);
     return;
   }
 
@@ -221,6 +590,53 @@ static void on_pad_added(GstElement* element, GstPad* pad, gpointer user_data) {
     bridge_log(b, "webrtcbin: failed to create decode chain elements");
     return;
   }
+
+  // GPU zero-copy chain (preferred): decodebin -> vapostproc (converts to
+  // RGBA in VAMemory on the GPU video processor) -> appsink(VAMemory). The
+  // CPU never sees a pixel; each VA surface is exported as a dmabuf fd and
+  // imported as an EGLImage on the raster thread.
+  GstElement* vapostproc = gst_element_factory_make("vapostproc", "vapostproc");
+  if (vapostproc) {
+    GstCaps* va_caps = gst_caps_from_string(
+        "video/x-raw(memory:VAMemory),format=RGBA");
+    GstCaps* app_va_caps = gst_caps_from_string(
+        "video/x-raw(memory:VAMemory),format=RGBA");
+    g_object_set(G_OBJECT(b->appsink), "caps", app_va_caps, "sync", FALSE,
+                 "drop", TRUE, "max-buffers", 2, "emit-signals", TRUE, NULL);
+    gst_caps_unref(app_va_caps);
+    g_signal_connect(b->appsink, "new-sample", G_CALLBACK(on_new_sample), b);
+    g_signal_connect(b->decodebin, "pad-added",
+                     G_CALLBACK(on_decodebin_pad_added), b);
+    b->convert = NULL;
+    b->vapostproc = vapostproc;
+    gst_bin_add_many(GST_BIN(b->pipeline), b->decodebin, vapostproc,
+                     b->appsink, NULL);
+    gboolean linked = gst_element_link_pads_filtered(
+        vapostproc, "src", b->appsink, "sink", va_caps);
+    bridge_log(b, "webrtcbin: vapostproc->appsink(VAMemory RGBA) link: %s",
+               linked ? "ok" : "FAILED");
+    gst_caps_unref(va_caps);
+    gst_element_sync_state_with_parent(vapostproc);
+    gst_element_sync_state_with_parent(b->appsink);
+    b->slot_is_dmabuf = TRUE;
+    bridge_log(b, "webrtcbin: GPU zero-copy chain armed (VAMemory RGBA)");
+    // Link the RTP pad into decodebin now (raw video out is routed to
+    // vapostproc by on_decodebin_pad_added).
+    GstPad* sinkpad = gst_element_get_static_pad(b->decodebin, "sink");
+    if (sinkpad) {
+      if (gst_pad_link(pad, sinkpad) != GST_PAD_LINK_OK) {
+        bridge_log(b, "webrtcbin: failed to link video pad to decodebin");
+      }
+      gst_object_unref(sinkpad);
+    }
+    gst_element_sync_state_with_parent(b->decodebin);
+    b->video_attached = TRUE;
+    schedule_initial_keyframe_requests(b);
+    g_timeout_add(1000, log_decodebin_children, b);
+    g_timeout_add(5000, rtp_fps_log_tick, b);
+    return;
+  }
+  // CPU fallback (original chain) — also handles platforms without va.
 
   GstCaps* out_caps = gst_caps_new_simple("video/x-raw", "format",
                                           G_TYPE_STRING, "RGBA", NULL);
@@ -240,6 +656,12 @@ static void on_pad_added(GstElement* element, GstPad* pad, gpointer user_data) {
     gst_element_sync_state_with_parent(b->appsink);
   }
 
+  // Keep the RTP pad for upstream force-key-unit events + delivery stats.
+  if (!b->video_rtp_pad) {
+    b->video_rtp_pad = gst_object_ref(pad);
+    b->rtp_probe_id = gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER,
+                                        rtp_buffer_probe, b, NULL);
+  }
   // Link the webrtcbin video RTP pad into decodebin's sink.
   GstPad* sinkpad = gst_element_get_static_pad(b->decodebin, "sink");
   if (sinkpad) {
@@ -250,6 +672,11 @@ static void on_pad_added(GstElement* element, GstPad* pad, gpointer user_data) {
   }
   gst_element_sync_state_with_parent(b->decodebin);
   b->video_attached = TRUE;
+  // Moonlight parity: request a clean IDR right away instead of joining
+  // mid-GOP with blocky references.
+  schedule_initial_keyframe_requests(b);
+  g_timeout_add(1000, log_decodebin_children, b);
+  g_timeout_add(5000, rtp_fps_log_tick, b);
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +1132,7 @@ GstBridge* bridge_create(bridge_log_cb log_cb, bridge_ice_cb ice_cb,
   g_mutex_init(&b->state_mutex);
   g_cond_init(&b->answer_cond);
   g_mutex_init(&b->stats_mutex);
+  g_mutex_init(&b->slot_mutex);
 
   b->pipeline = gst_pipeline_new("gfn-webrtc-pipeline");
   b->webrtcbin = gst_element_factory_make("webrtcbin", "webrtcbin");
@@ -719,6 +1147,22 @@ GstBridge* bridge_create(bridge_log_cb log_cb, bridge_ice_cb ice_cb,
     return NULL;
   }
   gst_bin_add(GST_BIN(b->pipeline), b->webrtcbin);
+
+  // Prefer hardware H264/H265 decode in decodebin — without this, decodebin
+  // can rank avdec_h264 (software) above the VA decoders on some installs
+  // and the whole pipeline drops to ~14 fps at 1080p.
+  {
+    static const char* hw_decoders[] = {"vah264dec", "vaapih264dec",
+                                        "vah265dec", "vaapih265dec", NULL};
+    for (int i = 0; hw_decoders[i]; i++) {
+      GstElementFactory* f = gst_element_factory_find(hw_decoders[i]);
+      if (f) {
+        gst_plugin_feature_set_rank(GST_PLUGIN_FEATURE(f),
+                                    GST_RANK_PRIMARY * 2);
+        gst_object_unref(f);
+      }
+    }
+  }
 
   // Match the reference client (OpenNOW): bundle every m-line into one ICE
   // transport and gather server-reflexive candidates via STUN so the GFN
@@ -785,6 +1229,14 @@ void bridge_destroy(GstBridge* bridge) {
   g_mutex_clear(&bridge->state_mutex);
   g_cond_clear(&bridge->answer_cond);
   g_mutex_clear(&bridge->stats_mutex);
+  g_mutex_lock(&bridge->slot_mutex);
+  g_free(bridge->slot_consumer);
+  g_free(bridge->slot_scratch);
+  bridge->slot_consumer = NULL;
+  bridge->slot_scratch = NULL;
+  bridge->slot_has_frame = FALSE;
+  g_mutex_unlock(&bridge->slot_mutex);
+  g_mutex_clear(&bridge->slot_mutex);
   g_free(bridge);
 }
 
@@ -868,6 +1320,109 @@ int bridge_frames_decoded(GstBridge* bridge) {
   int n = bridge->frames_decoded;
   g_mutex_unlock(&bridge->stats_mutex);
   return n;
+}
+
+void bridge_enable_frame_slot(GstBridge* bridge) {
+  if (!bridge) return;
+  g_mutex_lock(&bridge->slot_mutex);
+  bridge->slot_enabled = TRUE;
+  g_mutex_unlock(&bridge->slot_mutex);
+  bridge_log(bridge, "webrtcbin: GPU frame slot enabled");
+}
+
+void bridge_set_frame_slot_notify(GstBridge* bridge,
+                                  bridge_slot_notify_cb notify,
+                                  void* userdata) {
+  if (!bridge) return;
+  g_mutex_lock(&bridge->slot_mutex);
+  bridge->slot_notify = notify;
+  bridge->slot_notify_userdata = userdata;
+  g_mutex_unlock(&bridge->slot_mutex);
+}
+
+int bridge_frame_slot_mode(GstBridge* bridge) {
+  if (!bridge) return 0;
+  g_mutex_lock(&bridge->slot_mutex);
+  int mode = bridge->slot_is_dmabuf ? 1 : 0;
+  g_mutex_unlock(&bridge->slot_mutex);
+  return mode;
+}
+
+void bridge_close_dmabuf_fds(BridgeDmaBufFrame* f) {
+  for (int i = 0; i < f->nfd && i < 4; i++) {
+    if (f->fds[i] >= 0) close(f->fds[i]);
+    f->fds[i] = -1;
+  }
+  f->nfd = 0;
+}
+
+int bridge_acquire_latest_dmabuf(GstBridge* bridge, BridgeDmaBufFrame* out) {
+  if (!bridge || !out) return 0;
+  g_mutex_lock(&bridge->slot_mutex);
+  if (bridge->slot_pending && bridge->slot_dmabuf_pending.nfd > 0) {
+    // Close the consumer's previous fds, then hand over the pending export.
+    bridge_close_dmabuf_fds(&bridge->slot_dmabuf_consumer);
+    bridge->slot_dmabuf_consumer = bridge->slot_dmabuf_pending;
+    bridge->slot_dmabuf_pending.nfd = 0;
+    for (int i = 0; i < 4; i++) bridge->slot_dmabuf_pending.fds[i] = -1;
+    bridge->slot_width = bridge->slot_dmabuf_consumer.width;
+    bridge->slot_height = bridge->slot_dmabuf_consumer.height;
+    bridge->slot_stride = bridge->slot_dmabuf_consumer.strides[0];
+    bridge->slot_seq = bridge->slot_dmabuf_consumer.seq;
+  }
+  if (!bridge->slot_has_frame || bridge->slot_dmabuf_consumer.nfd <= 0) {
+    g_mutex_unlock(&bridge->slot_mutex);
+    return 0;
+  }
+  *out = bridge->slot_dmabuf_consumer;
+  g_mutex_unlock(&bridge->slot_mutex);
+  return 1;
+}
+
+int bridge_frame_slot_enabled(GstBridge* bridge) {
+  if (!bridge) return 0;
+  g_mutex_lock(&bridge->slot_mutex);
+  int enabled = bridge->slot_enabled ? 1 : 0;
+  g_mutex_unlock(&bridge->slot_mutex);
+  return enabled;
+}
+
+// Consumer owns the returned buffer until the next call. The producer only
+// writes into its scratch buffer (pointer-swapped under the lock), so the
+// consumer's view is never torn mid-upload.
+int bridge_acquire_latest_frame(GstBridge* bridge, const uint8_t** out_data,
+                                int32_t* out_width, int32_t* out_height,
+                                int32_t* out_stride, uint32_t* out_seq) {
+  if (!bridge || !out_data || !out_width || !out_height || !out_stride) {
+    return 0;
+  }
+  g_mutex_lock(&bridge->slot_mutex);
+  if (bridge->slot_pending && bridge->slot_scratch) {
+    // Hand the freshly written scratch buffer to the consumer; the buffer
+    // the consumer was reading becomes the new scratch (producer-only), so
+    // an in-flight GL upload can never race the producer.
+    uint8_t* tmp_buf = bridge->slot_consumer;
+    size_t tmp_cap = bridge->slot_consumer_cap;
+    bridge->slot_consumer = bridge->slot_scratch;
+    bridge->slot_consumer_cap = bridge->slot_scratch_cap;
+    bridge->slot_scratch = tmp_buf;
+    bridge->slot_scratch_cap = tmp_cap;
+    bridge->slot_width = bridge->slot_pending_width;
+    bridge->slot_height = bridge->slot_pending_height;
+    bridge->slot_stride = bridge->slot_pending_stride;
+    bridge->slot_pending = FALSE;
+  }
+  if (!bridge->slot_has_frame || !bridge->slot_consumer) {
+    g_mutex_unlock(&bridge->slot_mutex);
+    return 0;
+  }
+  *out_data = bridge->slot_consumer;
+  *out_width = bridge->slot_width;
+  *out_height = bridge->slot_height;
+  *out_stride = bridge->slot_stride;
+  if (out_seq) *out_seq = bridge->slot_seq;
+  g_mutex_unlock(&bridge->slot_mutex);
+  return 1;
 }
 
 void bridge_free_string(char* s) { g_free(s); }

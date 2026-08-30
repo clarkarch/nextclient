@@ -60,3 +60,7 @@ app.*.map.json
 /fvp/
 
 .agents/
+
+# Cloned reference codebases (Moonlight) — read-only study material.
+/vendor/moonlight-qt/
+/vendor/moonlight-common-c/

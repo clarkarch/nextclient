@@ -32,6 +32,7 @@ class NvstVideoTransport implements StreamTransport {
   final UserSettings settings;
   final LogSink log;
   final ValueChanged<String>? onStatus;
+  final String? authToken;
 
   /// Video frames from the NVST pipeline, rendered by [buildVideoView].
   final ValueNotifier<ui.Image?> frameImage = ValueNotifier(null);
@@ -62,6 +63,7 @@ class NvstVideoTransport implements StreamTransport {
     required this.settings,
     required this.log,
     this.onStatus,
+    this.authToken,
   }) : _input = WebRtcBinFfiTransport(
           session: session,
           settings: settings,
@@ -92,6 +94,10 @@ class NvstVideoTransport implements StreamTransport {
   int? get inputQueueBufferedBytes => null;
 
   @override
+  bool get canSendMousePartiallyReliable =>
+      _input.canSendMousePartiallyReliable;
+
+  @override
   Future<void> start() async {
     if (_disposed) return;
 
@@ -101,7 +107,10 @@ class NvstVideoTransport implements StreamTransport {
 
     // 2. NVST RTSP probe → SRTP/UDP video session.
     final bridge = NvstBridgeFfi.create(
-      onLog: (msg) => log.log(LogLevel.debug, 'nvst', msg),
+      onLog: (msg) {
+        debugPrint('[nvst] $msg');
+        log.log(LogLevel.debug, 'nvst', msg);
+      },
       onFrame: _onNativeFrame,
     );
     _bridge = bridge;
@@ -110,22 +119,46 @@ class NvstVideoTransport implements StreamTransport {
       final streamSettings = settings.buildStreamSettings();
       final dims = GfnSdpMunger.parseResolution(streamSettings.resolution);
       final codec = GfnSdpMunger.codecWireName(streamSettings.codec);
-      final endpoint = session.rtspsEndpoints.isNotEmpty
-          ? session.rtspsEndpoints.first
-          : null;
-      if (endpoint == null || endpoint.isEmpty) {
+      // Try every rtsps endpoint on the session. The mature OpenNOW probe no
+      // longer prefers :322 — the session's real RTSPS gateway may be another
+      // endpoint, and a wrong gateway answers 404/581 to every upgrade form.
+      final eps = session.rtspsEndpoints
+          .where((u) => u.startsWith('rtsps://') || u.startsWith('rtsp://'))
+          .toList();
+      if (eps.isEmpty) {
         throw StateError('No rtsps:// endpoints on the session');
       }
+      eps.sort((a, b) {
+        final a322 = RegExp(r':322(?:\/|$)').hasMatch(a) ? 0 : 1;
+        final b322 = RegExp(r':322(?:\/|$)').hasMatch(b) ? 0 : 1;
+        return a322.compareTo(b322);
+      });
 
-      _log('NVST probe: $endpoint');
-      final video = bridge.probe(
-        rtspsEndpoint: endpoint,
-        sessionId: session.sessionId,
-        width: dims.$1,
-        height: dims.$2,
-        fps: streamSettings.fps,
-        codec: codec,
-      );
+      _log('NVST probe endpoints: $eps');
+      Object? lastError;
+      NvstVideoSessionParams? video;
+      for (final endpoint in eps) {
+        try {
+          _log('NVST probe: $endpoint');
+          video = bridge.probe(
+            rtspsEndpoint: endpoint,
+            sessionId: session.sessionId,
+            fallbackWsUrl: session.signalingUrl,
+            authToken: authToken ?? '',
+            width: dims.$1,
+            height: dims.$2,
+            fps: streamSettings.fps,
+            codec: codec,
+          );
+          break;
+        } catch (e) {
+          lastError = e;
+          _log('NVST probe failed on $endpoint: $e');
+        }
+      }
+      if (video == null) {
+        throw StateError(lastError?.toString() ?? 'NVST probe failed');
+      }
       _log('NVST probe OK — peer ${video.videoPeerIp}:${video.videoPeerPort} '
           'clientPort ${video.clientUdpPort}');
 
@@ -202,7 +235,7 @@ class NvstVideoTransport implements StreamTransport {
 
   void _startStatsPolling() {
     _statsTimer?.cancel();
-    _statsTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _statsTimer = Timer.periodic(settings.statsPollInterval, (_) {
       unawaited(_pollStats());
     });
   }

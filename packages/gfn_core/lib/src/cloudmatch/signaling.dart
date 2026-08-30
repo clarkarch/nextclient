@@ -258,18 +258,41 @@ List<String> _collectRtspsEndpoints(
   List<CloudMatchConnectionInfo> connections,
   String? rtspsHost,
 ) {
+  // Port of OpenNOW collectRtspsEndpoints (native-streamer-v2): any full
+  // rtsps:// URL resourcePath is kept; otherwise synthesize from a
+  // usage==16 / protocol==6 (Bifrost RTSP) connection. The caller then
+  // prefers the :322 endpoint.
   final endpoints = <String>[];
+  final seen = <String>{};
   for (final conn in connections) {
-    final path = conn.resourcePath;
-    if (path != null && (path.startsWith('rtsps://') || path.startsWith('rtsp://'))) {
-      final host = extractHostFromUrl(path);
-      if (host != null && host.isNotEmpty) {
-        endpoints.add('$host:${conn.port}');
+    final path = conn.resourcePath?.trim() ?? '';
+    if (path.startsWith('rtsps://') || path.startsWith('rtsp://')) {
+      if (!seen.contains(path)) {
+        seen.add(path);
+        endpoints.add(path);
       }
+      continue;
+    }
+    final isNvst = conn.usage == 16 || conn.protocol == 6;
+    if (!isNvst || rtspsHost == null || conn.port == 0) continue;
+    final synthesized = 'rtsps://$rtspsHost:${conn.port}';
+    if (!seen.contains(synthesized)) {
+      seen.add(synthesized);
+      endpoints.add(synthesized);
     }
   }
-  if (endpoints.isEmpty && rtspsHost != null) {
-    endpoints.add('$rtspsHost:443');
-  }
   return endpoints;
+}
+
+/// Port of OpenNOW selectPrimaryRtspsEndpoint — prefers :322 for NVST probe.
+String? selectPrimaryRtspsEndpoint(List<String> endpoints) {
+  final normalized = endpoints
+      .map((e) => e.trim())
+      .where((e) => e.startsWith('rtsps://') || e.startsWith('rtsp://'))
+      .toList();
+  if (normalized.isEmpty) return null;
+  for (final url in normalized) {
+    if (RegExp(r':322(?:\/|$)').hasMatch(url)) return url;
+  }
+  return normalized.first;
 }

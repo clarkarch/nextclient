@@ -175,6 +175,7 @@ Map<String, dynamic> buildSessionRequestBody({
   bool accountLinked = true,
   bool enablePersistingInGameSettings = false,
   bool supportsInGameSettingsPersistence = false,
+  List<VideoCodec>? supportedCodecs,
 }) {
   final resolution = parseResolution(settings.resolution);
   final cq = settings.colorQuality;
@@ -235,6 +236,7 @@ Map<String, dynamic> buildSessionRequestBody({
         bitDepth: bitDepth,
         chromaFormat: chromaFormat,
         hdrEnabled: hdrEnabled,
+        supportedCodecs: supportedCodecs,
       ),
     },
   };
