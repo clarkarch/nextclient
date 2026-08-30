@@ -150,7 +150,10 @@ class FlutterVideoRendererGL
   bool EnsureGlResources(int width, int height);
   bool CompileShaderProgram();
   bool CompileNv12ShaderProgram();
-
+  // Merged NV12→RGB + video-shader-filter program: renders the post pass
+  // inline so a filtered frame costs ONE full-screen pass instead of two
+  // (the intermediate rgb_tex_ write+read is skipped entirely).
+  bool CompileNv12PostShaderProgram();
   // Video shader filter (post-processing) stage, port of OpenNOW's
   // videoShader.ts: compiles the post program into the process-wide GlQuad on
   // first use, then renders rgb_tex_ → post_tex_ when the filter is active.
@@ -169,15 +172,19 @@ class FlutterVideoRendererGL
                             int height);
 
   // Zero-copy dmabuf path: imports the two DRM prime fds (Y + interleaved UV,
-  // NV12) as EGLImages and renders them through the NV12 shader into rgb_tex_.
-  // Returns false when EGL dma-buf import is unavailable (GLX compositor, no
+  // NV12) as EGLImages and renders them into rgb_tex_ (plain NV12→RGB) or,
+  // when `into_post` is set, through the merged NV12+post program into
+  // post_tex_ (`post` supplies the filter uniforms). Returns false when EGL
+  // dma-buf import is unavailable (GLX compositor, no
   // EGL_EXT_image_dma_buf_import, or a failed import) — Populate() then falls
-  // back to the CPU UploadAndRenderFrame path. `desc` is owned by the frame and
-  // stays valid for the whole call (the DmaBufVideoBuffer holds a GstBuffer ref
-  // that keeps the VA surface alive while we sample it).
+  // back to the CPU UploadAndRenderFrame path. `desc` is owned by the frame
+  // and stays valid for the whole call (the DmaBufVideoBuffer holds a
+  // GstBuffer ref that keeps the VA surface alive while we sample it).
   bool ImportAndRenderDmaBuf(const RtcDmaBufDescriptor* desc,
                              int width,
-                             int height);
+                             int height,
+                             bool into_post,
+                             const VideoShaderSettingsState* post);
 
   // Frame cache: the engine invokes populate() on every scene composite,
   // including repaints that carry no new video frame (stats-overlay tick,
@@ -199,6 +206,11 @@ class FlutterVideoRendererGL
   double raster_max_ms_ = 0;
   uint64_t raster_cache_hits_ = 0;
   double raster_last_log_at_ = 0;  // steady_clock seconds
+  // Phase breakdown (dmabuf path): EGL import+NV12 draw, standalone post pass,
+  // and how many frames went through the merged single-pass program.
+  double raster_import_ms_ = 0;
+  double raster_post_ms_ = 0;
+  uint64_t raster_merged_ = 0;
 
   // Logs avg/max populate() time once per second (raster thread only).
   void MaybeLogRasterStats();
@@ -267,6 +279,23 @@ struct GlQuad {
   GLint uniform_y_nv12 = -1;
   GLint uniform_uv_nv12 = -1;
   bool nv12_compiled = false;
+
+  // Merged NV12→RGB + post-filter program (single pass): samples y/uv, does
+  // the CAS/unsharp + grade + grain inline, writes straight into post_tex_.
+  // All uniform locations are per-program — do not share with program_post.
+  GLuint program_nv12_post = 0;
+  GLint uniform_yp_nv12_post = -1;
+  GLint uniform_uvp_nv12_post = -1;
+  GLint uniform_texel_nv12_post = -1;
+  GLint uniform_sharpen_nv12_post = -1;
+  GLint uniform_sharpen_adaptive_nv12_post = -1;
+  GLint uniform_saturation_nv12_post = -1;
+  GLint uniform_contrast_nv12_post = -1;
+  GLint uniform_brightness_nv12_post = -1;
+  GLint uniform_vibrance_nv12_post = -1;
+  GLint uniform_grain_nv12_post = -1;
+  GLint uniform_time_nv12_post = -1;
+  bool nv12_post_compiled = false;
 
   // Post-processing (video shader filter) program: samples the YUV→RGB
   // result texture and applies the sharpen/grade/grain pass. Compiles only

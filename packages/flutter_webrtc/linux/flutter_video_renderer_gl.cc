@@ -200,6 +200,96 @@ static const char* kFragmentShaderNv12 =
     "  );\n"
     "}\n";
 
+// Merged NV12→RGB + video-shader-filter program: same math as
+// kFragmentShaderNv12 followed by the exact post chain of
+// kPostFragmentShader, but in ONE pass — the CAS/unsharp taps re-derive RGB
+// from neighboring Y texels (same UV sample) instead of reading an
+// intermediate RGB texture. Saves a full-screen RGBA write+read (16 MB/frame
+// at 1080p) plus the second draw and its state churn per video frame.
+static const char* kFragmentShaderNv12Post =
+    "#ifdef GL_ES\n"
+    "precision mediump float;\n"
+    "#endif\n"
+    "uniform sampler2D y_tex;\n"
+    "uniform sampler2D uv_tex;\n"
+    "uniform vec2 u_texel_size;\n"
+    "uniform float u_sharpen;\n"
+    "uniform float u_sharpen_adaptive;\n"
+    "uniform float u_saturation;\n"
+    "uniform float u_contrast;\n"
+    "uniform float u_brightness;\n"
+    "uniform float u_vibrance;\n"
+    "uniform float u_grain;\n"
+    "uniform float u_time;\n"
+    "varying vec2 tc;\n"
+    "float luma(vec3 c) {\n"
+    "  return dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+    "}\n"
+    "float hash(vec2 p) {\n"
+    "  vec3 p3 = fract(vec3(p.xyx) * 0.1031);\n"
+    "  p3 += dot(p3, p3.yzx + 33.33);\n"
+    "  return fract((p3.x + p3.y) * p3.z);\n"
+    "}\n"
+    "vec3 nv12_rgb(vec2 uv) {\n"
+    "  float y = texture2D(y_tex, uv).r;\n"
+    "  float u = texture2D(uv_tex, uv).r - 0.5;\n"
+    "  float v = texture2D(uv_tex, uv).g - 0.5;\n"
+    "  return vec3(\n"
+    "    y + 1.403 * v,\n"
+    "    y - 0.344 * u - 0.714 * v,\n"
+    "    y + 1.770 * u\n"
+    "  );\n"
+    "}\n"
+    "vec3 cas_sharpen(vec2 uv, vec3 center, float amount) {\n"
+    "  vec3 n = nv12_rgb(uv + vec2(0.0, -u_texel_size.y));\n"
+    "  vec3 s = nv12_rgb(uv + vec2(0.0,  u_texel_size.y));\n"
+    "  vec3 w = nv12_rgb(uv + vec2(-u_texel_size.x, 0.0));\n"
+    "  vec3 e = nv12_rgb(uv + vec2( u_texel_size.x, 0.0));\n"
+    "  vec3 mn = min(center, min(min(n, s), min(w, e)));\n"
+    "  vec3 mx = max(center, max(max(n, s), max(w, e)));\n"
+    "  vec3 amp = clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-5)), 0.0, 1.0);\n"
+    "  amp = sqrt(amp);\n"
+    "  float peak = mix(-0.16, -0.24, amount);\n"
+    "  vec3 weight = amp * peak;\n"
+    "  vec3 result = (center + (n + s + w + e) * weight) / (1.0 + 4.0 * weight);\n"
+    "  return clamp(result, 0.0, 1.0);\n"
+    "}\n"
+    "vec3 sharpen_uniform(vec2 uv, vec3 center, float amount) {\n"
+    "  vec3 n = nv12_rgb(uv + vec2(0.0, -u_texel_size.y));\n"
+    "  vec3 s = nv12_rgb(uv + vec2(0.0,  u_texel_size.y));\n"
+    "  vec3 w = nv12_rgb(uv + vec2(-u_texel_size.x, 0.0));\n"
+    "  vec3 e = nv12_rgb(uv + vec2( u_texel_size.x, 0.0));\n"
+    "  vec3 blur = (n + s + w + e) * 0.25;\n"
+    "  float k = 1.0 + 3.0 * amount;\n"
+    "  return clamp(center + (center - blur) * k, 0.0, 1.0);\n"
+    "}\n"
+    "void main() {\n"
+    "  vec3 color = nv12_rgb(tc);\n"
+    "  if (u_sharpen > 0.001) {\n"
+    "    if (u_sharpen_adaptive > 0.5) {\n"
+    "      color = cas_sharpen(tc, color, u_sharpen);\n"
+    "    } else {\n"
+    "      color = sharpen_uniform(tc, color, u_sharpen);\n"
+    "    }\n"
+    "  }\n"
+    "  color *= u_brightness;\n"
+    "  color = (color - 0.5) * u_contrast + 0.5;\n"
+    "  float l = luma(color);\n"
+    "  color = mix(vec3(l), color, u_saturation);\n"
+    "  if (u_vibrance > 0.001) {\n"
+    "    float maxC = max(color.r, max(color.g, color.b));\n"
+    "    float minC = min(color.r, min(color.g, color.b));\n"
+    "    float sat = maxC - minC;\n"
+    "    float boost = u_vibrance * (1.0 - sat);\n"
+    "    color = mix(vec3(luma(color)), color, 1.0 + boost);\n"
+    "  }\n"
+    "  if (u_grain > 0.001) {\n"
+    "    float g = hash(gl_FragCoord.xy + fract(u_time) * 1024.0) - 0.5;\n"
+    "    color += g * u_grain * 0.12 * (0.3 + 0.7 * luma(color));\n"
+    "  }\n"
+    "  gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n"
+    "}\n";
+
 // ---------------------------------------------------------------------------
 // FlTextureGL GObject
 // ---------------------------------------------------------------------------
@@ -479,10 +569,31 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
     // frame is plain I420 (FFmpeg path).
     const void* native = frame->NativeDmaBufHandle();
     bool rendered = false;
+    // True when the merged NV12+post program already produced post_tex_ —
+    // skips the standalone RenderPostPass (one full-screen pass instead of
+    // two). Only meaningful when `rendered` is true.
+    bool merged_post = false;
     if (native != nullptr) {
       const RtcDmaBufDescriptor* desc =
           static_cast<const RtcDmaBufDescriptor*>(native);
-      rendered = ImportAndRenderDmaBuf(desc, w, h);
+      GlQuad* quad = gl_quad();
+      const auto t_import_start = std::chrono::steady_clock::now();
+      if (post_active &&
+          (quad->nv12_post_compiled || CompileNv12PostShaderProgram())) {
+        // Single-pass: NV12→RGB + filter straight into post_tex_.
+        merged_post = ImportAndRenderDmaBuf(desc, w, h, /*into_post=*/true,
+                                            &shader);
+        rendered = merged_post;
+        if (merged_post) raster_merged_++;
+      }
+      if (!rendered) {
+        rendered = ImportAndRenderDmaBuf(desc, w, h, /*into_post=*/false,
+                                         nullptr);
+      }
+      raster_import_ms_ +=
+          std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - t_import_start)
+              .count();
     }
     if (!rendered) {
       UploadAndRenderFrame(frame->DataY(), frame->StrideY(), frame->DataU(),
@@ -492,23 +603,34 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
     if (!path_reported_) {
       path_reported_ = true;
       if (renderer_logging_enabled()) {
-        std::fprintf(stderr, "[glrender] compositing via %s\n",
-                     rendered ? "zero-copy dmabuf EGL import"
-                              : "YUV plane upload (CPU readback)");
+        const char* via =
+            !rendered  ? "YUV plane upload (CPU readback)"
+            : merged_post ? "zero-copy dmabuf EGL import (merged post pass)"
+                          : "zero-copy dmabuf EGL import";
+        std::fprintf(stderr, "[glrender] compositing via %s\n", via);
       }
     }
     // Post-processing stage: run OpenNOW's filter pass over the YUV→RGB
     // result when the settings have a visible effect. The engine then
     // composites post_tex_ instead of rgb_tex_. A filter failure (shader
     // compile) falls back to the unfiltered rgb_tex_ so the stream stays
-    // visible.
+    // visible. Skipped entirely when the merged pass already wrote post_tex_.
     bool post_rendered = false;
     if (post_active) {
-      post_rendered = RenderPostPass(w, h);
-      if (!post_rendered && renderer_logging_enabled()) {
-        std::fprintf(stderr,
-                     "[glrender] video shader filter unavailable — "
-                     "compositing unfiltered\n");
+      if (merged_post && rendered) {
+        post_rendered = true;
+      } else {
+        const auto t_post_start = std::chrono::steady_clock::now();
+        post_rendered = RenderPostPass(w, h);
+        raster_post_ms_ +=
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t_post_start)
+                .count();
+        if (!post_rendered && renderer_logging_enabled()) {
+          std::fprintf(stderr,
+                       "[glrender] video shader filter unavailable — "
+                       "compositing unfiltered\n");
+        }
       }
     }
     output_post = post_active && post_rendered;
@@ -581,42 +703,43 @@ bool FlutterVideoRendererGL::EnsureGlResources(int width, int height) {
   const int uv_w = (width + 1) / 2;
   const int uv_h = (height + 1) / 2;
 
-  // Y/U/V plane textures. Created once; reallocated in place on size change.
-  // uv_tex_ holds the interleaved NV12 UV plane on the dmabuf path (its
-  // storage is redefined by glEGLImageTargetTexture2DOES each frame, so it only
-  // needs creation + sampler params here).
+  // Y/U/V plane textures. Created once with their sampling params; reallocated
+  // in place on size change. Per-frame glTexParameteri here was ~16 redundant
+  // driver calls per video frame — sampling params live on the texture object
+  // and survive storage redefinition (glEGLImageTargetTexture2DOES /
+  // glTexImage2D), so creation-only is correct.
   if (y_tex_ == 0) {
     glGenTextures(1, &y_tex_);
+    glBindTexture(GL_TEXTURE_2D, y_tex_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   }
-  glBindTexture(GL_TEXTURE_2D, y_tex_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   if (u_tex_ == 0) {
     glGenTextures(1, &u_tex_);
+    glBindTexture(GL_TEXTURE_2D, u_tex_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   }
-  glBindTexture(GL_TEXTURE_2D, u_tex_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   if (v_tex_ == 0) {
     glGenTextures(1, &v_tex_);
+    glBindTexture(GL_TEXTURE_2D, v_tex_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   }
-  glBindTexture(GL_TEXTURE_2D, v_tex_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   if (uv_tex_ == 0) {
     glGenTextures(1, &uv_tex_);
+    glBindTexture(GL_TEXTURE_2D, uv_tex_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   }
-  glBindTexture(GL_TEXTURE_2D, uv_tex_);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
   // RGBA8 render target + FBO.
   if (rgb_tex_ == 0) {
@@ -836,6 +959,87 @@ bool FlutterVideoRendererGL::CompileNv12ShaderProgram() {
   return true;
 }
 
+bool FlutterVideoRendererGL::CompileNv12PostShaderProgram() {
+  GlQuad* quad = gl_quad();
+  GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vs, 1, &kVertexShader, nullptr);
+  glCompileShader(vs);
+  GLint ok = GL_FALSE;
+  glGetShaderiv(vs, GL_COMPILE_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetShaderInfoLog(vs, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL NV12+post vertex shader failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    return false;
+  }
+
+  GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fs, 1, &kFragmentShaderNv12Post, nullptr);
+  glCompileShader(fs);
+  glGetShaderiv(fs, GL_COMPILE_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetShaderInfoLog(fs, sizeof(log), nullptr, log);
+    std::fprintf(
+        stderr, "[flutter_webrtc] GL NV12+post fragment shader failed: %s\n",
+        log);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return false;
+  }
+
+  quad->program_nv12_post = glCreateProgram();
+  glAttachShader(quad->program_nv12_post, vs);
+  glAttachShader(quad->program_nv12_post, fs);
+  glLinkProgram(quad->program_nv12_post);
+  glGetProgramiv(quad->program_nv12_post, GL_LINK_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetProgramInfoLog(quad->program_nv12_post, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL NV12+post program link failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glDeleteProgram(quad->program_nv12_post);
+    quad->program_nv12_post = 0;
+    return false;
+  }
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+
+  glUseProgram(quad->program_nv12_post);
+  quad->uniform_yp_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "y_tex");
+  quad->uniform_uvp_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "uv_tex");
+  quad->uniform_texel_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_texel_size");
+  quad->uniform_sharpen_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_sharpen");
+  quad->uniform_sharpen_adaptive_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_sharpen_adaptive");
+  quad->uniform_saturation_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_saturation");
+  quad->uniform_contrast_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_contrast");
+  quad->uniform_brightness_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_brightness");
+  quad->uniform_vibrance_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_vibrance");
+  quad->uniform_grain_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_grain");
+  quad->uniform_time_nv12_post =
+      glGetUniformLocation(quad->program_nv12_post, "u_time");
+  glUniform1i(quad->uniform_yp_nv12_post, 0);
+  glUniform1i(quad->uniform_uvp_nv12_post, 1);
+  quad->nv12_post_compiled = true;
+  return true;
+}
+
 bool FlutterVideoRendererGL::CompilePostShaderProgram() {
   GlQuad* quad = gl_quad();
   GLuint vs = glCreateShader(GL_VERTEX_SHADER);
@@ -955,16 +1159,26 @@ void FlutterVideoRendererGL::MaybeLogRasterStats() {
   raster_last_log_at_ = now_s;
   const double avg =
       raster_frames_ > 0 ? raster_total_ms_ / raster_frames_ : 0.0;
+  const double import_avg =
+      raster_frames_ > 0 ? raster_import_ms_ / raster_frames_ : 0.0;
+  const double post_avg =
+      raster_frames_ > 0 ? raster_post_ms_ / raster_frames_ : 0.0;
   std::fprintf(stderr,
                "[glrender] raster avg %.2f ms/frame  max %.2f ms  "
-               "n=%llu  cache hits=%llu\n",
+               "n=%llu  cache hits=%llu  import %.2f ms  post %.2f ms  "
+               "merged %llu\n",
                avg, raster_max_ms_,
                static_cast<unsigned long long>(raster_frames_),
-               static_cast<unsigned long long>(raster_cache_hits_));
+               static_cast<unsigned long long>(raster_cache_hits_),
+               import_avg, post_avg,
+               static_cast<unsigned long long>(raster_merged_));
   raster_frames_ = 0;
   raster_total_ms_ = 0;
   raster_max_ms_ = 0;
   raster_cache_hits_ = 0;
+  raster_import_ms_ = 0;
+  raster_post_ms_ = 0;
+  raster_merged_ = 0;
 }
 
 void FlutterVideoRendererGL::UploadAndRenderFrame(const uint8_t* y,
@@ -1011,7 +1225,9 @@ void FlutterVideoRendererGL::UploadAndRenderFrame(const uint8_t* y,
 
 bool FlutterVideoRendererGL::ImportAndRenderDmaBuf(const RtcDmaBufDescriptor* desc,
                                                    int width,
-                                                   int height) {
+                                                   int height,
+                                                   bool into_post,
+                                                   const VideoShaderSettingsState* post) {
   // Runs on the raster thread with the engine's GL context current. The
   // descriptor's fds are owned by the frame's DmaBufVideoBuffer (which holds a
   // GstBuffer ref keeping the VA surface alive), so they stay valid for the
@@ -1137,7 +1353,13 @@ bool FlutterVideoRendererGL::ImportAndRenderDmaBuf(const RtcDmaBufDescriptor* de
   egl_image_target_texture_2d(GL_TEXTURE_2D, uv_image);
 
   GlQuad* quad = gl_quad();
-  if (!quad->nv12_compiled && !CompileNv12ShaderProgram()) {
+  if (into_post) {
+    if (!quad->nv12_post_compiled && !CompileNv12PostShaderProgram()) {
+      destroy_image_khr(display, y_image);
+      destroy_image_khr(display, uv_image);
+      return false;
+    }
+  } else if (!quad->nv12_compiled && !CompileNv12ShaderProgram()) {
     destroy_image_khr(display, y_image);
     destroy_image_khr(display, uv_image);
     return false;
@@ -1145,11 +1367,29 @@ bool FlutterVideoRendererGL::ImportAndRenderDmaBuf(const RtcDmaBufDescriptor* de
 
   glDisable(GL_BLEND);
   glDisable(GL_SCISSOR_TEST);
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+  glBindFramebuffer(GL_FRAMEBUFFER, into_post ? post_fbo_ : fbo_);
   glViewport(0, 0, width, height);
-  glUseProgram(quad->program_nv12);
-  glUniform1i(quad->uniform_y_nv12, 0);
-  glUniform1i(quad->uniform_uv_nv12, 1);
+  glUseProgram(into_post ? quad->program_nv12_post : quad->program_nv12);
+  glUniform1i(into_post ? quad->uniform_yp_nv12_post : quad->uniform_y_nv12, 0);
+  glUniform1i(into_post ? quad->uniform_uvp_nv12_post
+                        : quad->uniform_uv_nv12,
+              1);
+  if (into_post && post != nullptr) {
+    glUniform2f(quad->uniform_texel_nv12_post, 1.0f / width, 1.0f / height);
+    glUniform1f(quad->uniform_sharpen_nv12_post, post->sharpen / 100.0f);
+    glUniform1f(quad->uniform_sharpen_adaptive_nv12_post,
+                post->sharpenAdaptive ? 1.0f : 0.0f);
+    glUniform1f(quad->uniform_saturation_nv12_post, post->saturation / 100.0f);
+    glUniform1f(quad->uniform_contrast_nv12_post, post->contrast / 100.0f);
+    glUniform1f(quad->uniform_brightness_nv12_post, post->brightness / 100.0f);
+    glUniform1f(quad->uniform_vibrance_nv12_post, post->vibrance / 100.0f);
+    glUniform1f(quad->uniform_grain_nv12_post, post->grain / 100.0f);
+    const double elapsed_s =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                      g_start_time)
+            .count();
+    glUniform1f(quad->uniform_time_nv12_post, static_cast<float>(elapsed_s));
+  }
   glBindVertexArray(quad->vao);
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
   glBindVertexArray(0);
