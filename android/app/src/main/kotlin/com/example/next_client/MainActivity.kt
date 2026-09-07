@@ -46,8 +46,6 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        // A re-attached engine re-runs configure; null the old channel so a
-        // stale messenger isn't reused.
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         perfChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "next_client/perf").apply {
             setMethodCallHandler { call, result ->
@@ -72,6 +70,15 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        try {
+            perfChannel?.setMethodCallHandler(null)
+        } catch (_: Exception) {}
+        perfChannel = null
+        channel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     private fun applyMaxPerformance(enabled: Boolean) {
         val w = window ?: return
         if (enabled) {
@@ -82,20 +89,13 @@ class MainActivity : FlutterActivity() {
             // Prefer a stable 60Hz refresh while streaming to avoid the
             // compositor bouncing between 60/90/120Hz on variable-refresh
             // devices, which thrashes the Flutter raster thread.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    // API 31+: per-Surface setFrameRate is the preferred SF hint
-                    // over preferredDisplayModeId (works with Flutter SurfaceProducer).
-                    w.decorView.post {
-                        try {
-                            w.decorView.setFrameRate(
-                                60f,
-                                android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                            )
-                        } catch (_: Exception) {}
-                    }
-                } catch (_: Exception) {}
-            }
+            // NOTE: View has no setFrameRate() (only Surface/SurfaceView do),
+            // so use the window-level preferredRefreshRate hint instead.
+            try {
+                val lp = w.attributes
+                lp.preferredRefreshRate = 60f
+                w.attributes = lp
+            } catch (_: Exception) {}
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
                     val display = w.decorView.display
@@ -125,13 +125,14 @@ class MainActivity : FlutterActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 w.setSustainedPerformanceMode(false)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                try {
-                    val lp = w.attributes
+            try {
+                val lp = w.attributes
+                lp.preferredRefreshRate = 0f
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     lp.preferredDisplayModeId = 0
-                    w.attributes = lp
-                } catch (_: Exception) {}
-            }
+                }
+                w.attributes = lp
+            } catch (_: Exception) {}
         }
     }
 
@@ -150,11 +151,20 @@ class MainActivity : FlutterActivity() {
                     ),
                 )
             } else {
-                @Suppress("DEPRECATION")
                 val vibrator = getSystemService(android.content.Context.VIBRATOR_SERVICE)
                     as? android.os.Vibrator ?: return
                 if (!vibrator.hasVibrator()) return
-                vibrator.vibrate(30)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(
+                        android.os.VibrationEffect.createOneShot(
+                            30,
+                            android.os.VibrationEffect.DEFAULT_AMPLITUDE,
+                        ),
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(30)
+                }
             }
         } catch (_: Throwable) {
         }
@@ -242,10 +252,12 @@ class MainActivity : FlutterActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val flag = keyToFlag(event.keyCode)
         if (flag != 0) {
-            buttons = if (event.action == KeyEvent.ACTION_DOWN) {
-                buttons or flag
-            } else {
-                buttons and flag.inv()
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> buttons = buttons or flag
+                KeyEvent.ACTION_UP -> buttons = buttons and flag.inv()
+                // ACTION_MULTIPLE and others: leave state alone, still consume
+                // so the key never leaks into Flutter's keyboard path.
+                else -> return true
             }
             sendState()
             return true
@@ -259,7 +271,13 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        if ((event.source and InputDevice.SOURCE_JOYSTICK) == 0) {
+        // Accept sticks from any gamepad/joystick source. Checking only
+        // SOURCE_JOYSTICK drops controllers that report SOURCE_GAMEPAD
+        // without the joystick class bits.
+        val gamepadSources = InputDevice.SOURCE_GAMEPAD or
+            InputDevice.SOURCE_JOYSTICK or
+            InputDevice.SOURCE_CLASS_JOYSTICK
+        if ((event.source and gamepadSources) == 0) {
             return super.onGenericMotionEvent(event)
         }
         lx = normalize(event.getAxisValue(MotionEvent.AXIS_X))

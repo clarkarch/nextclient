@@ -1268,7 +1268,6 @@ class WebRtcStreamSession implements StreamTransport {
       },
       'enableDscp': settings.webrtcEnableDscp,
       'maxIPv6Networks': settings.webrtcMaxIpv6Networks,
-      'enableHardwareAcceleration': settings.effectiveHwAccel,
       'sdpSemantics': 'unified-plan',
     };
   }

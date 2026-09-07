@@ -52,8 +52,7 @@ class PerformanceSettingsPage extends StatelessWidget {
                             LogLevel.info,
                             'perf',
                             'Max performance ${v ? 'ENGAGED' : 'disengaged'} '
-                                '(hwAccel=${services.settings.effectiveHwAccel} '
-                                'renderer=${services.settings.effectiveRendererBackend.name} '
+                                '(renderer=${services.settings.effectiveRendererBackend.name} '
                                 'shader=${services.settings.effectiveVideoShader.enabled ? 'on' : 'off'} '
                                 'poll=${services.settings.statsPollInterval.inMilliseconds}ms)',
                           );

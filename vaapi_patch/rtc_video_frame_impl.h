@@ -7,6 +7,8 @@
 #include "common_video/include/video_frame_buffer.h"
 #include "rtc_video_frame.h"
 
+#include <mutex>
+
 namespace libwebrtc {
 
 class VideoFrameBufferImpl : public RTCVideoFrame {
@@ -53,10 +55,21 @@ class VideoFrameBufferImpl : public RTCVideoFrame {
 
   void set_rotation(webrtc::VideoRotation rotation) { rotation_ = rotation; }
 
+  // Cached CPU view of a kNative buffer. DataY/U/V + Stride* must not call
+  // ToI420() per accessor: for kNative that conversion allocates + converts
+  // per call (6x per frame) and the returned pointer would dangle once the
+  // temporary scoped_refptr is released. The cache converts at most once per
+  // frame object (buffer_ never changes after construction; the flag covers
+  // the nullptr result so failures don't reconvert either).
+  webrtc::scoped_refptr<webrtc::I420BufferInterface> GetCachedI420() const;
+
  private:
   webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer_;
   int64_t timestamp_us_ = 0;
   webrtc::VideoRotation rotation_ = webrtc::kVideoRotation_0;
+  mutable std::mutex i420_mu_;
+  mutable webrtc::scoped_refptr<webrtc::I420BufferInterface> i420_cache_;
+  mutable bool i420_ready_ = false;
 };
 
 }  // namespace libwebrtc

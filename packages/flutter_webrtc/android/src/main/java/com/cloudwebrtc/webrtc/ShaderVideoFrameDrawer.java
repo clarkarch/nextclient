@@ -16,6 +16,15 @@ import java.nio.FloatBuffer;
 /**
  * VideoFrameDrawer subclass that adds a GPU post-processing pass (video shader
  * filter) after the standard rendering.
+ *
+ * Deliberately two-pass (base draw into an FBO, then the filter quad) rather
+ * than a merged single-pass drawer: the base VideoFrameDrawer handles every
+ * buffer kind the MediaCodec (H.264) decoder can emit (OES external textures,
+ * I420, etc.) with per-kind samplers, and reimplementing that matrix here to
+ * save one FBO round-trip would risk black frames on devices whose decoder
+ * output kind differs. On tiled mobile GPUs the FBO stays in tile memory, so
+ * the extra cost is one draw, not full DRAM traffic. The FBO path is fully
+ * skipped (zero extra work) while the filter is inactive.
  */
 public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
     private static final String TAG = "ShaderVideoFD";
@@ -27,6 +36,9 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
     private int fboWidth = 0;
     private int fboHeight = 0;
     private boolean glInitialized = false;
+    // Reused across frames: drawFrame runs per video frame on the render
+    // thread, so these must not be reallocated per call.
+    private final int[] tmpFb = new int[1];
 
     private int uFrameLoc = -1;
     private int uTexelSizeLoc = -1;
@@ -146,7 +158,7 @@ public class ShaderVideoFrameDrawer extends VideoFrameDrawer {
             return;
         }
 
-        int[] savedFbo = new int[1];
+        int[] savedFbo = tmpFb;
         GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, savedFbo, 0);
 
         if (!ensureFbo(width, height)) {

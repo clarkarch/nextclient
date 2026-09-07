@@ -43,12 +43,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "api/scoped_refptr.h"
@@ -57,6 +57,7 @@
 #include "api/video/video_frame.h"
 #include "api/video_codecs/sdp_video_format.h"
 #include "api/video_codecs/video_decoder.h"
+#include "libyuv/convert.h"
 #include "modules/video_coding/include/video_error_codes.h"
 #include "api/make_ref_counted.h"
 #include "dmabuf_video_buffer.h"
@@ -126,7 +127,20 @@ std::string ScanNalTypes(const uint8_t* data, size_t size) {
 // into next_client.log. To keep the decoder diagnostics in the SAME log the
 // app/stream uses, DecoderLog appends to next_client.log (the same file the
 // Dart FileLogSink writes) so a frozen/black stream can be diagnosed there.
+// File logging is gated behind OPENNOW_DECODER_DEBUG=1. Unconditional
+// fopen/fclose + system_clock on the decode/streaming threads costs real time
+// in release builds; the diagnostics below only matter when debugging a
+// black/frozen stream.
+bool DecoderDebugEnabled() {
+  static const bool enabled = []() {
+    const char* v = getenv("OPENNOW_DECODER_DEBUG");
+    return v != nullptr && (v[0] == '1' || v[0] == 'y' || v[0] == 'Y');
+  }();
+  return enabled;
+}
+
 void DecoderLog(const char* fmt, ...) {
+  if (!DecoderDebugEnabled()) return;
   static std::mutex log_mu;
   const char* home = getenv("HOME");
   char path[512];
@@ -220,7 +234,7 @@ bool VaapiElementOffersVaMemory(const char* element_name) {
 
 class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
  public:
-  GstVaapiVideoDecoder() = default;
+  GstVaapiVideoDecoder() { render_times_.reserve(kMaxRenderTimeEntries * 2); }
   ~GstVaapiVideoDecoder() override { Release(); }
 
   bool Configure(const Settings& settings) override {
@@ -270,14 +284,13 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
       return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
     }
 
-    // Diagnostics for the first few AUs of a session: framing (hex prefix),
-    // NAL types present, and whether SPS/PPS have been captured yet. This
-    // distinguishes "stream has no in-band SPS/PPS" (types lack 7/8) from
-    // "converter corrupts them" (7/8 present but pipeline still fails). Runs
-    // under mutex_ so converter_ state is fully serialized with Release().
+    // Diagnostics for the first few AUs of a session. Gated behind
+    // OPENNOW_DECODER_DEBUG=1: ScanNalTypes/HexPrefix allocate strings per AU
+    // and must not run on the decode hot path in release builds.
     static std::atomic<int> diag_seen{0};
     const int diag_n = diag_seen.fetch_add(1);
-    if (diag_n < 60) {
+    const bool diag_on = DecoderDebugEnabled();
+    if (diag_on && diag_n < 60) {
       DecoderLog("decode #%d in=%zu hasParam=%d nals=%s", diag_n,
                  input_image.size(), converter_.HasParameterSets(),
                  ScanNalTypes(data, input_image.size()).c_str());
@@ -294,6 +307,7 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
     // Warm path: SPS/PPS already captured — convert and push immediately.
     if (converter_.HasParameterSets()) {
       std::vector<uint8_t> annexb;
+      annexb.reserve(input_image.size() + 128);
       if (!converter_.Convert(data, input_image.size(), &annexb,
                               &is_keyframe)) {
         RTC_LOG(LS_ERROR) << "Malformed H.264 access unit";
@@ -311,6 +325,7 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
     // Cold path: no parameter sets yet. Converting this AU may capture them
     // (the converter caches in-band SPS/PPS from any AU, not just keyframes).
     std::vector<uint8_t> annexb;
+    annexb.reserve(input_image.size() + 128);
     if (!converter_.Convert(data, input_image.size(), &annexb, &is_keyframe)) {
       RTC_LOG(LS_ERROR) << "Malformed H.264 access unit";
       DecoderLog("decode #%d COLD CONVERT-FAIL", diag_n);
@@ -757,7 +772,8 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
     const int height = GST_VIDEO_INFO_HEIGHT(&info);
     static std::atomic<int> sample_seen{0};
     const int sample_n = sample_seen.fetch_add(1);
-    if (sample_n < 120) {
+    const bool sample_log = DecoderDebugEnabled() && sample_n < 120;
+    if (sample_log) {
       DecoderLog("sample #%d pts=%llu w=%d h=%d", sample_n,
                  static_cast<unsigned long long>(GST_BUFFER_PTS(buffer)),
                  width, height);
@@ -776,12 +792,10 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
         TryExportDmaBuf(buffer, &info);
 
     if (frame_buffer == nullptr) {
-      // --- CPU fallback: NV12 -> I420 in a single pass ---------------------
+      // --- CPU fallback: NV12 -> I420 via libyuv (SIMD) --------------------
       //
       // Only hit when the surface cannot be exported (no VA memory, driver
-      // without PRIME_2 export, or a non-NV12 layout). Keep this path exactly
-      // as before so the FFmpeg renderer-backend and any non-VAAPI session
-      // still work.
+      // without PRIME_2 export, or a non-NV12 layout).
       GstVideoFrame frame;
       if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ)) {
         gst_sample_unref(sample);
@@ -794,22 +808,15 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
       const uint8_t* uv = static_cast<const uint8_t*>(
           GST_VIDEO_FRAME_PLANE_DATA(&frame, 1));
 
-      const int uv_height = (height + 1) / 2;
-      const int uv_width = (width + 1) / 2;
       webrtc::scoped_refptr<webrtc::I420Buffer> i420 =
           webrtc::I420Buffer::Create(width, height);
-      for (int row = 0; row < height; ++row) {
-        std::memcpy(i420->MutableDataY() + row * i420->StrideY(),
-                    y + row * y_stride, width);
-      }
-      for (int row = 0; row < uv_height; ++row) {
-        const uint8_t* src = uv + row * uv_stride;
-        uint8_t* out_u = i420->MutableDataU() + row * i420->StrideU();
-        uint8_t* out_v = i420->MutableDataV() + row * i420->StrideV();
-        for (int col = 0; col < uv_width; ++col) {
-          out_u[col] = src[col * 2];
-          out_v[col] = src[col * 2 + 1];
-        }
+      if (libyuv::NV12ToI420(
+              y, y_stride, uv, uv_stride, i420->MutableDataY(),
+              i420->StrideY(), i420->MutableDataU(), i420->StrideU(),
+              i420->MutableDataV(), i420->StrideV(), width, height) != 0) {
+        gst_video_frame_unmap(&frame);
+        gst_sample_unref(sample);
+        return GST_FLOW_OK;
       }
       gst_video_frame_unmap(&frame);
       frame_buffer = i420;
@@ -868,7 +875,7 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
     if (callback != nullptr) {
       callback->Decoded(video_frame);
     }
-    if (sample_n < 120) {
+    if (sample_log) {
       DecoderLog("delivered #%d", sample_n);
     }
     gst_sample_unref(sample);
@@ -876,6 +883,8 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
   }
 
   // Pushes one already-converted Annex-B AU into appsrc. Caller holds mutex_.
+  // Single copy: vector -> GstBuffer via map+memcpy. The vector is pre-sized
+  // (reserve at the Convert call sites) so no reallocation happens mid-build.
   int32_t PushLocked(const uint8_t* data, size_t size, uint64_t pts_ns) {
     GstBuffer* buffer = gst_buffer_new_allocate(nullptr, size, nullptr);
     if (buffer == nullptr) return WEBRTC_VIDEO_CODEC_ERROR;
@@ -932,6 +941,7 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
       pending_.pop_front();
       pending_bytes_ -= au.raw.size();
       std::vector<uint8_t> out;
+      out.reserve(au.raw.size() + 128);
       bool is_keyframe = false;
       if (!converter_.Convert(au.raw.data(), au.raw.size(), &out,
                               &is_keyframe)) {
@@ -941,7 +951,7 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
       PushLocked(out.data(), out.size(), au.pts_ns);
       ++flushed;
     }
-    if (flushed > 0) {
+    if (flushed > 0 && DecoderDebugEnabled()) {
       RTC_LOG(LS_INFO) << "GstVAAPI: SPS/PPS captured; flushed " << flushed
                        << " held AU(s)";
       DecoderLog("flush %zu held AU(s)", flushed);
@@ -966,8 +976,9 @@ class GstVaapiVideoDecoder : public webrtc::VideoDecoder {
   std::mutex callback_mutex_;   // decoded_callback_ (Register/OnSample only)
   // Maps the RTP timestamp WebRTC handed to Decode() -> the render_time_ms it
   // expects back on the decoded VideoFrame. Looked up + erased in OnSample().
+  // unordered_map with reserve: O(1) average, no per-frame tree rotations.
   std::mutex render_time_mu_;
-  std::map<uint32_t, int64_t> render_times_;
+  std::unordered_map<uint32_t, int64_t> render_times_;
   static constexpr size_t kMaxRenderTimeEntries = 512;  // ~8 s at 60 fps
   webrtc::DecodedImageCallback* decoded_callback_ = nullptr;
   GstElement* pipeline_ = nullptr;

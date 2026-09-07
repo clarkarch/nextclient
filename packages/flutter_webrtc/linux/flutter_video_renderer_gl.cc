@@ -35,6 +35,12 @@ std::mutex g_shader_settings_mu;
 VideoShaderSettingsState g_shader_settings;
 uint64_t g_shader_version = 0;
 const auto g_start_time = std::chrono::steady_clock::now();
+
+// Attribute locations bound explicitly before every program link (see
+// LinkProgramWithBoundAttribs): all programs share the vertex shader, so all
+// share one process-wide VAO indexed by these slots.
+constexpr GLint kAttribPos = 0;
+constexpr GLint kAttribTc = 1;
 }  // namespace
 
 void set_video_shader_settings(const VideoShaderSettingsState& settings) {
@@ -290,6 +296,95 @@ static const char* kFragmentShaderNv12Post =
     "  gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n"
     "}\n";
 
+// Merged I420→RGB + video-shader-filter program for the CPU upload path:
+// same math as kFragmentShader followed by the kPostFragmentShader chain in
+// ONE pass into post_tex_. Saves the intermediate rgb_tex_ write+read plus
+// the second draw when a filter is active on FFmpeg/software frames.
+static const char* kFragmentShaderI420Post =
+    "#ifdef GL_ES\n"
+    "precision mediump float;\n"
+    "#endif\n"
+    "uniform sampler2D y_tex;\n"
+    "uniform sampler2D u_tex;\n"
+    "uniform sampler2D v_tex;\n"
+    "uniform vec2 u_texel_size;\n"
+    "uniform float u_sharpen;\n"
+    "uniform float u_sharpen_adaptive;\n"
+    "uniform float u_saturation;\n"
+    "uniform float u_contrast;\n"
+    "uniform float u_brightness;\n"
+    "uniform float u_vibrance;\n"
+    "uniform float u_grain;\n"
+    "uniform float u_time;\n"
+    "varying vec2 tc;\n"
+    "float luma(vec3 c) {\n"
+    "  return dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+    "}\n"
+    "float hash(vec2 p) {\n"
+    "  vec3 p3 = fract(vec3(p.xyx) * 0.1031);\n"
+    "  p3 += dot(p3, p3.yzx + 33.33);\n"
+    "  return fract((p3.x + p3.y) * p3.z);\n"
+    "}\n"
+    "vec3 i420_rgb(vec2 uv) {\n"
+    "  float y = texture2D(y_tex, uv).r;\n"
+    "  float u = texture2D(u_tex, uv).r - 0.5;\n"
+    "  float v = texture2D(v_tex, uv).r - 0.5;\n"
+    "  return vec3(\n"
+    "    y + 1.403 * v,\n"
+    "    y - 0.344 * u - 0.714 * v,\n"
+    "    y + 1.770 * u\n"
+    "  );\n"
+    "}\n"
+    "vec3 cas_sharpen(vec2 uv, vec3 center, float amount) {\n"
+    "  vec3 n = i420_rgb(uv + vec2(0.0, -u_texel_size.y));\n"
+    "  vec3 s = i420_rgb(uv + vec2(0.0,  u_texel_size.y));\n"
+    "  vec3 w = i420_rgb(uv + vec2(-u_texel_size.x, 0.0));\n"
+    "  vec3 e = i420_rgb(uv + vec2( u_texel_size.x, 0.0));\n"
+    "  vec3 mn = min(center, min(min(n, s), min(w, e)));\n"
+    "  vec3 mx = max(center, max(max(n, s), max(w, e)));\n"
+    "  vec3 amp = clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-5)), 0.0, 1.0);\n"
+    "  amp = sqrt(amp);\n"
+    "  float peak = mix(-0.16, -0.24, amount);\n"
+    "  vec3 weight = amp * peak;\n"
+    "  vec3 result = (center + (n + s + w + e) * weight) / (1.0 + 4.0 * weight);\n"
+    "  return clamp(result, 0.0, 1.0);\n"
+    "}\n"
+    "vec3 sharpen_uniform(vec2 uv, vec3 center, float amount) {\n"
+    "  vec3 n = i420_rgb(uv + vec2(0.0, -u_texel_size.y));\n"
+    "  vec3 s = i420_rgb(uv + vec2(0.0,  u_texel_size.y));\n"
+    "  vec3 w = i420_rgb(uv + vec2(-u_texel_size.x, 0.0));\n"
+    "  vec3 e = i420_rgb(uv + vec2( u_texel_size.x, 0.0));\n"
+    "  vec3 blur = (n + s + w + e) * 0.25;\n"
+    "  float k = 1.0 + 3.0 * amount;\n"
+    "  return clamp(center + (center - blur) * k, 0.0, 1.0);\n"
+    "}\n"
+    "void main() {\n"
+    "  vec3 color = i420_rgb(tc);\n"
+    "  if (u_sharpen > 0.001) {\n"
+    "    if (u_sharpen_adaptive > 0.5) {\n"
+    "      color = cas_sharpen(tc, color, u_sharpen);\n"
+    "    } else {\n"
+    "      color = sharpen_uniform(tc, color, u_sharpen);\n"
+    "    }\n"
+    "  }\n"
+    "  color *= u_brightness;\n"
+    "  color = (color - 0.5) * u_contrast + 0.5;\n"
+    "  float l = luma(color);\n"
+    "  color = mix(vec3(l), color, u_saturation);\n"
+    "  if (u_vibrance > 0.001) {\n"
+    "    float maxC = max(color.r, max(color.g, color.b));\n"
+    "    float minC = min(color.r, min(color.g, color.b));\n"
+    "    float sat = maxC - minC;\n"
+    "    float boost = u_vibrance * (1.0 - sat);\n"
+    "    color = mix(vec3(luma(color)), color, 1.0 + boost);\n"
+    "  }\n"
+    "  if (u_grain > 0.001) {\n"
+    "    float g = hash(gl_FragCoord.xy + fract(u_time) * 1024.0) - 0.5;\n"
+    "    color += g * u_grain * 0.12 * (0.3 + 0.7 * luma(color));\n"
+    "  }\n"
+    "  gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n"
+    "}\n";
+
 // ---------------------------------------------------------------------------
 // FlTextureGL GObject
 // ---------------------------------------------------------------------------
@@ -510,19 +605,21 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
 
   // Frame cache: the engine re-composites the scene for UI repaints (stats
   // overlay tick, session timer, chrome hover) that carry the SAME decoded
-  // frame. Re-running the full-screen YUV→RGB pass + ~20 GL state queries for
+  // frame. Re-running the full-screen YUV→RGB pass + GL state queries for
   // those costs real raster-thread time on a weak iGPU — return the
   // already-rendered texture untouched instead (the engine samples it again
   // as-is). The frame pointer is the identity key: every decoded frame is a
   // new RTCVideoFrame object, and OnFrame swaps frame_ per video frame. The
   // shader version joins the key so live filter edits re-render immediately.
+  // The cached flag records which texture was actually handed out (post vs
+  // rgb), so a failed post compile keeps returning rgb without recompiling
+  // per repaint.
   if (rendered_once_ && last_rendered_frame_ == frame &&
       last_rendered_width_ == w && last_rendered_height_ == h &&
-      last_rendered_shader_version_ == shader.version &&
-      last_rendered_post_active_ == post_active) {
+      last_rendered_shader_version_ == shader.version) {
     raster_cache_hits_++;
     *target = GL_TEXTURE_2D;
-    *name = post_active ? post_tex_ : rgb_tex_;
+    *name = last_rendered_post_active_ ? post_tex_ : rgb_tex_;
     *width = w;
     *height = h;
     return name;
@@ -531,10 +628,9 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
   // Snapshot the compositor's GL state BEFORE we touch anything, and restore
   // it on every exit path. populate() runs mid-frame inside the engine's
   // compositor, which relies on its own bindings.
-  GLint saved_unpack_row_length = 0;
-  GLint saved_unpack_alignment = 4;
-  glGetIntegerv(GL_UNPACK_ROW_LENGTH, &saved_unpack_row_length);
-  glGetIntegerv(GL_UNPACK_ALIGNMENT, &saved_unpack_alignment);
+  // NOTE: UNPACK state is NOT saved here — only the CPU upload path touches
+  // it, and it saves/restores the two UNPACK values itself. The zero-copy
+  // dmabuf path therefore avoids 2 state queries per frame.
   GLint saved_fbo = 0;
   glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
   GLint saved_viewport[4] = {0};
@@ -556,11 +652,14 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
   GLboolean saved_scissor = glIsEnabled(GL_SCISSOR_TEST);
 
   // Time the WHOLE raster-thread pass, including the state save above and the
-  // restore below — on a weak APU the ~20 glGet*/glIsEnabled state queries can
+  // restore below — on a weak APU the glGet*/glIsEnabled state queries can
   // be the actual CPU cost, so excluding them would report a misleadingly
   // small "raster" number and misattribute the wall to present/vsync.
   const auto t_render_start = std::chrono::steady_clock::now();
-  const bool ok = EnsureGlResources(w, h);
+  // Set when the CPU planes are unavailable (kNative→I420 conversion failed):
+  // declared here so the post-restore return below can see it.
+  bool planes_broken = false;
+  const bool ok = EnsureGlResources(w, h, post_active);
   if (ok) {
     // Zero-copy path first: if the frame carries a dmabuf descriptor (VAAPI
     // kNative buffer), import the prime fds as EGLImages and composite with no
@@ -569,10 +668,11 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
     // frame is plain I420 (FFmpeg path).
     const void* native = frame->NativeDmaBufHandle();
     bool rendered = false;
-    // True when the merged NV12+post program already produced post_tex_ —
-    // skips the standalone RenderPostPass (one full-screen pass instead of
-    // two). Only meaningful when `rendered` is true.
+    // True when a merged program already produced post_tex_ — skips the
+    // standalone RenderPostPass (one full-screen pass instead of two). Only
+    // meaningful when `rendered` is true.
     bool merged_post = false;
+    // (planes_broken is declared above so the post-restore return can see it.)
     if (native != nullptr) {
       const RtcDmaBufDescriptor* desc =
           static_cast<const RtcDmaBufDescriptor*>(native);
@@ -596,17 +696,46 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
               .count();
     }
     if (!rendered) {
-      UploadAndRenderFrame(frame->DataY(), frame->StrideY(), frame->DataU(),
-                           frame->StrideU(), frame->DataV(), frame->StrideV(), w,
-                           h);
+      // Fetch the CPU planes once (backed by the frame's cached I420 view;
+      // null only if the kNative→I420 conversion failed).
+      const uint8_t* y = frame->DataY();
+      const uint8_t* u = frame->DataU();
+      const uint8_t* v = frame->DataV();
+      if (y == nullptr || u == nullptr || v == nullptr) {
+        // Conversion failed: fall through to the state restore below, then
+        // keep the last presented texture instead of erroring the composite
+        // (which would spam the engine log per repaint).
+        planes_broken = true;
+      } else {
+        if (post_active) {
+          GlQuad* quad = gl_quad();
+          if (quad->i420_post_compiled || CompileI420PostShaderProgram()) {
+            // Single-pass CPU path: upload + I420→RGB + filter into post_tex_.
+            merged_post = UploadAndRenderI420Post(
+                y, frame->StrideY(), u, frame->StrideU(), v, frame->StrideV(),
+                w, h, &shader);
+            rendered = merged_post;
+            if (merged_post) raster_merged_++;
+          }
+        }
+        if (!rendered) {
+          UploadAndRenderFrame(y, frame->StrideY(), u, frame->StrideU(), v,
+                               frame->StrideV(), w, h);
+          rendered = true;
+        }
+      }
     }
+    const char* via = nullptr;
     if (!path_reported_) {
       path_reported_ = true;
       if (renderer_logging_enabled()) {
-        const char* via =
-            !rendered  ? "YUV plane upload (CPU readback)"
-            : merged_post ? "zero-copy dmabuf EGL import (merged post pass)"
-                          : "zero-copy dmabuf EGL import";
+        via = !rendered ? "YUV plane upload (CPU readback)"
+              : merged_post && native != nullptr
+                  ? "zero-copy dmabuf EGL import (merged post pass)"
+              : merged_post ? "YUV plane upload (merged post pass)"
+                            : (native != nullptr
+                                   ? "zero-copy dmabuf EGL import"
+                                   : "YUV plane upload (CPU readback)");
         std::fprintf(stderr, "[glrender] compositing via %s\n", via);
       }
     }
@@ -614,9 +743,10 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
     // result when the settings have a visible effect. The engine then
     // composites post_tex_ instead of rgb_tex_. A filter failure (shader
     // compile) falls back to the unfiltered rgb_tex_ so the stream stays
-    // visible. Skipped entirely when the merged pass already wrote post_tex_.
+    // visible. Skipped entirely when the merged pass already wrote post_tex_,
+    // and when the CPU planes were unavailable.
     bool post_rendered = false;
-    if (post_active) {
+    if (post_active && !planes_broken) {
       if (merged_post && rendered) {
         post_rendered = true;
       } else {
@@ -633,20 +763,22 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
         }
       }
     }
-    output_post = post_active && post_rendered;
-    // Frame-cache bookkeeping (only on success; timing is taken over the whole
-    // pass after the state restore below).
-    last_rendered_frame_ = frame;
-    last_rendered_width_ = w;
-    last_rendered_height_ = h;
-    last_rendered_shader_version_ = shader.version;
-    last_rendered_post_active_ = output_post;
-    rendered_once_ = true;
+    output_post = post_active && post_rendered && !planes_broken;
+    // Frame-cache bookkeeping (only on success and only when a new texture
+    // was actually rendered; timing is taken over the whole pass after the
+    // state restore below).
+    if (!planes_broken) {
+      last_rendered_frame_ = frame;
+      last_rendered_width_ = w;
+      last_rendered_height_ = h;
+      last_rendered_shader_version_ = shader.version;
+      last_rendered_post_active_ = output_post;
+      rendered_once_ = true;
+    }
   }
 
-  // Restore the engine's GL state.
-  glPixelStorei(GL_UNPACK_ROW_LENGTH, saved_unpack_row_length);
-  glPixelStorei(GL_UNPACK_ALIGNMENT, saved_unpack_alignment);
+  // Restore the engine's GL state (UNPACK state is owned by the CPU upload
+  // path itself — see UploadAndRenderFrame — so it is not touched here).
   glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
   glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2],
              saved_viewport[3]);
@@ -671,8 +803,9 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
   }
 
   // Full pass duration (state save → render → restore), fed into the per-second
-  // [glrender] raster log.
-  if (ok) {
+  // [glrender] raster log. Skipped when the planes were unavailable (no render
+  // ran, so there is nothing to time).
+  if (ok && !planes_broken) {
     const auto t_render_end = std::chrono::steady_clock::now();
     const double elapsed_ms = std::chrono::duration<double, std::milli>(
                                   t_render_end - t_render_start)
@@ -686,6 +819,15 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
   if (!ok) {
     return nullptr;
   }
+  if (planes_broken) {
+    // CPU conversion failed after state was restored: keep the last texture.
+    if (!rendered_once_) return nullptr;
+    *target = GL_TEXTURE_2D;
+    *name = last_rendered_post_active_ ? post_tex_ : rgb_tex_;
+    *width = last_rendered_width_;
+    *height = last_rendered_height_;
+    return name;
+  }
   *target = GL_TEXTURE_2D;
   *name = output_post ? post_tex_ : rgb_tex_;
   *width = w;
@@ -693,7 +835,8 @@ const uint32_t* FlutterVideoRendererGL::Populate(uint32_t* target,
   return name;
 }
 
-bool FlutterVideoRendererGL::EnsureGlResources(int width, int height) {
+bool FlutterVideoRendererGL::EnsureGlResources(int width, int height,
+                                              bool need_post) {
   GlQuad* quad = gl_quad();
   if (!quad->compiled && !CompileShaderProgram()) {
     return false;
@@ -771,36 +914,6 @@ bool FlutterVideoRendererGL::EnsureGlResources(int width, int height) {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            rgb_tex_, 0);
-
-    // Post-processing render target (video shader filter output). Allocated
-    // lazily with the rest of the pipeline; only actually drawn into when the
-    // filter settings are active.
-    if (post_tex_ == 0) {
-      glGenTextures(1, &post_tex_);
-      glBindTexture(GL_TEXTURE_2D, post_tex_);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    }
-    glBindTexture(GL_TEXTURE_2D, post_tex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, nullptr);
-    if (post_fbo_ == 0) {
-      glGenFramebuffers(1, &post_fbo_);
-    }
-    glBindFramebuffer(GL_FRAMEBUFFER, post_fbo_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           post_tex_, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-      std::fprintf(stderr,
-                   "[flutter_webrtc] GL renderer: post FBO incomplete after "
-                   "resize (%#x)\n",
-                   glCheckFramebufferStatus(GL_FRAMEBUFFER));
-      return false;
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
       std::fprintf(stderr,
                    "[flutter_webrtc] GL renderer: FBO incomplete after "
@@ -810,6 +923,56 @@ bool FlutterVideoRendererGL::EnsureGlResources(int width, int height) {
     }
     gl_width_ = width;
     gl_height_ = height;
+  }
+
+  // Post-processing render target (video shader filter output). Allocated
+  // lazily and only while a filter is requested: without this, every session
+  // pays a 1080p RGBA allocation + FBO that it never draws into. Tracked
+  // separately from gl_width_/gl_height_ so enabling the filter mid-session
+  // at the same video size still allocates.
+  if (need_post) {
+    if (post_tex_ == 0 || gl_post_width_ != width || gl_post_height_ != height) {
+      if (post_tex_ == 0) {
+        glGenTextures(1, &post_tex_);
+        glBindTexture(GL_TEXTURE_2D, post_tex_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      } else {
+        glBindTexture(GL_TEXTURE_2D, post_tex_);
+      }
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, nullptr);
+      if (post_fbo_ == 0) {
+        glGenFramebuffers(1, &post_fbo_);
+      }
+      glBindFramebuffer(GL_FRAMEBUFFER, post_fbo_);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                             GL_TEXTURE_2D, post_tex_, 0);
+      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::fprintf(stderr,
+                     "[flutter_webrtc] GL renderer: post FBO incomplete (%#x)\n",
+                     glCheckFramebufferStatus(GL_FRAMEBUFFER));
+        return false;
+      }
+      gl_post_width_ = width;
+      gl_post_height_ = height;
+    }
+  } else if (post_tex_ != 0 && (gl_post_width_ != width ||
+                                gl_post_height_ != height)) {
+    // Filter off but a stale post allocation from an earlier filtered session
+    // exists at the wrong size: drop it so a later re-enable reallocates
+    // cleanly instead of rendering into a mismatched target. (Kept while the
+    // size matches to avoid free/alloc churn on filter toggles.)
+    glDeleteTextures(1, &post_tex_);
+    post_tex_ = 0;
+    if (post_fbo_ != 0) {
+      glDeleteFramebuffers(1, &post_fbo_);
+      post_fbo_ = 0;
+    }
+    gl_post_width_ = 0;
+    gl_post_height_ = 0;
   }
 
   // Fullscreen quad VAO/VBO (GL 3.2 core profile needs a VAO bound). Shared
@@ -829,13 +992,13 @@ bool FlutterVideoRendererGL::EnsureGlResources(int width, int height) {
     glBindVertexArray(quad->vao);
     glBindBuffer(GL_ARRAY_BUFFER, quad->vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-    GLint pos = glGetAttribLocation(quad->program, "in_pos");
-    GLint tc = glGetAttribLocation(quad->program, "in_tc");
-    glEnableVertexAttribArray(pos);
-    glVertexAttribPointer(pos, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+    // Locations match the explicit glBindAttribLocation(0/1) in every program
+    // link above, so this one VAO is valid for all programs.
+    glEnableVertexAttribArray(kAttribPos);
+    glVertexAttribPointer(kAttribPos, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                           reinterpret_cast<void*>(0));
-    glEnableVertexAttribArray(tc);
-    glVertexAttribPointer(tc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+    glEnableVertexAttribArray(kAttribTc);
+    glVertexAttribPointer(kAttribTc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
                           reinterpret_cast<void*>(2 * sizeof(float)));
     glBindVertexArray(0);
   }
@@ -875,6 +1038,8 @@ bool FlutterVideoRendererGL::CompileShaderProgram() {
   quad->program = glCreateProgram();
   glAttachShader(quad->program, vs);
   glAttachShader(quad->program, fs);
+  glBindAttribLocation(quad->program, kAttribPos, "in_pos");
+  glBindAttribLocation(quad->program, kAttribTc, "in_tc");
   glLinkProgram(quad->program);
   glGetProgramiv(quad->program, GL_LINK_STATUS, &ok);
   if (ok == GL_FALSE) {
@@ -934,6 +1099,8 @@ bool FlutterVideoRendererGL::CompileNv12ShaderProgram() {
   quad->program_nv12 = glCreateProgram();
   glAttachShader(quad->program_nv12, vs);
   glAttachShader(quad->program_nv12, fs);
+  glBindAttribLocation(quad->program_nv12, kAttribPos, "in_pos");
+  glBindAttribLocation(quad->program_nv12, kAttribTc, "in_tc");
   glLinkProgram(quad->program_nv12);
   glGetProgramiv(quad->program_nv12, GL_LINK_STATUS, &ok);
   if (ok == GL_FALSE) {
@@ -994,6 +1161,8 @@ bool FlutterVideoRendererGL::CompileNv12PostShaderProgram() {
   quad->program_nv12_post = glCreateProgram();
   glAttachShader(quad->program_nv12_post, vs);
   glAttachShader(quad->program_nv12_post, fs);
+  glBindAttribLocation(quad->program_nv12_post, kAttribPos, "in_pos");
+  glBindAttribLocation(quad->program_nv12_post, kAttribTc, "in_tc");
   glLinkProgram(quad->program_nv12_post);
   glGetProgramiv(quad->program_nv12_post, GL_LINK_STATUS, &ok);
   if (ok == GL_FALSE) {
@@ -1074,6 +1243,8 @@ bool FlutterVideoRendererGL::CompilePostShaderProgram() {
   quad->program_post = glCreateProgram();
   glAttachShader(quad->program_post, vs);
   glAttachShader(quad->program_post, fs);
+  glBindAttribLocation(quad->program_post, kAttribPos, "in_pos");
+  glBindAttribLocation(quad->program_post, kAttribTc, "in_tc");
   glLinkProgram(quad->program_post);
   glGetProgramiv(quad->program_post, GL_LINK_STATUS, &ok);
   if (ok == GL_FALSE) {
@@ -1110,6 +1281,92 @@ bool FlutterVideoRendererGL::CompilePostShaderProgram() {
   quad->uniform_post_time = glGetUniformLocation(quad->program_post, "u_time");
   glUniform1i(quad->uniform_post_frame, 0);
   quad->post_compiled = true;
+  return true;
+}
+
+bool FlutterVideoRendererGL::CompileI420PostShaderProgram() {
+  GlQuad* quad = gl_quad();
+  GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vs, 1, &kVertexShader, nullptr);
+  glCompileShader(vs);
+  GLint ok = GL_FALSE;
+  glGetShaderiv(vs, GL_COMPILE_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetShaderInfoLog(vs, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL I420+post vertex shader failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    return false;
+  }
+
+  GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fs, 1, &kFragmentShaderI420Post, nullptr);
+  glCompileShader(fs);
+  glGetShaderiv(fs, GL_COMPILE_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetShaderInfoLog(fs, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL I420+post fragment shader failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return false;
+  }
+
+  quad->program_i420_post = glCreateProgram();
+  glAttachShader(quad->program_i420_post, vs);
+  glAttachShader(quad->program_i420_post, fs);
+  glBindAttribLocation(quad->program_i420_post, kAttribPos, "in_pos");
+  glBindAttribLocation(quad->program_i420_post, kAttribTc, "in_tc");
+  glLinkProgram(quad->program_i420_post);
+  glGetProgramiv(quad->program_i420_post, GL_LINK_STATUS, &ok);
+  if (ok == GL_FALSE) {
+    char log[1024] = {0};
+    glGetProgramInfoLog(quad->program_i420_post, sizeof(log), nullptr, log);
+    std::fprintf(stderr,
+                 "[flutter_webrtc] GL I420+post program link failed: %s\n",
+                 log);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glDeleteProgram(quad->program_i420_post);
+    quad->program_i420_post = 0;
+    return false;
+  }
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+
+  glUseProgram(quad->program_i420_post);
+  quad->uniform_y_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "y_tex");
+  quad->uniform_u_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_tex");
+  quad->uniform_v_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "v_tex");
+  quad->uniform_texel_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_texel_size");
+  quad->uniform_sharpen_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_sharpen");
+  quad->uniform_sharpen_adaptive_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_sharpen_adaptive");
+  quad->uniform_saturation_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_saturation");
+  quad->uniform_contrast_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_contrast");
+  quad->uniform_brightness_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_brightness");
+  quad->uniform_vibrance_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_vibrance");
+  quad->uniform_grain_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_grain");
+  quad->uniform_time_i420_post =
+      glGetUniformLocation(quad->program_i420_post, "u_time");
+  glUniform1i(quad->uniform_y_i420_post, 0);
+  glUniform1i(quad->uniform_u_i420_post, 1);
+  glUniform1i(quad->uniform_v_i420_post, 2);
+  quad->i420_post_compiled = true;
   return true;
 }
 
@@ -1192,6 +1449,13 @@ void FlutterVideoRendererGL::UploadAndRenderFrame(const uint8_t* y,
   const int uv_w = (width + 1) / 2;
   const int uv_h = (height + 1) / 2;
 
+  // UNPACK state belongs to this path: save/restore here so the zero-copy
+  // path in Populate() avoids these queries entirely.
+  GLint saved_unpack_row_length = 0;
+  GLint saved_unpack_alignment = 4;
+  glGetIntegerv(GL_UNPACK_ROW_LENGTH, &saved_unpack_row_length);
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &saved_unpack_alignment);
+
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, y_stride);
   glActiveTexture(GL_TEXTURE0);
@@ -1221,6 +1485,75 @@ void FlutterVideoRendererGL::UploadAndRenderFrame(const uint8_t* y,
   glBindVertexArray(quad->vao);
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
   glBindVertexArray(0);
+
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, saved_unpack_row_length);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, saved_unpack_alignment);
+}
+
+bool FlutterVideoRendererGL::UploadAndRenderI420Post(
+    const uint8_t* y, int y_stride, const uint8_t* u, int u_stride,
+    const uint8_t* v, int v_stride, int width, int height,
+    const VideoShaderSettingsState* post) {
+  GlQuad* quad = gl_quad();
+  if (!quad->i420_post_compiled && !CompileI420PostShaderProgram()) {
+    return false;
+  }
+  const int uv_w = (width + 1) / 2;
+  const int uv_h = (height + 1) / 2;
+
+  GLint saved_unpack_row_length = 0;
+  GLint saved_unpack_alignment = 4;
+  glGetIntegerv(GL_UNPACK_ROW_LENGTH, &saved_unpack_row_length);
+  glGetIntegerv(GL_UNPACK_ALIGNMENT, &saved_unpack_alignment);
+
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, y_stride);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, y_tex_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RED,
+                  GL_UNSIGNED_BYTE, y);
+
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, u_stride);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, u_tex_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, uv_w, uv_h, GL_RED,
+                  GL_UNSIGNED_BYTE, u);
+
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, v_stride);
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, v_tex_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, uv_w, uv_h, GL_RED,
+                  GL_UNSIGNED_BYTE, v);
+
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, saved_unpack_row_length);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, saved_unpack_alignment);
+
+  glDisable(GL_BLEND);
+  glDisable(GL_SCISSOR_TEST);
+  glBindFramebuffer(GL_FRAMEBUFFER, post_fbo_);
+  glViewport(0, 0, width, height);
+  glUseProgram(quad->program_i420_post);
+  glUniform1i(quad->uniform_y_i420_post, 0);
+  glUniform1i(quad->uniform_u_i420_post, 1);
+  glUniform1i(quad->uniform_v_i420_post, 2);
+  glUniform2f(quad->uniform_texel_i420_post, 1.0f / width, 1.0f / height);
+  glUniform1f(quad->uniform_sharpen_i420_post, post->sharpen / 100.0f);
+  glUniform1f(quad->uniform_sharpen_adaptive_i420_post,
+              post->sharpenAdaptive ? 1.0f : 0.0f);
+  glUniform1f(quad->uniform_saturation_i420_post, post->saturation / 100.0f);
+  glUniform1f(quad->uniform_contrast_i420_post, post->contrast / 100.0f);
+  glUniform1f(quad->uniform_brightness_i420_post, post->brightness / 100.0f);
+  glUniform1f(quad->uniform_vibrance_i420_post, post->vibrance / 100.0f);
+  glUniform1f(quad->uniform_grain_i420_post, post->grain / 100.0f);
+  const double elapsed_s =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                    g_start_time)
+          .count();
+  glUniform1f(quad->uniform_time_i420_post, static_cast<float>(elapsed_s));
+  glBindVertexArray(quad->vao);
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  glBindVertexArray(0);
+  return true;
 }
 
 bool FlutterVideoRendererGL::ImportAndRenderDmaBuf(const RtcDmaBufDescriptor* desc,
@@ -1272,17 +1605,33 @@ bool FlutterVideoRendererGL::ImportAndRenderDmaBuf(const RtcDmaBufDescriptor* de
     return false;
   }
 
-  const char* exts = eglQueryString(display, EGL_EXTENSIONS);
-  if (exts == nullptr ||
-      std::strstr(exts, "EGL_EXT_image_dma_buf_import") == nullptr) {
-    std::fprintf(stderr,
-                 "[flutter_webrtc] GL renderer: no EGL_EXT_image_dma_buf_import "
-                 "— CPU fallback\n");
-    return false;
+  // eglQueryString + strstr per frame is measurable CPU on the raster thread.
+  // The display's extension set does not change at runtime: cache per display.
+  // Raster thread only (Populate/ImportAndRenderDmaBuf), so no locking.
+  static EGLDisplay cached_ext_display = EGL_NO_DISPLAY;
+  static bool cached_has_import = false;
+  static bool cached_has_modifiers = false;
+  bool has_modifiers = false;
+  if (display == cached_ext_display) {
+    if (!cached_has_import) return false;
+    has_modifiers = cached_has_modifiers;
+  } else {
+    const char* exts = eglQueryString(display, EGL_EXTENSIONS);
+    cached_ext_display = display;
+    cached_has_import =
+        exts != nullptr &&
+        std::strstr(exts, "EGL_EXT_image_dma_buf_import") != nullptr;
+    cached_has_modifiers =
+        exts != nullptr &&
+        std::strstr(exts, "EGL_EXT_image_dma_buf_import_modifiers") != nullptr;
+    if (!cached_has_import) {
+      std::fprintf(stderr,
+                   "[flutter_webrtc] GL renderer: no "
+                   "EGL_EXT_image_dma_buf_import — CPU fallback\n");
+      return false;
+    }
+    has_modifiers = cached_has_modifiers;
   }
-  const bool has_modifiers =
-      exts != nullptr &&
-      std::strstr(exts, "EGL_EXT_image_dma_buf_import_modifiers") != nullptr;
 
   // NV12 = DRM_FORMAT_NV12. Plane fourccs: Y = R8, interleaved UV = GR88.
   // Hardcoded so the plugin needs no libdrm dependency.

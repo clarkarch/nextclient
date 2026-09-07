@@ -147,13 +147,16 @@ class FlutterVideoRendererGL
     size_t height;
   };
 
-  bool EnsureGlResources(int width, int height);
+  bool EnsureGlResources(int width, int height, bool need_post);
   bool CompileShaderProgram();
   bool CompileNv12ShaderProgram();
   // Merged NV12→RGB + video-shader-filter program: renders the post pass
   // inline so a filtered frame costs ONE full-screen pass instead of two
   // (the intermediate rgb_tex_ write+read is skipped entirely).
   bool CompileNv12PostShaderProgram();
+  // Merged I420→RGB + video-shader-filter program for the CPU upload path:
+  // same single-pass saving for FFmpeg/software frames.
+  bool CompileI420PostShaderProgram();
   // Video shader filter (post-processing) stage, port of OpenNOW's
   // videoShader.ts: compiles the post program into the process-wide GlQuad on
   // first use, then renders rgb_tex_ → post_tex_ when the filter is active.
@@ -170,6 +173,19 @@ class FlutterVideoRendererGL
                             int v_stride,
                             int width,
                             int height);
+  // Merged CPU-path single pass: uploads Y/U/V planes then renders I420→RGB
+  // + filter inline into post_tex_. Returns false when the merged program is
+  // unavailable (shader compile failure) — caller falls back to
+  // UploadAndRenderFrame + RenderPostPass.
+  bool UploadAndRenderI420Post(const uint8_t* y,
+                               int y_stride,
+                               const uint8_t* u,
+                               int u_stride,
+                               const uint8_t* v,
+                               int v_stride,
+                               int width,
+                               int height,
+                               const VideoShaderSettingsState* post);
 
   // Zero-copy dmabuf path: imports the two DRM prime fds (Y + interleaved UV,
   // NV12) as EGLImages and renders them into rgb_tex_ (plain NV12→RGB) or,
@@ -254,10 +270,18 @@ class FlutterVideoRendererGL
 
   int gl_width_ = 0;
   int gl_height_ = 0;
+  // Allocated size of the post target (tracked separately: the filter can be
+  // enabled mid-session without a video-size change).
+  int gl_post_width_ = 0;
+  int gl_post_height_ = 0;
 
-  // Frame-cache bookkeeping for the post pass: which settings the cached
-  // texture was rendered with, so a live slider change (version bump) forces
-  // a re-render even when the video frame pointer is unchanged.
+  // Frame-cache bookkeeping: which settings the cached texture was rendered
+  // with, so a live slider change (version bump) forces a re-render even when
+  // the video frame pointer is unchanged. last_rendered_post_active_ stores
+  // the ACTUAL output texture used (post_tex_ vs rgb_tex_), not the requested
+  // post_active: when the post pass fails to compile we hand rgb_tex_ and
+  // cache that, so repeat composites return rgb without retrying the compile
+  // every repaint.
   uint64_t last_rendered_shader_version_ = 0;
   bool last_rendered_post_active_ = false;
 };
@@ -312,6 +336,24 @@ struct GlQuad {
   GLint uniform_post_grain = -1;
   GLint uniform_post_time = -1;
   bool post_compiled = false;
+
+  // Merged I420→RGB + post-filter program (single pass for the CPU upload
+  // path). All uniform locations are per-program — do not share with
+  // program_post.
+  GLuint program_i420_post = 0;
+  GLint uniform_y_i420_post = -1;
+  GLint uniform_u_i420_post = -1;
+  GLint uniform_v_i420_post = -1;
+  GLint uniform_texel_i420_post = -1;
+  GLint uniform_sharpen_i420_post = -1;
+  GLint uniform_sharpen_adaptive_i420_post = -1;
+  GLint uniform_saturation_i420_post = -1;
+  GLint uniform_contrast_i420_post = -1;
+  GLint uniform_brightness_i420_post = -1;
+  GLint uniform_vibrance_i420_post = -1;
+  GLint uniform_grain_i420_post = -1;
+  GLint uniform_time_i420_post = -1;
+  bool i420_post_compiled = false;
 };
 
 GlQuad* gl_quad();

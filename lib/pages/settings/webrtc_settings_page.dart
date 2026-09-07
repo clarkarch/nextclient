@@ -167,16 +167,6 @@ class _WebRtcSettingsPageState extends State<WebRtcSettingsPage> {
                   ),
                   const Divider(height: 1),
                   NeonSettingTile(
-                    icon: Icons.memory,
-                    title: 'Hardware acceleration',
-                    subtitle: 'GPU video decode when available',
-                    trailing: NeonSwitch(
-                      value: s.webrtcHwAccel,
-                      onChanged: (v) => s.webrtcHwAccel = v,
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  NeonSettingTile(
                     icon: Icons.network_check,
                     title: 'DSCP marking (QoS)',
                     subtitle: 'Mark RTP packets for network prioritization',

@@ -249,7 +249,7 @@ class _StreamPageState extends State<StreamPage> {
       line('stats', s.streamShowFps ? 'on' : 'off'),
       line(
         'webrtc',
-        'hwAccel=${s.webrtcHwAccel} ice=${s.webrtcIceTransport.name} '
+        'ice=${s.webrtcIceTransport.name} '
             'bundle=${s.webrtcBundle.name} rtcpMux=${s.webrtcRtcpMux.name}',
       ),
       line(

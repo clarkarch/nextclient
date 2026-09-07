@@ -63,7 +63,6 @@ class UserSettings extends ChangeNotifier {
   static const _keyWebrtcIcePoolSize = 'settings.webrtc.icePoolSize';
   static const _keyWebrtcBundle = 'settings.webrtc.bundle';
   static const _keyWebrtcRtcpMux = 'settings.webrtc.rtcpMux';
-  static const _keyWebrtcHwAccel = 'settings.webrtc.hwAccel';
   static const _keyWebrtcStun = 'settings.webrtc.stun';
   static const _keyWebrtcDscp = 'settings.webrtc.dscp';
   static const _keyWebrtcMaxIpv6Networks = 'settings.webrtc.maxIpv6Networks';
@@ -152,7 +151,6 @@ class UserSettings extends ChangeNotifier {
   int _webrtcIcePoolSize = 4;
   WebrtcBundlePolicy _webrtcBundle = WebrtcBundlePolicy.maxBundle;
   WebrtcRtcpMuxPolicy _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
-  bool _webrtcHwAccel = true;
   String _webrtcStunServer = '';
   bool _webrtcEnableDscp = false;
   int _webrtcMaxIpv6Networks = 64;
@@ -287,7 +285,6 @@ class UserSettings extends ChangeNotifier {
   int get webrtcIcePoolSize => _webrtcIcePoolSize;
   WebrtcBundlePolicy get webrtcBundle => _webrtcBundle;
   WebrtcRtcpMuxPolicy get webrtcRtcpMux => _webrtcRtcpMux;
-  bool get webrtcHwAccel => _webrtcHwAccel;
   String get webrtcStunServer => _webrtcStunServer;
   bool get webrtcEnableDscp => _webrtcEnableDscp;
   int get webrtcMaxIpv6Networks => _webrtcMaxIpv6Networks;
@@ -337,9 +334,10 @@ class UserSettings extends ChangeNotifier {
   bool get hideTitleBar => _hideTitleBar;
 
   /// When true the stream stack aggressively maximizes render performance:
-  /// disables expensive post-processing, forces hardware decode, prefers the
-  /// GPU renderer, throttles telemetry, disables animated backgrounds and
-  /// verbose logging. Applied on both Linux and Android.
+  /// disables expensive post-processing, prefers the GPU renderer, throttles
+  /// telemetry, disables animated backgrounds and verbose logging. Hardware
+  /// decode is always on (MediaCodec on Android, VAAPI/D3D11VA on desktop).
+  /// Applied on both Linux and Android.
   bool get maxPerformanceMode => _maxPerformanceMode;
 
   /// Effective values when max-performance is on: callers that affect the
@@ -353,7 +351,6 @@ class UserSettings extends ChangeNotifier {
       _maxPerformanceMode ? RendererBackend.gl : _rendererBackend;
   DecoderBackend get effectiveDecoderBackend =>
       _maxPerformanceMode ? DecoderBackend.vaapi : _decoderBackend;
-  bool get effectiveHwAccel => _maxPerformanceMode ? true : _webrtcHwAccel;
   BackgroundStyle get effectiveBackgroundStyle =>
       _maxPerformanceMode ? BackgroundStyle.subtle : _backgroundStyle;
   bool get effectiveUiAnimations => _maxPerformanceMode ? false : _uiAnimations;
@@ -732,13 +729,6 @@ class UserSettings extends ChangeNotifier {
     if (_webrtcRtcpMux == v) return;
     _webrtcRtcpMux = v;
     _save(_keyWebrtcRtcpMux, v.name);
-    notifyListeners();
-  }
-
-  set webrtcHwAccel(bool v) {
-    if (_webrtcHwAccel == v) return;
-    _webrtcHwAccel = v;
-    _save(_keyWebrtcHwAccel, v);
     notifyListeners();
   }
 
@@ -1132,7 +1122,6 @@ class UserSettings extends ChangeNotifier {
           _keyWebrtcRtcpMux,
         )] ??
         _webrtcRtcpMux;
-    _webrtcHwAccel = _prefs.getBool(_keyWebrtcHwAccel) ?? _webrtcHwAccel;
     _webrtcStunServer = _prefs.getString(_keyWebrtcStun) ?? _webrtcStunServer;
     _webrtcEnableDscp = _prefs.getBool(_keyWebrtcDscp) ?? _webrtcEnableDscp;
     _webrtcMaxIpv6Networks =
@@ -1292,7 +1281,6 @@ class UserSettings extends ChangeNotifier {
     _webrtcIcePoolSize = 4;
     _webrtcBundle = WebrtcBundlePolicy.maxBundle;
     _webrtcRtcpMux = WebrtcRtcpMuxPolicy.require;
-    _webrtcHwAccel = true;
     _webrtcStunServer = '';
     _webrtcEnableDscp = false;
     _webrtcMaxIpv6Networks = 64;
@@ -1375,7 +1363,6 @@ class UserSettings extends ChangeNotifier {
     _keyWebrtcIcePoolSize,
     _keyWebrtcBundle,
     _keyWebrtcRtcpMux,
-    _keyWebrtcHwAccel,
     _keyWebrtcStun,
     _keyWebrtcDscp,
     _keyWebrtcMaxIpv6Networks,

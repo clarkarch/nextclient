@@ -30,32 +30,47 @@ int VideoFrameBufferImpl::width() const { return buffer_->width(); }
 
 int VideoFrameBufferImpl::height() const { return buffer_->height(); }
 
-// NOTE: plane accessors must go through ToI420(), not GetI420(). GetI420()
-// returns nullptr for kNative dmabuf frames (VAAPI zero-copy path) and would
-// null-deref here; ToI420() is the conversion fallback and is free for I420
-// buffers (I420BufferInterface::ToI420() returns itself).
+// NOTE: plane accessors go through a cached ToI420(). GetI420() returns
+// nullptr for kNative dmabuf frames and would null-deref; ToI420() is free
+// for I420 buffers (returns itself) but allocates + converts for kNative, so
+// it must run at most once per frame object (see GetCachedI420).
+webrtc::scoped_refptr<webrtc::I420BufferInterface>
+VideoFrameBufferImpl::GetCachedI420() const {
+  std::lock_guard<std::mutex> lock(i420_mu_);
+  if (i420_ready_) return i420_cache_;
+  if (buffer_) i420_cache_ = buffer_->ToI420();
+  i420_ready_ = true;
+  return i420_cache_;
+}
+
 const uint8_t* VideoFrameBufferImpl::DataY() const {
-  return buffer_->ToI420()->DataY();
+  auto i420 = GetCachedI420();
+  return i420 ? i420->DataY() : nullptr;
 }
 
 const uint8_t* VideoFrameBufferImpl::DataU() const {
-  return buffer_->ToI420()->DataU();
+  auto i420 = GetCachedI420();
+  return i420 ? i420->DataU() : nullptr;
 }
 
 const uint8_t* VideoFrameBufferImpl::DataV() const {
-  return buffer_->ToI420()->DataV();
+  auto i420 = GetCachedI420();
+  return i420 ? i420->DataV() : nullptr;
 }
 
 int VideoFrameBufferImpl::StrideY() const {
-  return buffer_->ToI420()->StrideY();
+  auto i420 = GetCachedI420();
+  return i420 ? i420->StrideY() : 0;
 }
 
 int VideoFrameBufferImpl::StrideU() const {
-  return buffer_->ToI420()->StrideU();
+  auto i420 = GetCachedI420();
+  return i420 ? i420->StrideU() : 0;
 }
 
 int VideoFrameBufferImpl::StrideV() const {
-  return buffer_->ToI420()->StrideV();
+  auto i420 = GetCachedI420();
+  return i420 ? i420->StrideV() : 0;
 }
 
 const void* VideoFrameBufferImpl::NativeDmaBufHandle() const {
@@ -71,10 +86,9 @@ const void* VideoFrameBufferImpl::NativeDmaBufHandle() const {
 int VideoFrameBufferImpl::ConvertToARGB(Type type, uint8_t* dst_buffer,
                                         int dst_stride, int dest_width,
                                         int dest_height) {
-  // Use ToI420() so kNative dmabuf frames are converted (CPU fallback) instead
-  // of crashing in I420Buffer::Rotate(const VideoFrameBuffer&) which calls
-  // GetI420() internally. Free for I420 buffers.
-  webrtc::scoped_refptr<webrtc::I420BufferInterface> i420 = buffer_->ToI420();
+  // Use the cached I420 view so kNative dmabuf frames convert at most once
+  // even when ConvertToARGB is called repeatedly (CPU renderer path).
+  webrtc::scoped_refptr<webrtc::I420BufferInterface> i420 = GetCachedI420();
   if (!i420) return 0;
 
   webrtc::scoped_refptr<webrtc::I420Buffer> rotated =

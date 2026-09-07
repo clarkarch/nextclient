@@ -24,14 +24,20 @@ D3d11VideoBuffer::D3d11VideoBuffer(void* shared_handle, int width, int height,
   }
   // owned_texture_ is transferred (no AddRef): the decoder hands over a ref it
   // no longer needs (ComPtr::Detach) and we Release() it in the destructor.
-  // On non-Windows builds the member stays null (the decoder that sets it is
-  // Windows-only), so the guarded Release() below is never reached.
+  // On non-Windows builds there is no descriptor to fill (the decoder that
+  // produces these frames is Windows-only and so is the field).
+#if defined(_WIN32)
   desc_.handle = shared_handle;
   desc_.format = RtcD3D11TextureFormat::kNv12;
   desc_.width = width;
   desc_.height = height;
   desc_.stride_y = stride_y;
   desc_.stride_uv = stride_uv;
+#else
+  (void)shared_handle;
+  (void)stride_y;
+  (void)stride_uv;
+#endif
 }
 
 D3d11VideoBuffer::~D3d11VideoBuffer() {

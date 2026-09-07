@@ -69,11 +69,18 @@ class D3d11VideoBuffer : public webrtc::VideoFrameBuffer {
     return nullptr;
   }
 
-  // Returns the ABI-stable descriptor the renderer opens.
+  // Returns the ABI-stable descriptor the renderer opens. Windows-only: on
+  // other platforms the descriptor field is absent entirely (guarded) so the
+  // stub build stays empty and clang's -Wunused-private-field under -Werror
+  // can't fire — the only reads live in _WIN32 code.
+#if defined(_WIN32)
   const RtcD3D11TextureDescriptor* d3d11_desc() const { return &desc_; }
+#endif
 
  private:
+#if defined(_WIN32)
   RtcD3D11TextureDescriptor desc_;
+#endif
   int width_ = 0;
   int height_ = 0;
   // Ref'd GstBuffer (owns the GstD3D11Memory -> D3D11 texture). Keeps the

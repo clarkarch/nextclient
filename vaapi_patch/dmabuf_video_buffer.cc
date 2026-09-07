@@ -3,8 +3,9 @@
 // See dmabuf_video_buffer.h for the design.
 #include "dmabuf_video_buffer.h"
 
-#include <cstring>
 #include <unistd.h>  // close()
+
+#include "libyuv/convert.h"
 
 namespace libwebrtc {
 
@@ -55,26 +56,16 @@ webrtc::scoped_refptr<webrtc::I420BufferInterface> DmaBufVideoBuffer::ToI420() {
   const uint8_t* uv = static_cast<const uint8_t*>(
       GST_VIDEO_FRAME_PLANE_DATA(&frame, 1));
 
-  // NV12 -> I420 in a single pass, straight into the WebRTC I420Buffer (the
-  // same conversion the decoder's CPU path used before the zero-copy path).
-  const int uv_height = (height + 1) / 2;
-  const int uv_width = (width + 1) / 2;
+  // NV12 -> I420 via libyuv (SIMD). Slow path only: sinks that cannot handle
+  // kNative (stock CPU renderer, recording).
   webrtc::scoped_refptr<webrtc::I420Buffer> i420 =
       webrtc::I420Buffer::Create(width, height);
-  for (int row = 0; row < height; ++row) {
-    std::memcpy(i420->MutableDataY() + row * i420->StrideY(),
-                y + row * y_stride, width);
-  }
-  for (int row = 0; row < uv_height; ++row) {
-    const uint8_t* src = uv + row * uv_stride;
-    uint8_t* out_u = i420->MutableDataU() + row * i420->StrideU();
-    uint8_t* out_v = i420->MutableDataV() + row * i420->StrideV();
-    for (int col = 0; col < uv_width; ++col) {
-      out_u[col] = src[col * 2];
-      out_v[col] = src[col * 2 + 1];
-    }
-  }
+  const int ret = libyuv::NV12ToI420(
+      y, y_stride, uv, uv_stride, i420->MutableDataY(), i420->StrideY(),
+      i420->MutableDataU(), i420->StrideU(), i420->MutableDataV(),
+      i420->StrideV(), width, height);
   gst_video_frame_unmap(&frame);
+  if (ret != 0) return nullptr;
   return i420;
 }
 

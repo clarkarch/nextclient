@@ -13,6 +13,13 @@ OPENNOW_DECODER=software  → forces software decode (FFmpeg)
 (unset / anything else)   → VAAPI first, FFmpeg fallback
 ```
 
+Decoder diagnostics (per-AU/sample file logging into `next_client.log`) are
+OFF by default — the hot path does no file I/O. Enable with:
+
+```
+OPENNOW_DECODER_DEBUG=1
+```
+
 Your stats overlay should then read `GStreamerVaapiH264` instead of
 `FFmpegVideoDecoder` when VAAPI is active.
 

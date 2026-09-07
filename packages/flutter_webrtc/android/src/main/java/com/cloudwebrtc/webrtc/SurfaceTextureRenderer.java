@@ -111,23 +111,60 @@ public class SurfaceTextureRenderer extends EglRenderer {
         producer.setSize(frame.getRotatedWidth(),frame.getRotatedHeight());
         surface = producer.getSurface();
         createEglSurface(surface);
+        lastSurfaceRecreateNs = System.nanoTime();
+        pendingRecreateW = 0;
+        pendingRecreateH = 0;
       } else if (frameSizeChanged(frame)) {
         // The producer's backing buffers are fixed-size: setSize() only takes
         // effect for a Surface obtained afterwards. Without recreating the EGL
         // surface here, a simulcast layer upgrade keeps rendering into the old
         // low-resolution buffer and the video stays blurry.
-        releaseEglSurface(() -> {});
-        // Clear the field before re-obtaining: if getSurface() throws, the
-        // next frame takes the surface == null path and recreates cleanly
-        // rather than rendering into the already-released surface.
-        surface = null;
-        producer.setSize(frame.getRotatedWidth(), frame.getRotatedHeight());
-        surface = producer.getSurface();
-        createEglSurface(surface);
+        //
+        // Debounce: during simulcast adaptation several sizes can arrive in
+        // quick succession; each recreation tears down + rebuilds the EGL
+        // surface (a visible hitch). Upgrades apply immediately (blurry video
+        // is the worse artifact); downgrades within MIN_RECREATE_INTERVAL_NS
+        // of the last recreation are coalesced — the pending size is applied
+        // on the next frame after the interval elapses.
+        final int newW = frame.getRotatedWidth();
+        final int newH = frame.getRotatedHeight();
+        final long nowNs = System.nanoTime();
+        final boolean upgrade = (long) newW * newH > (long) rotatedFrameWidth * rotatedFrameHeight;
+        if (upgrade || nowNs - lastSurfaceRecreateNs >= MIN_RECREATE_INTERVAL_NS) {
+          recreateSurface(newW, newH);
+          lastSurfaceRecreateNs = nowNs;
+          pendingRecreateW = 0;
+          pendingRecreateH = 0;
+        } else {
+          // Coalesce: remember the latest size; it is applied once frames
+          // arrive with a stable size after the interval (outer else-branch
+          // below) or when the next change exits the interval.
+          pendingRecreateW = newW;
+          pendingRecreateH = newH;
+        }
+      } else if (pendingRecreateW != 0
+          && System.nanoTime() - lastSurfaceRecreateNs >= MIN_RECREATE_INTERVAL_NS) {
+        // Size settled back (or a further change arrived): flush the coalesced
+        // downgrade so the backing buffer does not stay oversized forever.
+        recreateSurface(pendingRecreateW, pendingRecreateH);
+        lastSurfaceRecreateNs = System.nanoTime();
+        pendingRecreateW = 0;
+        pendingRecreateH = 0;
       }
     }
     updateFrameDimensionsAndReportEvents(frame);
     super.onFrame(frame);
+  }
+
+  private void recreateSurface(int w, int h) {
+    releaseEglSurface(() -> {});
+    // Clear the field before re-obtaining: if getSurface() throws, the
+    // next frame takes the surface == null path and recreates cleanly
+    // rather than rendering into the already-released surface.
+    surface = null;
+    producer.setSize(w, h);
+    surface = producer.getSurface();
+    createEglSurface(surface);
   }
 
   private boolean frameSizeChanged(VideoFrame frame) {
@@ -147,6 +184,11 @@ public class SurfaceTextureRenderer extends EglRenderer {
   // thread, which never acquires it, so the wait cannot deadlock.
   private final Object surfaceLock = new Object();
   private Surface surface = null;
+  // Coalesced surface size awaiting recreation (0 = none). See onFrame.
+  private int pendingRecreateW = 0;
+  private int pendingRecreateH = 0;
+  private long lastSurfaceRecreateNs = 0;
+  private static final long MIN_RECREATE_INTERVAL_NS = 250_000_000L;
 
   private TextureRegistry.SurfaceProducer producer;
 
@@ -175,6 +217,8 @@ public class SurfaceTextureRenderer extends EglRenderer {
       releaseEglSurface(completionLatch::countDown);
       ThreadUtils.awaitUninterruptibly(completionLatch);
       surface = null;
+      pendingRecreateW = 0;
+      pendingRecreateH = 0;
     }
   }
 
